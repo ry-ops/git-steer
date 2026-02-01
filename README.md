@@ -8,7 +8,7 @@ git-steer gives you 100% autonomous control over your GitHub account through a M
 
 ## Philosophy
 
-**Your Mac is just the steering wheel.** The engine lives on GitHub.
+**Your PC or Mac is just the steering wheel.** The engine lives on GitHub.
 
 - **Zero local footprint**: Only Keychain credentials persist locally
 - **Self-hosting code**: git-steer pulls itself from GitHub at runtime
