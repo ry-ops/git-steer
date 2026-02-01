@@ -103,7 +103,7 @@ export class SetupWizard {
 
       // Start local server to receive callback
       const server = createServer(async (req, res) => {
-        const url = new URL(req.url!, `http://localhost:9876`);
+        const url = new URL(req.url || '/', `http://localhost:9876`);
 
         if (url.pathname === '/callback') {
           const code = url.searchParams.get('code');

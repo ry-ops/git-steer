@@ -76,6 +76,16 @@ export class StateManager {
   }
 
   /**
+   * Get owner, throwing if not loaded
+   */
+  private getOwner(): string {
+    if (!this.owner) {
+      throw new Error('State not loaded. Call load() first.');
+    }
+    return this.owner;
+  }
+
+  /**
    * Load all state from GitHub
    */
   async load(): Promise<void> {
@@ -252,7 +262,7 @@ export class StateManager {
   private async loadYaml(path: string): Promise<any> {
     try {
       const { content, sha } = await this.github.getFileContent(
-        this.owner!,
+        this.getOwner(),
         this.repo,
         path
       );
@@ -268,7 +278,7 @@ export class StateManager {
   private async loadJson(path: string): Promise<any> {
     try {
       const { content, sha } = await this.github.getFileContent(
-        this.owner!,
+        this.getOwner(),
         this.repo,
         path
       );
@@ -284,7 +294,7 @@ export class StateManager {
   private async loadJsonLines(path: string): Promise<any[]> {
     try {
       const { content, sha } = await this.github.getFileContent(
-        this.owner!,
+        this.getOwner(),
         this.repo,
         path
       );
@@ -303,7 +313,7 @@ export class StateManager {
   private async saveYaml(path: string, data: any): Promise<void> {
     const content = stringifyYaml(data);
     await this.github.updateFileContent(
-      this.owner!,
+      this.getOwner(),
       this.repo,
       path,
       content,
@@ -315,7 +325,7 @@ export class StateManager {
   private async saveJson(path: string, data: any): Promise<void> {
     const content = JSON.stringify(data, null, 2);
     await this.github.updateFileContent(
-      this.owner!,
+      this.getOwner(),
       this.repo,
       path,
       content,
@@ -327,7 +337,7 @@ export class StateManager {
   private async saveJsonLines(path: string, data: any[]): Promise<void> {
     const content = data.map((item) => JSON.stringify(item)).join('\n');
     await this.github.updateFileContent(
-      this.owner!,
+      this.getOwner(),
       this.repo,
       path,
       content,

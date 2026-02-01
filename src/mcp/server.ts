@@ -14,6 +14,10 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { GitHubClient } from '../github/client.js';
 import { StateManager } from '../state/manager.js';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const { version: VERSION } = require('../../package.json');
 
 export interface MCPServerConfig {
   github: GitHubClient;
@@ -381,7 +385,7 @@ export class MCPServer {
     this.server = new Server(
       {
         name: 'git-steer',
-        version: '0.1.0',
+        version: VERSION,
       },
       {
         capabilities: {

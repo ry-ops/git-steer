@@ -5,8 +5,6 @@
  * Runs entirely in-memory with state persisted to GitHub.
  */
 
-import { Octokit } from 'octokit';
-import { App } from 'octokit';
 import { KeychainService } from './core/keychain.js';
 import { StateManager } from './state/manager.js';
 import { MCPServer } from './mcp/server.js';
@@ -63,8 +61,12 @@ export class GitSteer {
       await this.initGitHub();
     }
 
+    if (!this.github) {
+      throw new Error('Failed to initialize GitHub client');
+    }
+
     this.state = new StateManager({
-      github: this.github!,
+      github: this.github,
       repo: this.stateRepo,
     });
 

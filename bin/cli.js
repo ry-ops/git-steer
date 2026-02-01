@@ -13,8 +13,10 @@ import { KeychainService } from '../dist/core/keychain.js';
 import { SetupWizard } from '../dist/core/setup.js';
 import chalk from 'chalk';
 import ora from 'ora';
+import { createRequire } from 'module';
 
-const VERSION = '0.1.0';
+const require = createRequire(import.meta.url);
+const { version: VERSION } = require('../package.json');
 
 const program = new Command();
 
@@ -85,9 +87,14 @@ program
   .command('status')
   .description('Show git-steer status and health')
   .action(async () => {
-    const keychain = new KeychainService();
-    const steer = new GitSteer({ keychain });
-    await steer.showStatus();
+    try {
+      const keychain = new KeychainService();
+      const steer = new GitSteer({ keychain });
+      await steer.showStatus();
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error.message}`));
+      process.exit(1);
+    }
   });
 
 program
@@ -95,10 +102,17 @@ program
   .description('Force sync state to GitHub')
   .action(async () => {
     const spinner = ora('Syncing state to GitHub...').start();
-    const keychain = new KeychainService();
-    const steer = new GitSteer({ keychain });
-    await steer.forceSyncState();
-    spinner.succeed('State synced');
+    try {
+      const keychain = new KeychainService();
+      const steer = new GitSteer({ keychain });
+      await steer.syncState();
+      await steer.forceSyncState();
+      spinner.succeed('State synced');
+    } catch (error) {
+      spinner.fail('Sync failed');
+      console.error(chalk.red(error.message));
+      process.exit(1);
+    }
   });
 
 program
