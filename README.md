@@ -17,7 +17,7 @@ git-steer gives you 100% autonomous control over your GitHub account through a M
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        YOUR MAC                                 │
+│                        YOUR PC or MAC                           │
 │                                                                 │
 │   Keychain: GitHub App credentials (that's it)                  │
 │                                                                 │
