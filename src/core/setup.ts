@@ -176,7 +176,7 @@ export class SetupWizard {
     });
   }
 
-  private async installApp(appId: string): Promise<string> {
+  private async installApp(_appId: string): Promise<string> {
     const spinner = ora('Waiting for app installation...').start();
 
     // Open installation page

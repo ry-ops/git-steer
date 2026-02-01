@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 // Test the audit log rotation logic in isolation
 describe('StateManager', () => {
