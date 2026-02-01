@@ -419,6 +419,84 @@ export class GitHubClient {
     });
   }
 
+  // ========== Workflow Dispatch Operations ==========
+
+  /**
+   * Dispatch a workflow in the git-steer repo to perform work on a target repo
+   */
+  async dispatchSecurityFix(
+    targetRepo: string,
+    options: {
+      severity?: 'critical' | 'high' | 'medium' | 'low' | 'all';
+      dryRun?: boolean;
+      jobId?: string;
+    }
+  ): Promise<{ dispatched: boolean; jobId: string; workflowRun?: string }> {
+    const octokit = this.ensureAuth();
+    const jobId = options.jobId || `security-fix-${Date.now()}`;
+
+    await octokit.request(
+      'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches',
+      {
+        owner: 'ry-ops',
+        repo: 'git-steer',
+        workflow_id: 'security-fix.yml',
+        ref: 'main',
+        inputs: {
+          target_repo: targetRepo,
+          severity: options.severity || 'critical',
+          dry_run: String(options.dryRun || false),
+          job_id: jobId,
+        },
+      }
+    );
+
+    return {
+      dispatched: true,
+      jobId,
+    };
+  }
+
+  /**
+   * Get recent workflow runs for a workflow
+   */
+  async getWorkflowRuns(
+    owner: string,
+    repo: string,
+    workflowId: string,
+    options?: { status?: string; perPage?: number }
+  ): Promise<
+    Array<{
+      id: number;
+      status: string;
+      conclusion: string | null;
+      createdAt: string;
+      updatedAt: string;
+      htmlUrl: string;
+    }>
+  > {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs',
+      {
+        owner,
+        repo,
+        workflow_id: workflowId,
+        status: options?.status as any,
+        per_page: options?.perPage || 10,
+      }
+    );
+
+    return data.workflow_runs.map((run: any) => ({
+      id: run.id,
+      status: run.status,
+      conclusion: run.conclusion,
+      createdAt: run.created_at,
+      updatedAt: run.updated_at,
+      htmlUrl: run.html_url,
+    }));
+  }
+
   // ========== State Repo Operations ==========
 
   async getFileContent(

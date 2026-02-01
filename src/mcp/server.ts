@@ -390,7 +390,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'security_fix_pr',
-    description: 'Create a PR to fix security vulnerabilities following best practices (branch, conventional commit, CVE references, co-authored)',
+    description: 'Dispatch a GitHub Actions workflow to fix security vulnerabilities (no local code needed - runs in ephemeral cloud compute)',
     inputSchema: {
       type: 'object',
       properties: {
@@ -409,6 +409,24 @@ const TOOLS: Tool[] = [
         },
       },
       required: ['owner', 'repo'],
+    },
+  },
+  {
+    name: 'workflow_status',
+    description: 'Check status of dispatched workflows',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workflow: {
+          type: 'string',
+          enum: ['security-fix', 'heartbeat'],
+          default: 'security-fix',
+        },
+        limit: {
+          type: 'number',
+          default: 5,
+        },
+      },
     },
   },
 ];
@@ -831,6 +849,7 @@ export class MCPServer {
       }
 
       case 'security_fix_pr': {
+        // First, check what vulnerabilities exist
         const alerts = await this.github.getSecurityAlertsDetailed(args.owner, args.repo);
         const severityOrder = ['critical', 'high', 'medium', 'low'];
         const minSeverityIndex = args.severity === 'all' ? 4 : severityOrder.indexOf(args.severity || 'critical');
@@ -848,15 +867,6 @@ export class MCPServer {
           };
         }
 
-        // Group by manifest file
-        const byManifest: Record<string, typeof toFix> = {};
-        for (const alert of toFix) {
-          if (!byManifest[alert.manifestPath]) {
-            byManifest[alert.manifestPath] = [];
-          }
-          byManifest[alert.manifestPath].push(alert);
-        }
-
         if (args.dryRun) {
           return {
             dryRun: true,
@@ -869,69 +879,63 @@ export class MCPServer {
               fixVersion: a.fixVersion,
               manifestPath: a.manifestPath,
             })),
-            manifests: Object.keys(byManifest),
+            note: 'Use dryRun: false to dispatch a GitHub Actions workflow that will fix these vulnerabilities',
           };
         }
 
-        // Create branch
-        const branchName = `security/fix-${args.severity || 'critical'}-cves-${Date.now()}`;
-        await this.github.createBranch(args.owner, args.repo, branchName);
+        // Dispatch the security-fix workflow in git-steer repo
+        // This runs in ephemeral cloud compute - no local code needed!
+        const targetRepo = `${args.owner}/${args.repo}`;
+        const result = await this.github.dispatchSecurityFix(targetRepo, {
+          severity: args.severity || 'critical',
+          dryRun: false,
+          jobId: `fix-${args.repo}-${Date.now()}`,
+        });
 
-        // Build commit message
-        const criticalCVEs = toFix.filter((a) => a.severity === 'critical').map((a) => a.cve).filter(Boolean);
-        const highCVEs = toFix.filter((a) => a.severity === 'high').map((a) => a.cve).filter(Boolean);
-        const packages = [...new Set(toFix.map((a) => a.package))];
-
-        const commitMessage = `fix(security): patch ${toFix.length} vulnerabilities
-
-Updates packages: ${packages.join(', ')}
-
-Fixes:
-${toFix.map((a) => `- ${a.cve || 'N/A'}: ${a.package} ${a.severity.toUpperCase()} - ${a.summary}`).join('\n')}
-
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>`;
-
-        // Build PR body
-        const prBody = `## Security Fix
-
-This PR addresses **${toFix.length}** security vulnerabilities.
-
-### Vulnerabilities Fixed
-
-| CVE | Package | Severity | Fix Version |
-|-----|---------|----------|-------------|
-${toFix.map((a) => `| ${a.cve || 'N/A'} | ${a.package} | ${a.severity.toUpperCase()} | ${a.fixVersion} |`).join('\n')}
-
-### Summary
-- **Critical:** ${toFix.filter((a) => a.severity === 'critical').length}
-- **High:** ${toFix.filter((a) => a.severity === 'high').length}
-- **Medium:** ${toFix.filter((a) => a.severity === 'medium').length}
-- **Low:** ${toFix.filter((a) => a.severity === 'low').length}
-
-### Affected Manifests
-${Object.keys(byManifest).map((m) => `- \`${m}\``).join('\n')}
-
----
-
-🤖 Generated with [git-steer](https://github.com/ry-ops/git-steer)`;
-
-        // Create PR
-        const pr = await this.github.createPullRequest(args.owner, args.repo, {
-          title: `fix(security): Patch ${toFix.length} ${args.severity || 'critical'}+ vulnerabilities`,
-          body: prBody,
-          head: branchName,
+        // Log the dispatch
+        this.state.addAuditEntry({
+          action: 'security_fix_dispatched',
+          repo: targetRepo,
+          result: 'success',
+          details: {
+            jobId: result.jobId,
+            severity: args.severity || 'critical',
+            vulnerabilitiesFound: toFix.length,
+          },
         });
 
         return {
           success: true,
-          branch: branchName,
-          pr: pr,
-          fixed: toFix.length,
+          mode: 'workflow_dispatch',
+          message: 'Security fix workflow dispatched to GitHub Actions',
+          jobId: result.jobId,
+          targetRepo,
+          severity: args.severity || 'critical',
+          vulnerabilitiesFound: toFix.length,
+          note: 'The fix is running in ephemeral cloud compute. Use workflow_status to check progress.',
           vulnerabilities: toFix.map((a) => ({
             package: a.package,
             severity: a.severity,
             cve: a.cve,
             fixVersion: a.fixVersion,
+          })),
+        };
+      }
+
+      case 'workflow_status': {
+        const workflowFile = args.workflow === 'heartbeat' ? 'heartbeat.yml' : 'security-fix.yml';
+        const runs = await this.github.getWorkflowRuns('ry-ops', 'git-steer', workflowFile, {
+          perPage: args.limit || 5,
+        });
+
+        return {
+          workflow: args.workflow || 'security-fix',
+          runs: runs.map((r) => ({
+            id: r.id,
+            status: r.status,
+            conclusion: r.conclusion,
+            createdAt: r.createdAt,
+            url: r.htmlUrl,
           })),
         };
       }
