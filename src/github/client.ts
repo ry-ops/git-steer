@@ -475,4 +475,125 @@ export class GitHubClient {
       sha,
     });
   }
+
+  // ========== Security Operations (Extended) ==========
+
+  async getSecurityAlertsDetailed(
+    owner: string,
+    repo: string
+  ): Promise<
+    Array<{
+      id: number;
+      state: string;
+      severity: string;
+      package: string;
+      currentVersion: string;
+      fixVersion: string | null;
+      cve: string | null;
+      summary: string;
+      manifestPath: string;
+      url: string;
+    }>
+  > {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/dependabot/alerts',
+      { owner, repo, state: 'open' }
+    );
+
+    return data.map((alert: any) => ({
+      id: alert.number,
+      state: alert.state,
+      severity: alert.security_advisory?.severity || 'unknown',
+      package: alert.dependency?.package?.name || 'unknown',
+      currentVersion: alert.security_vulnerability?.vulnerable_version_range || 'unknown',
+      fixVersion: alert.security_vulnerability?.first_patched_version?.identifier || null,
+      cve: alert.security_advisory?.cve_id || null,
+      summary: alert.security_advisory?.summary || 'Unknown vulnerability',
+      manifestPath: alert.dependency?.manifest_path || 'unknown',
+      url: alert.html_url,
+    }));
+  }
+
+  async createBranch(
+    owner: string,
+    repo: string,
+    branchName: string,
+    fromBranch?: string
+  ): Promise<void> {
+    const octokit = this.ensureAuth();
+
+    // Get the SHA of the source branch
+    const sourceBranch = fromBranch || 'main';
+    const { data: ref } = await octokit.request(
+      'GET /repos/{owner}/{repo}/git/ref/heads/{branch}',
+      { owner, repo, branch: sourceBranch }
+    );
+
+    // Create new branch
+    await octokit.request('POST /repos/{owner}/{repo}/git/refs', {
+      owner,
+      repo,
+      ref: `refs/heads/${branchName}`,
+      sha: ref.object.sha,
+    });
+  }
+
+  async createPullRequest(
+    owner: string,
+    repo: string,
+    options: {
+      title: string;
+      body: string;
+      head: string;
+      base?: string;
+    }
+  ): Promise<{ number: number; url: string }> {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request('POST /repos/{owner}/{repo}/pulls', {
+      owner,
+      repo,
+      title: options.title,
+      body: options.body,
+      head: options.head,
+      base: options.base || 'main',
+    });
+
+    return { number: data.number, url: data.html_url };
+  }
+
+  async commitFile(
+    owner: string,
+    repo: string,
+    branch: string,
+    path: string,
+    content: string,
+    message: string
+  ): Promise<void> {
+    const octokit = this.ensureAuth();
+
+    // Get current file SHA if it exists
+    let sha: string | undefined;
+    try {
+      const { data } = await octokit.request(
+        'GET /repos/{owner}/{repo}/contents/{path}',
+        { owner, repo, path, ref: branch }
+      );
+      if (!Array.isArray(data)) {
+        sha = data.sha;
+      }
+    } catch {
+      // File doesn't exist
+    }
+
+    await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+      owner,
+      repo,
+      path,
+      message,
+      content: Buffer.from(content).toString('base64'),
+      branch,
+      sha,
+    });
+  }
 }

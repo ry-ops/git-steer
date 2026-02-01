@@ -369,6 +369,48 @@ const TOOLS: Tool[] = [
       required: ['owner', 'name'],
     },
   },
+
+  // ========== Security Workflow Tools ==========
+  {
+    name: 'security_scan',
+    description: 'Scan repositories for security vulnerabilities with detailed fix information',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string', description: 'Repo name or "*" to scan all accessible repos' },
+        severity: {
+          type: 'string',
+          enum: ['critical', 'high', 'medium', 'low', 'all'],
+          default: 'all',
+        },
+      },
+      required: ['owner'],
+    },
+  },
+  {
+    name: 'security_fix_pr',
+    description: 'Create a PR to fix security vulnerabilities following best practices (branch, conventional commit, CVE references, co-authored)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string' },
+        severity: {
+          type: 'string',
+          enum: ['critical', 'high', 'medium', 'low', 'all'],
+          default: 'critical',
+          description: 'Minimum severity to fix',
+        },
+        dryRun: {
+          type: 'boolean',
+          default: false,
+          description: 'Preview changes without creating PR',
+        },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
 ];
 
 export class MCPServer {
@@ -742,6 +784,156 @@ export class MCPServer {
           default:
             throw new Error(`Unknown action: ${args.action}`);
         }
+      }
+
+      // Security workflow tools
+      case 'security_scan': {
+        const repos = args.repo === '*' || !args.repo
+          ? await this.github.listRepos()
+          : [{ owner: args.owner, name: args.repo, fullName: `${args.owner}/${args.repo}` }];
+
+        const results: Record<string, any[]> = {};
+        const severityOrder = ['critical', 'high', 'medium', 'low'];
+        const minSeverityIndex = args.severity === 'all' ? 4 : severityOrder.indexOf(args.severity);
+
+        for (const repo of repos) {
+          try {
+            const alerts = await this.github.getSecurityAlertsDetailed(
+              repo.owner || args.owner,
+              repo.name
+            );
+            const filtered = alerts.filter((a) => {
+              const idx = severityOrder.indexOf(a.severity);
+              return idx <= minSeverityIndex;
+            });
+            if (filtered.length > 0) {
+              results[repo.fullName || `${args.owner}/${repo.name}`] = filtered;
+            }
+          } catch {
+            // Skip repos we can't access
+          }
+        }
+
+        const summary = {
+          reposScanned: repos.length,
+          reposWithAlerts: Object.keys(results).length,
+          totalAlerts: Object.values(results).flat().length,
+          bySeverity: {
+            critical: Object.values(results).flat().filter((a) => a.severity === 'critical').length,
+            high: Object.values(results).flat().filter((a) => a.severity === 'high').length,
+            medium: Object.values(results).flat().filter((a) => a.severity === 'medium').length,
+            low: Object.values(results).flat().filter((a) => a.severity === 'low').length,
+          },
+          alerts: results,
+        };
+
+        return summary;
+      }
+
+      case 'security_fix_pr': {
+        const alerts = await this.github.getSecurityAlertsDetailed(args.owner, args.repo);
+        const severityOrder = ['critical', 'high', 'medium', 'low'];
+        const minSeverityIndex = args.severity === 'all' ? 4 : severityOrder.indexOf(args.severity || 'critical');
+
+        const toFix = alerts.filter((a) => {
+          const idx = severityOrder.indexOf(a.severity);
+          return idx <= minSeverityIndex && a.fixVersion;
+        });
+
+        if (toFix.length === 0) {
+          return {
+            message: 'No fixable vulnerabilities found at the specified severity level',
+            severity: args.severity || 'critical',
+            totalAlerts: alerts.length,
+          };
+        }
+
+        // Group by manifest file
+        const byManifest: Record<string, typeof toFix> = {};
+        for (const alert of toFix) {
+          if (!byManifest[alert.manifestPath]) {
+            byManifest[alert.manifestPath] = [];
+          }
+          byManifest[alert.manifestPath].push(alert);
+        }
+
+        if (args.dryRun) {
+          return {
+            dryRun: true,
+            wouldFix: toFix.length,
+            vulnerabilities: toFix.map((a) => ({
+              package: a.package,
+              severity: a.severity,
+              cve: a.cve,
+              currentVersion: a.currentVersion,
+              fixVersion: a.fixVersion,
+              manifestPath: a.manifestPath,
+            })),
+            manifests: Object.keys(byManifest),
+          };
+        }
+
+        // Create branch
+        const branchName = `security/fix-${args.severity || 'critical'}-cves-${Date.now()}`;
+        await this.github.createBranch(args.owner, args.repo, branchName);
+
+        // Build commit message
+        const criticalCVEs = toFix.filter((a) => a.severity === 'critical').map((a) => a.cve).filter(Boolean);
+        const highCVEs = toFix.filter((a) => a.severity === 'high').map((a) => a.cve).filter(Boolean);
+        const packages = [...new Set(toFix.map((a) => a.package))];
+
+        const commitMessage = `fix(security): patch ${toFix.length} vulnerabilities
+
+Updates packages: ${packages.join(', ')}
+
+Fixes:
+${toFix.map((a) => `- ${a.cve || 'N/A'}: ${a.package} ${a.severity.toUpperCase()} - ${a.summary}`).join('\n')}
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>`;
+
+        // Build PR body
+        const prBody = `## Security Fix
+
+This PR addresses **${toFix.length}** security vulnerabilities.
+
+### Vulnerabilities Fixed
+
+| CVE | Package | Severity | Fix Version |
+|-----|---------|----------|-------------|
+${toFix.map((a) => `| ${a.cve || 'N/A'} | ${a.package} | ${a.severity.toUpperCase()} | ${a.fixVersion} |`).join('\n')}
+
+### Summary
+- **Critical:** ${toFix.filter((a) => a.severity === 'critical').length}
+- **High:** ${toFix.filter((a) => a.severity === 'high').length}
+- **Medium:** ${toFix.filter((a) => a.severity === 'medium').length}
+- **Low:** ${toFix.filter((a) => a.severity === 'low').length}
+
+### Affected Manifests
+${Object.keys(byManifest).map((m) => `- \`${m}\``).join('\n')}
+
+---
+
+🤖 Generated with [git-steer](https://github.com/ry-ops/git-steer)`;
+
+        // Create PR
+        const pr = await this.github.createPullRequest(args.owner, args.repo, {
+          title: `fix(security): Patch ${toFix.length} ${args.severity || 'critical'}+ vulnerabilities`,
+          body: prBody,
+          head: branchName,
+        });
+
+        return {
+          success: true,
+          branch: branchName,
+          pr: pr,
+          fixed: toFix.length,
+          vulnerabilities: toFix.map((a) => ({
+            package: a.package,
+            severity: a.severity,
+            cve: a.cve,
+            fixVersion: a.fixVersion,
+          })),
+        };
       }
 
       default:
