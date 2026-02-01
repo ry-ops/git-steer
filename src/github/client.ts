@@ -674,4 +674,214 @@ export class GitHubClient {
       sha,
     });
   }
+
+  // ========== Multi-File Commit Operations ==========
+
+  /**
+   * Commit multiple files in a single commit using the Git Data API.
+   * This is more efficient than multiple single-file commits and creates
+   * a cleaner git history.
+   */
+  async commitFiles(
+    owner: string,
+    repo: string,
+    options: {
+      branch: string;
+      message: string;
+      files: Array<{
+        path: string;
+        content: string;
+        /** Set to true to delete this file */
+        delete?: boolean;
+      }>;
+      /** Create branch if it doesn't exist */
+      createBranch?: boolean;
+      /** Base branch for new branch creation */
+      baseBranch?: string;
+    }
+  ): Promise<{ sha: string; url: string }> {
+    const octokit = this.ensureAuth();
+
+    // Get the reference for the branch (or base branch if creating new)
+    let baseSha: string;
+    let branchExists = true;
+
+    try {
+      const { data: ref } = await octokit.request(
+        'GET /repos/{owner}/{repo}/git/ref/heads/{branch}',
+        { owner, repo, branch: options.branch }
+      );
+      baseSha = ref.object.sha;
+    } catch (error: any) {
+      if (error.status === 404 && options.createBranch) {
+        // Branch doesn't exist, get base branch SHA
+        const baseBranch = options.baseBranch || 'main';
+        const { data: ref } = await octokit.request(
+          'GET /repos/{owner}/{repo}/git/ref/heads/{branch}',
+          { owner, repo, branch: baseBranch }
+        );
+        baseSha = ref.object.sha;
+        branchExists = false;
+      } else {
+        throw error;
+      }
+    }
+
+    // Get the current commit to find the base tree
+    const { data: baseCommit } = await octokit.request(
+      'GET /repos/{owner}/{repo}/git/commits/{commit_sha}',
+      { owner, repo, commit_sha: baseSha }
+    );
+
+    // Create blobs for each file and build tree entries
+    const treeEntries: Array<{
+      path: string;
+      mode: '100644' | '100755' | '040000' | '160000' | '120000';
+      type: 'blob' | 'tree' | 'commit';
+      sha?: string | null;
+    }> = [];
+
+    for (const file of options.files) {
+      if (file.delete) {
+        // To delete, set sha to null
+        treeEntries.push({
+          path: file.path,
+          mode: '100644',
+          type: 'blob',
+          sha: null,
+        });
+      } else {
+        // Create blob for file content
+        const { data: blob } = await octokit.request(
+          'POST /repos/{owner}/{repo}/git/blobs',
+          {
+            owner,
+            repo,
+            content: Buffer.from(file.content).toString('base64'),
+            encoding: 'base64',
+          }
+        );
+
+        treeEntries.push({
+          path: file.path,
+          mode: '100644',
+          type: 'blob',
+          sha: blob.sha,
+        });
+      }
+    }
+
+    // Create new tree
+    const { data: newTree } = await octokit.request(
+      'POST /repos/{owner}/{repo}/git/trees',
+      {
+        owner,
+        repo,
+        base_tree: baseCommit.tree.sha,
+        tree: treeEntries,
+      }
+    );
+
+    // Create commit
+    const { data: newCommit } = await octokit.request(
+      'POST /repos/{owner}/{repo}/git/commits',
+      {
+        owner,
+        repo,
+        message: options.message,
+        tree: newTree.sha,
+        parents: [baseSha],
+      }
+    );
+
+    // Update or create branch reference
+    if (branchExists) {
+      await octokit.request('PATCH /repos/{owner}/{repo}/git/refs/heads/{branch}', {
+        owner,
+        repo,
+        branch: options.branch,
+        sha: newCommit.sha,
+      });
+    } else {
+      await octokit.request('POST /repos/{owner}/{repo}/git/refs', {
+        owner,
+        repo,
+        ref: `refs/heads/${options.branch}`,
+        sha: newCommit.sha,
+      });
+    }
+
+    return {
+      sha: newCommit.sha,
+      url: newCommit.html_url,
+    };
+  }
+
+  /**
+   * Get file content from a repo
+   */
+  async getFile(
+    owner: string,
+    repo: string,
+    path: string,
+    ref?: string
+  ): Promise<{ content: string; sha: string } | null> {
+    const octokit = this.ensureAuth();
+
+    try {
+      const { data } = await octokit.request(
+        'GET /repos/{owner}/{repo}/contents/{path}',
+        { owner, repo, path, ref }
+      );
+
+      if (Array.isArray(data) || data.type !== 'file') {
+        return null;
+      }
+
+      return {
+        content: Buffer.from(data.content, 'base64').toString('utf-8'),
+        sha: data.sha,
+      };
+    } catch (error: any) {
+      if (error.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * List files in a directory
+   */
+  async listFiles(
+    owner: string,
+    repo: string,
+    path: string,
+    ref?: string
+  ): Promise<Array<{ name: string; path: string; type: 'file' | 'dir'; sha: string }>> {
+    const octokit = this.ensureAuth();
+
+    try {
+      const { data } = await octokit.request(
+        'GET /repos/{owner}/{repo}/contents/{path}',
+        { owner, repo, path, ref }
+      );
+
+      if (!Array.isArray(data)) {
+        return [];
+      }
+
+      return data.map((item: any) => ({
+        name: item.name,
+        path: item.path,
+        type: item.type === 'dir' ? 'dir' : 'file',
+        sha: item.sha,
+      }));
+    } catch (error: any) {
+      if (error.status === 404) {
+        return [];
+      }
+      throw error;
+    }
+  }
 }

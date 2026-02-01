@@ -429,6 +429,80 @@ const TOOLS: Tool[] = [
       },
     },
   },
+
+  // ========== File Operations ==========
+  {
+    name: 'repo_commit',
+    description: 'Commit files directly to a repository via GitHub API (no local clone needed). Supports multiple files in a single commit.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        branch: { type: 'string', description: 'Branch to commit to', default: 'main' },
+        message: { type: 'string', description: 'Commit message' },
+        files: {
+          type: 'array',
+          description: 'Files to commit',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'File path in repo' },
+              content: { type: 'string', description: 'File content' },
+              delete: { type: 'boolean', description: 'Set true to delete file' },
+            },
+            required: ['path'],
+          },
+        },
+        createBranch: {
+          type: 'boolean',
+          description: 'Create branch if it does not exist',
+          default: false,
+        },
+        baseBranch: {
+          type: 'string',
+          description: 'Base branch for new branch creation',
+          default: 'main',
+        },
+        createPr: {
+          type: 'boolean',
+          description: 'Create a pull request after committing',
+          default: false,
+        },
+        prTitle: { type: 'string', description: 'PR title (required if createPr is true)' },
+        prBody: { type: 'string', description: 'PR body/description' },
+      },
+      required: ['owner', 'repo', 'message', 'files'],
+    },
+  },
+  {
+    name: 'repo_read_file',
+    description: 'Read a file from a repository',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string' },
+        path: { type: 'string', description: 'File path in repo' },
+        ref: { type: 'string', description: 'Branch, tag, or commit SHA', default: 'main' },
+      },
+      required: ['owner', 'repo', 'path'],
+    },
+  },
+  {
+    name: 'repo_list_files',
+    description: 'List files in a repository directory',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string' },
+        path: { type: 'string', description: 'Directory path in repo', default: '' },
+        ref: { type: 'string', description: 'Branch, tag, or commit SHA', default: 'main' },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
 ];
 
 export class MCPServer {
@@ -937,6 +1011,97 @@ export class MCPServer {
             createdAt: r.createdAt,
             url: r.htmlUrl,
           })),
+        };
+      }
+
+      // File operation tools
+      case 'repo_commit': {
+        if (!args.files || args.files.length === 0) {
+          throw new Error('No files specified');
+        }
+
+        // Validate files have content (unless deleting)
+        for (const file of args.files) {
+          if (!file.delete && file.content === undefined) {
+            throw new Error(`File ${file.path} has no content`);
+          }
+        }
+
+        const branch = args.branch || 'main';
+        const result = await this.github.commitFiles(args.owner, args.repo, {
+          branch,
+          message: args.message,
+          files: args.files.map((f: any) => ({
+            path: f.path,
+            content: f.content || '',
+            delete: f.delete,
+          })),
+          createBranch: args.createBranch,
+          baseBranch: args.baseBranch,
+        });
+
+        let pr = null;
+        if (args.createPr && branch !== 'main' && branch !== 'master') {
+          if (!args.prTitle) {
+            throw new Error('prTitle is required when createPr is true');
+          }
+
+          pr = await this.github.createPullRequest(args.owner, args.repo, {
+            title: args.prTitle,
+            body: args.prBody || '',
+            head: branch,
+            base: args.baseBranch || 'main',
+          });
+        }
+
+        return {
+          success: true,
+          commit: {
+            sha: result.sha,
+            url: result.url,
+          },
+          branch,
+          filesCommitted: args.files.length,
+          pr: pr ? { number: pr.number, url: pr.url } : null,
+        };
+      }
+
+      case 'repo_read_file': {
+        const file = await this.github.getFile(
+          args.owner,
+          args.repo,
+          args.path,
+          args.ref
+        );
+
+        if (!file) {
+          return {
+            found: false,
+            path: args.path,
+            message: 'File not found',
+          };
+        }
+
+        return {
+          found: true,
+          path: args.path,
+          content: file.content,
+          sha: file.sha,
+        };
+      }
+
+      case 'repo_list_files': {
+        const files = await this.github.listFiles(
+          args.owner,
+          args.repo,
+          args.path || '',
+          args.ref
+        );
+
+        return {
+          path: args.path || '/',
+          files: files,
+          count: files.length,
         };
       }
 
