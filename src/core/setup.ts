@@ -77,9 +77,9 @@ export class SetupWizard {
     // Step 2: Install the app
     const installationId = await this.installApp(appCredentials.appId);
     
-    // Step 3: Create state repo
-    await this.createStateRepo(appCredentials);
-    
+    // Step 3: Create state repo (pass installationId directly since it's not in keychain yet)
+    await this.createStateRepo(appCredentials, installationId);
+
     // Step 4: Store in Keychain
     await this.storeCredentials({
       ...appCredentials,
@@ -99,13 +99,15 @@ export class SetupWizard {
     const spinner = ora('Creating GitHub App...').start();
 
     return new Promise((resolve, reject) => {
+      let resolved = false;
+
       // Start local server to receive callback
       const server = createServer(async (req, res) => {
         const url = new URL(req.url!, `http://localhost:9876`);
-        
+
         if (url.pathname === '/callback') {
           const code = url.searchParams.get('code');
-          
+
           if (code) {
             try {
               // Exchange code for app credentials
@@ -119,12 +121,13 @@ export class SetupWizard {
               res.end(`
                 <html>
                   <body style="font-family: system-ui; padding: 40px; text-align: center;">
-                    <h1>✅ GitHub App created!</h1>
+                    <h1>GitHub App created!</h1>
                     <p>You can close this window and return to the terminal.</p>
                   </body>
                 </html>
               `);
 
+              resolved = true;
               server.close();
               spinner.succeed('GitHub App created');
 
@@ -135,10 +138,20 @@ export class SetupWizard {
                 clientSecret: response.data.client_secret,
               });
             } catch (error) {
+              res.writeHead(500, { 'Content-Type': 'text/plain' });
+              res.end('Failed to create GitHub App');
+              server.close();
               spinner.fail('Failed to create GitHub App');
               reject(error);
             }
+          } else {
+            res.writeHead(400, { 'Content-Type': 'text/plain' });
+            res.end('Missing code parameter');
           }
+        } else {
+          // Handle non-callback paths
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('Not found');
         }
       });
 
@@ -154,9 +167,11 @@ export class SetupWizard {
 
       // Timeout after 5 minutes
       setTimeout(() => {
-        server.close();
-        spinner.fail('Timed out waiting for GitHub App creation');
-        reject(new Error('Timeout'));
+        if (!resolved) {
+          server.close();
+          spinner.fail('Timed out waiting for GitHub App creation');
+          reject(new Error('Timeout'));
+        }
       }, 5 * 60 * 1000);
     });
   }
@@ -175,30 +190,31 @@ export class SetupWizard {
       process.stdin.once('data', () => resolve());
     });
 
-    // Get installation ID
-    const keychain = new KeychainService();
-    const privateKey = await keychain.get('git-steer-private-key');
-    
-    // We need to query the installations - but we don't have the key stored yet
-    // For now, we'll prompt the user
+    // Prompt for installation ID
     spinner.stop();
     console.log(chalk.yellow('\nEnter your installation ID (from the URL after installing):'));
     console.log(chalk.dim('(URL looks like: github.com/settings/installations/12345678)\n'));
-    
+
     const installationId = await new Promise<string>((resolve) => {
       process.stdin.once('data', (data) => {
         resolve(data.toString().trim());
       });
     });
 
+    // Validate the installation ID
+    const parsed = parseInt(installationId, 10);
+    if (isNaN(parsed) || parsed <= 0) {
+      throw new Error(`Invalid installation ID: "${installationId}". Must be a positive number.`);
+    }
+
     spinner.succeed('App installed');
     return installationId;
   }
 
-  private async createStateRepo(appCredentials: {
-    appId: string;
-    privateKey: string;
-  }): Promise<void> {
+  private async createStateRepo(
+    appCredentials: { appId: string; privateKey: string },
+    installationId: string
+  ): Promise<void> {
     const spinner = ora(`Creating ${STATE_REPO_NAME} repo...`).start();
 
     try {
@@ -208,8 +224,7 @@ export class SetupWizard {
         privateKey: appCredentials.privateKey,
       });
 
-      // Get installation token
-      const installationId = await this.keychain.get('git-steer-installation-id');
+      // Get installation token using passed installationId (not yet in keychain)
       const octokit = await app.getInstallationOctokit(Number(installationId));
 
       // Get authenticated user

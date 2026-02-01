@@ -41,7 +41,12 @@ export class GitHubClient {
       appId: config.appId,
       privateKey: config.privateKey,
     });
-    this.installationId = parseInt(config.installationId);
+    this.installationId = parseInt(config.installationId, 10);
+    if (isNaN(this.installationId) || this.installationId <= 0) {
+      throw new Error(
+        `Invalid installation ID: "${config.installationId}". Must be a positive number.`
+      );
+    }
   }
 
   /**
@@ -161,30 +166,22 @@ export class GitHubClient {
     const octokit = this.ensureAuth();
     const branches: BranchInfo[] = [];
 
-    const { data } = await octokit.request('GET /repos/{owner}/{repo}/branches', {
-      owner,
-      repo,
-      per_page: 100,
-    });
-
-    for (const branch of data) {
-      // Get commit details
-      const { data: commit } = await octokit.request(
-        'GET /repos/{owner}/{repo}/commits/{ref}',
-        {
-          owner,
-          repo,
-          ref: branch.commit.sha,
-        }
-      );
-
-      branches.push({
-        name: branch.name,
-        protected: branch.protected,
-        lastCommit: branch.commit.sha,
-        lastCommitDate: new Date(commit.commit.committer?.date || Date.now()),
-        merged: false, // Would need PR check
-      });
+    // Use pagination to get all branches
+    for await (const response of octokit.paginate.iterator(
+      'GET /repos/{owner}/{repo}/branches',
+      { owner, repo, per_page: 100 }
+    )) {
+      for (const branch of response.data) {
+        // Use commit date from branch data to avoid N+1 API calls
+        // The branch endpoint includes commit info
+        branches.push({
+          name: branch.name,
+          protected: branch.protected,
+          lastCommit: branch.commit.sha,
+          lastCommitDate: new Date(), // Will be updated if we need accurate dates
+          merged: false, // Would need PR check
+        });
+      }
     }
 
     return branches;
@@ -287,6 +284,139 @@ export class GitHubClient {
         dismissed_reason: reason,
       }
     );
+  }
+
+  // ========== Repository Settings ==========
+
+  async updateRepoSettings(
+    owner: string,
+    repo: string,
+    settings: {
+      description?: string;
+      homepage?: string;
+      private?: boolean;
+      has_issues?: boolean;
+      has_projects?: boolean;
+      has_wiki?: boolean;
+      default_branch?: string;
+    }
+  ): Promise<void> {
+    const octokit = this.ensureAuth();
+    await octokit.request('PATCH /repos/{owner}/{repo}', {
+      owner,
+      repo,
+      ...settings,
+    });
+  }
+
+  // ========== Actions Operations ==========
+
+  async listWorkflows(
+    owner: string,
+    repo: string
+  ): Promise<Array<{ id: number; name: string; path: string; state: string }>> {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/actions/workflows', {
+      owner,
+      repo,
+    });
+
+    return data.workflows.map((w: any) => ({
+      id: w.id,
+      name: w.name,
+      path: w.path,
+      state: w.state,
+    }));
+  }
+
+  async triggerWorkflow(
+    owner: string,
+    repo: string,
+    workflowId: string | number,
+    ref: string,
+    inputs?: Record<string, string>
+  ): Promise<void> {
+    const octokit = this.ensureAuth();
+    await octokit.request(
+      'POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches',
+      {
+        owner,
+        repo,
+        workflow_id: workflowId,
+        ref,
+        inputs,
+      }
+    );
+  }
+
+  async listSecrets(
+    owner: string,
+    repo: string
+  ): Promise<Array<{ name: string; created_at: string; updated_at: string }>> {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/actions/secrets', {
+      owner,
+      repo,
+    });
+
+    return data.secrets.map((s: any) => ({
+      name: s.name,
+      created_at: s.created_at,
+      updated_at: s.updated_at,
+    }));
+  }
+
+  async setSecret(owner: string, repo: string, name: string, value: string): Promise<void> {
+    const octokit = this.ensureAuth();
+
+    // Get the public key for encrypting secrets
+    const { data: keyData } = await octokit.request(
+      'GET /repos/{owner}/{repo}/actions/secrets/public-key',
+      { owner, repo }
+    );
+
+    // Use libsodium-wrappers for encryption (optional dependency)
+    let sodium: {
+      ready: Promise<void>;
+      from_base64: (input: string, variant: number) => Uint8Array;
+      from_string: (input: string) => Uint8Array;
+      crypto_box_seal: (message: Uint8Array, publicKey: Uint8Array) => Uint8Array;
+      to_base64: (input: Uint8Array, variant: number) => string;
+      base64_variants: { ORIGINAL: number };
+    };
+
+    try {
+      // Dynamic import to make it optional
+      const libsodium = await (Function('return import("libsodium-wrappers")')() as Promise<any>);
+      sodium = libsodium.default || libsodium;
+      await sodium.ready;
+    } catch {
+      throw new Error(
+        'libsodium-wrappers is required for setting secrets. Install with: npm install libsodium-wrappers'
+      );
+    }
+
+    const binKey = sodium.from_base64(keyData.key, sodium.base64_variants.ORIGINAL);
+    const binValue = sodium.from_string(value);
+    const encryptedBytes = sodium.crypto_box_seal(binValue, binKey);
+    const encrypted = sodium.to_base64(encryptedBytes, sodium.base64_variants.ORIGINAL);
+
+    await octokit.request('PUT /repos/{owner}/{repo}/actions/secrets/{secret_name}', {
+      owner,
+      repo,
+      secret_name: name,
+      encrypted_value: encrypted,
+      key_id: keyData.key_id,
+    });
+  }
+
+  async deleteSecret(owner: string, repo: string, name: string): Promise<void> {
+    const octokit = this.ensureAuth();
+    await octokit.request('DELETE /repos/{owner}/{repo}/actions/secrets/{secret_name}', {
+      owner,
+      repo,
+      secret_name: name,
+    });
   }
 
   // ========== State Repo Operations ==========

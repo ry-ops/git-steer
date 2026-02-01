@@ -184,11 +184,18 @@ export class StateManager {
 
   addAuditEntry(entry: Omit<AuditEntry, 'ts'>): void {
     if (!this.data) return;
-    
+
     this.data.state.audit.push({
       ...entry,
       ts: new Date().toISOString(),
     });
+
+    // Rotate audit log to prevent unbounded memory growth (keep last 10000 entries)
+    const MAX_AUDIT_ENTRIES = 10000;
+    if (this.data.state.audit.length > MAX_AUDIT_ENTRIES) {
+      this.data.state.audit = this.data.state.audit.slice(-MAX_AUDIT_ENTRIES);
+    }
+
     this.dirty = true;
   }
 

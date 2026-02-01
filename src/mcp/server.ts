@@ -456,7 +456,11 @@ export class MCPServer {
         }
         
         if (args.filter) {
-          const pattern = new RegExp(args.filter.replace(/\*/g, '.*'));
+          // Escape regex special chars except *, then convert * to .*
+          const escaped = args.filter
+            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*/g, '.*');
+          const pattern = new RegExp(`^${escaped}$`, 'i');
           filtered = filtered.filter((r) => pattern.test(r.fullName));
         }
         
@@ -674,6 +678,66 @@ export class MCPServer {
       case 'config_remove_repo': {
         this.state.removeManagedRepo(args.owner, args.name);
         return { removed: true, repo: `${args.owner}/${args.name}` };
+      }
+
+      // Repository settings
+      case 'repo_settings': {
+        await this.github.updateRepoSettings(args.owner, args.repo, {
+          description: args.settings?.description,
+          homepage: args.settings?.homepage,
+          private: args.settings?.private,
+          has_issues: args.settings?.hasIssues,
+          has_projects: args.settings?.hasProjects,
+          has_wiki: args.settings?.hasWiki,
+          default_branch: args.settings?.defaultBranch,
+        });
+        return { updated: true, repo: `${args.owner}/${args.repo}` };
+      }
+
+      // Actions tools
+      case 'actions_workflows': {
+        const workflows = await this.github.listWorkflows(args.owner, args.repo);
+        return workflows;
+      }
+
+      case 'actions_trigger': {
+        await this.github.triggerWorkflow(
+          args.owner,
+          args.repo,
+          args.workflow,
+          args.ref || 'main',
+          args.inputs
+        );
+        return {
+          triggered: true,
+          workflow: args.workflow,
+          ref: args.ref || 'main',
+        };
+      }
+
+      case 'actions_secrets': {
+        switch (args.action) {
+          case 'list': {
+            const secrets = await this.github.listSecrets(args.owner, args.repo);
+            return secrets;
+          }
+          case 'set': {
+            if (!args.name || !args.value) {
+              throw new Error('name and value are required for setting a secret');
+            }
+            await this.github.setSecret(args.owner, args.repo, args.name, args.value);
+            return { set: true, name: args.name };
+          }
+          case 'delete': {
+            if (!args.name) {
+              throw new Error('name is required for deleting a secret');
+            }
+            await this.github.deleteSecret(args.owner, args.repo, args.name);
+            return { deleted: true, name: args.name };
+          }
+          default:
+            throw new Error(`Unknown action: ${args.action}`);
+        }
       }
 
       default:
