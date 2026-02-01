@@ -1,5 +1,7 @@
 # 🚜 git-steer
 
+<img src="https://github.com/ry-ops/git-steer/blob/main/git-steer.png" width="100%">
+
 **Self-hosting GitHub autonomy engine.** A skid steer for your repos.
 
 git-steer gives you 100% autonomous control over your GitHub account through a Model Context Protocol (MCP) server. Manage repos, branches, security, Actions—everything—through natural language.
@@ -15,17 +17,17 @@ git-steer gives you 100% autonomous control over your GitHub account through a M
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        YOUR MAC                                  │
-│                                                                  │
+│                        YOUR MAC                                 │
+│                                                                 │
 │   Keychain: GitHub App credentials (that's it)                  │
-│                                                                  │
+│                                                                 │
 │   $ npx git-steer                                               │
-│         │                                                        │
+│         │                                                       │
 │         ├─► Pulls latest code from ry-ops/git-steer             │
 │         ├─► Loads state from ry-ops/git-steer-state             │
 │         ├─► Runs MCP server in-memory                           │
 │         └─► Saves state back to GitHub on shutdown              │
-│                                                                  │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
