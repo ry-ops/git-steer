@@ -1,5 +1,11 @@
 # git-steer
 
+[\![Version](https://img.shields.io/github/v/release/ry-ops/git-steer?style=flat-square)](https://github.com/ry-ops/git-steer/releases)
+[\![License](https://img.shields.io/github/license/ry-ops/git-steer?style=flat-square)](LICENSE)
+[\![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue?style=flat-square&logo=typescript&logoColor=white)](https://typescriptlang.org)
+[\![MCP](https://img.shields.io/badge/MCP-Server-00A67E?style=flat-square)](https://modelcontextprotocol.io)
+
+
 <img src="https://github.com/ry-ops/git-steer/blob/main/git-steer.png" width="100%">
 
 **Self-hosting GitHub autonomy engine.** A skid steer for your repos.
