@@ -23,39 +23,39 @@ git-steer gives you 100% autonomous control over your GitHub account through a M
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        YOUR PC or MAC                            │
-│                                                                  │
-│   Keychain:                                                      │
-│     - GitHub App private key                                     │
-│     - App ID / Installation ID                                   │
-│                                                                  │
-│   $ npx git-steer                                                │
-│         │                                                        │
-│         ├─► Pulls itself from ry-ops/git-steer                   │
-│         ├─► Pulls state from ry-ops/git-steer-state              │
-│         ├─► Runs MCP server in-memory                            │
-│         └─► Commits state changes back on shutdown               │
-│                                                                  │
+│                        YOUR PC or MAC                           │
+│                                                                 │
+│   Keychain:                                                     │
+│     - GitHub App private key                                    │
+│     - App ID / Installation ID                                  │
+│                                                                 │
+│   $ npx git-steer                                               │
+│         │                                                       │
+│         ├─► Pulls itself from ry-ops/git-steer                  │
+│         ├─► Pulls state from ry-ops/git-steer-state             │
+│         ├─► Runs MCP server in-memory                           │
+│         └─► Commits state changes back on shutdown              │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                         GITHUB                                   │
-│                                                                  │
-│   ry-ops/git-steer              (source of truth for code)       │
-│   │                                                              │
-│   ry-ops/git-steer-state        (private repo)                   │
-│   ├── config/                                                    │
-│   │   ├── policies.yaml         (branch protection templates)    │
-│   │   ├── schedules.yaml        (job definitions)                │
-│   │   └── managed-repos.yaml    (what git-steer controls)        │
-│   ├── state/                                                     │
-│   │   ├── jobs.jsonl            (job history, append-only)       │
-│   │   ├── audit.jsonl           (action log)                     │
-│   │   └── cache.json            (rate limits, etags)             │
-│   └── .github/workflows/                                         │
-│       └── heartbeat.yml         (scheduled triggers)             │
-│                                                                  │
+│                         GITHUB                                  │
+│                                                                 │
+│   ry-ops/git-steer              (source of truth for code)      │
+│   │                                                             │
+│   ry-ops/git-steer-state        (private repo)                  │
+│   ├── config/                                                   │
+│   │   ├── policies.yaml         (branch protection templates)   │
+│   │   ├── schedules.yaml        (job definitions)               │
+│   │   └── managed-repos.yaml    (what git-steer controls)       │
+│   ├── state/                                                    │
+│   │   ├── jobs.jsonl            (job history, append-only)      │
+│   │   ├── audit.jsonl           (action log)                    │
+│   │   └── cache.json            (rate limits, etags)            │
+│   └── .github/workflows/                                        │
+│       └── heartbeat.yml         (scheduled triggers)            │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -65,28 +65,28 @@ When you ask git-steer to fix security vulnerabilities or make other code change
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  YOUR MAC (MCP triggers intent)                                  │
-│                                                                  │
-│  Claude: "Fix security vulnerabilities in cortex"                │
-│       │                                                          │
-│       ▼                                                          │
-│  git-steer MCP: security_fix_pr(repo: "cortex", ...)             │
-│       │                                                          │
-│       └─► Dispatches workflow to GitHub Actions                  │
+│  YOUR MAC (MCP triggers intent)                                 │
+│                                                                 │
+│  Claude: "Fix security vulnerabilities in cortex"               │
+│       │                                                         │
+│       ▼                                                         │
+│  git-steer MCP: security_fix_pr(repo: "cortex", ...)            │
+│       │                                                         │
+│       └─► Dispatches workflow to GitHub Actions                 │
 └─────────────────────────────────────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  GITHUB ACTIONS (ephemeral compute)                              │
-│                                                                  │
-│  .github/workflows/security-fix.yml:                             │
-│    - Checkout target repo                                        │
-│    - Update dependencies                                         │
-│    - npm install / uv lock                                       │
-│    - Run tests                                                   │
-│    - Create branch, commit, push                                 │
-│    - Open PR                                                     │
-│    - Report status back to git-steer-state                       │
+│  GITHUB ACTIONS (ephemeral compute)                             │
+│                                                                 │
+│  .github/workflows/security-fix.yml:                            │
+│    - Checkout target repo                                       │
+│    - Update dependencies                                        │
+│    - npm install / uv lock                                      │
+│    - Run tests                                                  │
+│    - Create branch, commit, push                                │
+│    - Open PR                                                    │
+│    - Report status back to git-steer-state                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
