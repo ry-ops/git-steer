@@ -78,7 +78,8 @@ program
       
     } catch (error) {
       spinner.fail('Failed to start');
-      console.error(chalk.red(error.message));
+      console.error(chalk.red('Failed to start git-steer. Check your credentials and try again.'));
+      if (process.env.DEBUG) console.error(error);
       process.exit(1);
     }
   });
@@ -92,7 +93,8 @@ program
       const steer = new GitSteer({ keychain });
       await steer.showStatus();
     } catch (error) {
-      console.error(chalk.red(`Error: ${error.message}`));
+      console.error(chalk.red('Failed to retrieve status. Check your credentials and try again.'));
+      if (process.env.DEBUG) console.error(error);
       process.exit(1);
     }
   });
@@ -110,7 +112,8 @@ program
       spinner.succeed('State synced');
     } catch (error) {
       spinner.fail('Sync failed');
-      console.error(chalk.red(error.message));
+      console.error(chalk.red('Failed to sync state. Check your credentials and try again.'));
+      if (process.env.DEBUG) console.error(error);
       process.exit(1);
     }
   });
