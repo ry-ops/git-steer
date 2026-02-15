@@ -900,7 +900,7 @@ export function generateDashboardHtml(data: DashboardData): string {
       body { padding: 8px; }
       .header { padding-left: 40px; }
       .header h1 { font-size: 16px; }
-      .metrics-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+      .metrics-grid { grid-template-columns: 1fr; gap: 8px; }
       .metric-card { padding: 12px; }
       .metric-card .value { font-size: 20px; }
       .metric-card .label { font-size: 10px; }
