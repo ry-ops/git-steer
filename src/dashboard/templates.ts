@@ -1365,8 +1365,8 @@ export function generateDashboardHtml(data: DashboardData): string {
 
   // ===== Copy Command Button =====
   document.getElementById('btn-copy-cmd').addEventListener('click', function() {
-    navigator.clipboard.writeText('npx git-steer security-scan').then(function() {
-      showToast('Copied: npx git-steer security-scan', 'success');
+    navigator.clipboard.writeText('npx git-steer start').then(function() {
+      showToast('Copied: npx git-steer start', 'success');
     }).catch(function() {
       showToast('Failed to copy to clipboard', 'error');
     });
