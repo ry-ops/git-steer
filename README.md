@@ -189,14 +189,47 @@ dashboard_generate()
 ```
 
 - **Reports**: Executive summaries, change records, vulnerability reports, full audits — as markdown
-- **Dashboard**: Interactive BI-style single-page HTML dashboard deployed to GitHub Pages with:
-  - **4 tabs**: Overview, CVE Details, Repositories, Code Quality
-  - **Overview**: Metric cards, severity donut chart, CVE timeline, top 5 riskiest repos
-  - **CVE Details**: Full sortable table of all vulnerabilities with live search, NVD links, severity pills, and status badges
-  - **Repositories**: Expandable repo cards with severity breakdown bars and per-repo CVE tables
-  - **Code Quality**: Sortable findings table with search across linter/SAST results
-  - **Global severity filter**: Filter by CRITICAL/HIGH/MEDIUM/LOW across all tabs
-  - **Zero dependencies**: All data embedded as JSON, rendered client-side with vanilla JS
+- **Dashboard**: Interactive BI-style security dashboard deployed to GitHub Pages — [**view it live**](https://ry-ops.github.io/git-steer-state/)
+
+#### Interactive Security Dashboard
+
+<p align="center">
+  <img src="docs/images/dashboard-demo.gif" alt="git-steer dashboard demo" width="100%">
+</p>
+
+A single `dashboard_generate()` call scans your repos, builds an interactive dashboard, and deploys it to GitHub Pages. Zero dependencies — all data embedded as JSON, rendered client-side with vanilla JS.
+
+<details>
+<summary><strong>Overview Tab</strong> — Metric cards, severity donut chart, CVE timeline, top 5 riskiest repos</summary>
+<br>
+<img src="docs/images/dashboard-overview.png" alt="Dashboard Overview" width="100%">
+</details>
+
+<details>
+<summary><strong>CVE Details Tab</strong> — Full sortable table with live search, NVD links, severity pills, status badges</summary>
+<br>
+<img src="docs/images/dashboard-cve-details.png" alt="CVE Details" width="100%">
+</details>
+
+<details>
+<summary><strong>Repositories Tab</strong> — Expandable repo cards with severity breakdown bars and per-repo CVE tables</summary>
+<br>
+<img src="docs/images/dashboard-repositories.png" alt="Repositories" width="100%">
+</details>
+
+<details>
+<summary><strong>Code Quality Tab</strong> — Sortable findings table with search across linter/SAST results</summary>
+<br>
+<img src="docs/images/dashboard-code-quality.png" alt="Code Quality" width="100%">
+</details>
+
+**Key features:**
+- **4 interactive tabs**: Overview, CVE Details, Repositories, Code Quality
+- **Global severity filter**: Click CRITICAL/HIGH/MEDIUM/LOW to filter across all tabs
+- **Sortable tables**: Click any column header to sort asc/desc
+- **Live search**: Filter CVE and quality tables by typing
+- **Expandable repo cards**: Click to drill into per-repo vulnerability details
+- **NVD links**: Every CVE ID links directly to the NVD detail page
 
 ### Release Strategy
 
