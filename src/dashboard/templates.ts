@@ -738,6 +738,7 @@ export function generateDashboardHtml(data: DashboardData): string {
     }
     .toast.success { border-color: #3fb950; color: #3fb950; }
     .toast.error { border-color: #f85149; color: #f85149; }
+    .toast.info { border-color: #58a6ff; color: #58a6ff; }
     @keyframes toastIn {
       from { transform: translateY(10px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
