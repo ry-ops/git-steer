@@ -1832,6 +1832,11 @@ export function generateDashboardHtml(data: DashboardData): string {
       });
     }
 
+    if (rows.length <= 1) {
+      showToast('No data to export for this tab', 'info');
+      return;
+    }
+
     var csv = rows.map(function(r) {
       return r.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
     }).join('\\n');
