@@ -738,6 +738,7 @@ export function generateDashboardHtml(data: DashboardData): string {
     }
     .toast.success { border-color: #3fb950; color: #3fb950; }
     .toast.error { border-color: #f85149; color: #f85149; }
+    .toast.info { border-color: #58a6ff; color: #58a6ff; }
     @keyframes toastIn {
       from { transform: translateY(10px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
@@ -1830,6 +1831,11 @@ export function generateDashboardHtml(data: DashboardData): string {
       findings.forEach(function(f) {
         rows.push([f.file, f.line, f.rule, f.message, f.severity, f.repo, f.tool]);
       });
+    }
+
+    if (rows.length <= 1) {
+      showToast('No data to export for this tab', 'info');
+      return;
     }
 
     var csv = rows.map(function(r) {
