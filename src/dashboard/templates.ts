@@ -142,11 +142,119 @@ export function generateDashboardHtml(data: DashboardData): string {
       margin-bottom: 24px;
       border-bottom: 1px solid #30363d;
       padding-bottom: 16px;
+      position: relative;
     }
     .header h1 { font-size: 24px; margin-bottom: 4px; }
     .header .subtitle { color: #8b949e; font-size: 13px; }
 
-    /* Tab Bar */
+    /* Hamburger Menu Button (hidden on desktop) */
+    .hamburger-btn {
+      display: none;
+      position: absolute;
+      top: 4px;
+      left: 0;
+      background: none;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e0e0e0;
+      padding: 8px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      z-index: 100;
+    }
+    .hamburger-btn:hover { border-color: #58a6ff; background: #161b22; }
+    .hamburger-btn svg { width: 20px; height: 20px; display: block; fill: currentColor; }
+    .hamburger-btn .icon-close { display: none; }
+    .hamburger-btn.open .icon-menu { display: none; }
+    .hamburger-btn.open .icon-close { display: block; }
+
+    /* Mobile Nav Overlay */
+    .mobile-nav-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 90;
+      opacity: 0;
+      transition: opacity 0.25s;
+    }
+    .mobile-nav-overlay.visible { opacity: 1; }
+
+    /* Mobile Nav Panel */
+    .mobile-nav {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 280px;
+      max-width: 80vw;
+      height: 100vh;
+      background: #161b22;
+      border-right: 1px solid #30363d;
+      z-index: 95;
+      transform: translateX(-100%);
+      transition: transform 0.3s ease;
+      overflow-y: auto;
+      padding: 20px 0;
+    }
+    .mobile-nav.open { transform: translateX(0); }
+    .mobile-nav-header {
+      padding: 0 20px 16px;
+      border-bottom: 1px solid #30363d;
+      margin-bottom: 8px;
+    }
+    .mobile-nav-header h2 {
+      font-size: 16px;
+      color: #e0e0e0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .mobile-nav-header h2 svg { width: 18px; height: 18px; fill: #58a6ff; }
+    .mobile-nav-section {
+      padding: 8px 0;
+      border-bottom: 1px solid #21262d;
+    }
+    .mobile-nav-section:last-child { border-bottom: none; }
+    .mobile-nav-label {
+      padding: 4px 20px 8px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #6e7681;
+      font-weight: 600;
+    }
+    .mobile-nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 20px;
+      color: #8b949e;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+    }
+    .mobile-nav-item:hover { background: #21262d; color: #e0e0e0; }
+    .mobile-nav-item.active { color: #58a6ff; background: rgba(88,166,255,0.08); border-left: 3px solid #58a6ff; padding-left: 17px; }
+    .mobile-nav-item svg { width: 16px; height: 16px; fill: currentColor; flex-shrink: 0; }
+    .mobile-nav-item .badge {
+      margin-left: auto;
+      background: #30363d;
+      color: #8b949e;
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 10px;
+      min-width: 20px;
+      text-align: center;
+    }
+    .mobile-nav-item .badge.alert { background: #f8514926; color: #f85149; }
+
+    /* Tab Bar (desktop) */
     .tab-bar {
       display: flex;
       gap: 0;
@@ -761,24 +869,73 @@ export function generateDashboardHtml(data: DashboardData): string {
       margin: 0;
     }
 
-    /* Responsive */
+    /* Responsive - Tablet */
+    @media (max-width: 900px) {
+      .tab-btn { padding: 8px 14px; font-size: 13px; }
+    }
+
+    /* Responsive - Mobile */
     @media (max-width: 768px) {
       body { padding: 12px; }
+      .hamburger-btn { display: block; }
+      .mobile-nav, .mobile-nav-overlay { display: block; }
+      .tab-bar { display: none; }
+      .header { padding-left: 44px; }
+      .header h1 { font-size: 18px; }
       .charts-row { grid-template-columns: 1fr; }
       .repo-grid { grid-template-columns: 1fr; }
       .search-input { width: 100%; }
-      .filter-bar { gap: 6px; }
-      .tab-btn { padding: 8px 12px; font-size: 13px; }
+      .filter-bar { gap: 6px; flex-wrap: wrap; }
       .data-table { font-size: 12px; }
       .data-table th, .data-table td { padding: 6px 8px; }
-      .metrics-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+      .metrics-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
       .metric-card .value { font-size: 24px; }
-      .action-bar { gap: 6px; }
-      .action-btn { padding: 6px 10px; font-size: 11px; }
+      .action-bar { flex-direction: column; gap: 8px; align-items: stretch; }
+      .action-btn { justify-content: center; padding: 10px 16px; font-size: 13px; }
+      .last-scanned { justify-content: center; }
+      .fullscreen-btn { display: none; }
+    }
+
+    /* Responsive - Small phones */
+    @media (max-width: 480px) {
+      body { padding: 8px; }
+      .header { padding-left: 40px; }
+      .header h1 { font-size: 16px; }
+      .metrics-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+      .metric-card { padding: 12px; }
+      .metric-card .value { font-size: 20px; }
+      .metric-card .label { font-size: 10px; }
     }
   </style>
 </head>
 <body>
+  <!-- Mobile Navigation -->
+  <div class="mobile-nav-overlay" id="mobile-nav-overlay"></div>
+  <div class="mobile-nav" id="mobile-nav">
+    <div class="mobile-nav-header">
+      <h2><svg viewBox="0 0 16 16"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.5 7.5a.5.5 0 0 1 0 1H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H11.5z"/></svg> git-steer</h2>
+    </div>
+    <div class="mobile-nav-section">
+      <div class="mobile-nav-label">Navigation</div>
+      <button class="mobile-nav-item active" data-tab="overview"><svg viewBox="0 0 16 16"><path d="M4 11H2v3h2v-3zm5-4H7v7h2V7zm5-5h-2v12h2V2zm-2-1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1h-2zM6 7a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7zM1 11a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-3z"/></svg> Overview</button>
+      <button class="mobile-nav-item" data-tab="cve-details"><svg viewBox="0 0 16 16"><path d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/></svg> CVE Details <span class="badge alert" id="mobile-cve-count"></span></button>
+      <button class="mobile-nav-item" data-tab="repositories"><svg viewBox="0 0 16 16"><path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5v-9zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8V1.5z"/></svg> Repositories <span class="badge" id="mobile-repo-count"></span></button>
+      <button class="mobile-nav-item" data-tab="code-quality"><svg viewBox="0 0 16 16"><path d="M10.97 4.97a.75.75 0 0 1 1.07 1.05l-3.99 4.99a.75.75 0 0 1-1.08.02L4.324 8.384a.75.75 0 1 1 1.06-1.06l2.094 2.093 3.473-4.425a.267.267 0 0 1 .02-.022z"/><path d="M4.5 0A2.5 2.5 0 0 0 2 2.5v11A2.5 2.5 0 0 0 4.5 16h7a2.5 2.5 0 0 0 2.5-2.5v-11A2.5 2.5 0 0 0 11.5 0h-7zM3 2.5A1.5 1.5 0 0 1 4.5 1h7A1.5 1.5 0 0 1 13 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 13.5v-11z"/></svg> Code Quality</button>
+      <button class="mobile-nav-item" data-tab="about"><svg viewBox="0 0 16 16"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/><path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/></svg> About</button>
+    </div>
+    <div class="mobile-nav-section">
+      <div class="mobile-nav-label">Actions</div>
+      <button class="mobile-nav-item" id="mobile-run-scan"><svg viewBox="0 0 16 16"><path d="M11.251.068a.5.5 0 0 1 .227.58L9.677 6.5H13a.5.5 0 0 1 .364.843l-8 8.5a.5.5 0 0 1-.842-.49L6.323 9.5H3a.5.5 0 0 1-.364-.843l8-8.5a.5.5 0 0 1 .615-.09z"/></svg> Run Security Scan</button>
+      <button class="mobile-nav-item" id="mobile-copy-cmd"><svg viewBox="0 0 16 16"><path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/><path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/></svg> Copy Command</button>
+      <button class="mobile-nav-item" id="mobile-export-csv"><svg viewBox="0 0 16 16"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/></svg> Export CSV</button>
+    </div>
+  </div>
+
+  <button class="hamburger-btn" id="hamburger-btn" aria-label="Menu">
+    <svg class="icon-menu" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z"/></svg>
+    <svg class="icon-close" viewBox="0 0 16 16"><path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854z"/></svg>
+  </button>
+
   <div class="header">
     <h1>git-steer Security Dashboard <button class="fullscreen-btn" id="fullscreen-btn" title="Toggle fullscreen"><svg viewBox="0 0 16 16"><path d="M1.5 1a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0v-4A1.5 1.5 0 0 1 1.5 0h4a.5.5 0 0 1 0 1h-4zM10 .5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 16 1.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5zM.5 10a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 0 14.5v-4a.5.5 0 0 1 .5-.5zm15 0a.5.5 0 0 1 .5.5v4a1.5 1.5 0 0 1-1.5 1.5h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5z"/></svg></button></h1>
     <div class="subtitle" id="subtitle"></div>
@@ -980,14 +1137,85 @@ export function generateDashboardHtml(data: DashboardData): string {
   }
 
   // ===== Tab Switching =====
+  function switchTab(tabName) {
+    document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+    document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
+    document.querySelectorAll('.mobile-nav-item[data-tab]').forEach(function(b) { b.classList.remove('active'); });
+    // Activate desktop tab
+    var desktopBtn = document.querySelector('.tab-btn[data-tab="' + tabName + '"]');
+    if (desktopBtn) desktopBtn.classList.add('active');
+    // Activate mobile nav item
+    var mobileBtn = document.querySelector('.mobile-nav-item[data-tab="' + tabName + '"]');
+    if (mobileBtn) mobileBtn.classList.add('active');
+    // Show tab content
+    var content = document.getElementById('tab-' + tabName);
+    if (content) content.classList.add('active');
+  }
+
   document.querySelectorAll('.tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() { switchTab(btn.dataset.tab); });
+  });
+
+  // ===== Mobile Navigation =====
+  var hamburgerBtn = document.getElementById('hamburger-btn');
+  var mobileNav = document.getElementById('mobile-nav');
+  var mobileOverlay = document.getElementById('mobile-nav-overlay');
+
+  function openMobileNav() {
+    hamburgerBtn.classList.add('open');
+    mobileNav.classList.add('open');
+    mobileOverlay.classList.add('visible');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeMobileNav() {
+    hamburgerBtn.classList.remove('open');
+    mobileNav.classList.remove('open');
+    mobileOverlay.classList.remove('visible');
+    document.body.style.overflow = '';
+  }
+
+  hamburgerBtn.addEventListener('click', function() {
+    if (mobileNav.classList.contains('open')) {
+      closeMobileNav();
+    } else {
+      openMobileNav();
+    }
+  });
+
+  mobileOverlay.addEventListener('click', closeMobileNav);
+
+  // Mobile nav tab items
+  document.querySelectorAll('.mobile-nav-item[data-tab]').forEach(function(btn) {
     btn.addEventListener('click', function() {
-      document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
-      document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
-      btn.classList.add('active');
-      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      switchTab(btn.dataset.tab);
+      closeMobileNav();
     });
   });
+
+  // Mobile action buttons → delegate to desktop counterparts
+  var mobileRunScan = document.getElementById('mobile-run-scan');
+  var mobileCopyCmd = document.getElementById('mobile-copy-cmd');
+  var mobileExportCsv = document.getElementById('mobile-export-csv');
+
+  if (mobileRunScan) mobileRunScan.addEventListener('click', function() {
+    closeMobileNav();
+    document.getElementById('btn-run-scan').click();
+  });
+  if (mobileCopyCmd) mobileCopyCmd.addEventListener('click', function() {
+    closeMobileNav();
+    document.getElementById('btn-copy-cmd').click();
+  });
+  if (mobileExportCsv) mobileExportCsv.addEventListener('click', function() {
+    closeMobileNav();
+    document.getElementById('btn-export-csv').click();
+  });
+
+  // Populate mobile nav badges
+  var mobileCveCount = document.getElementById('mobile-cve-count');
+  var mobileRepoCount = document.getElementById('mobile-repo-count');
+  if (mobileCveCount) mobileCveCount.textContent = DATA.vulnerabilities.length || '0';
+  if (mobileRepoCount) mobileRepoCount.textContent = DATA.repos.length || '0';
 
   // ===== Global Severity Filter State =====
   var activeSeverity = 'all';
@@ -1171,10 +1399,7 @@ export function generateDashboardHtml(data: DashboardData): string {
   })();
 
   function switchToRepoTab(repo) {
-    document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
-    document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
-    document.querySelector('[data-tab="repositories"]').classList.add('active');
-    document.getElementById('tab-repositories').classList.add('active');
+    switchTab('repositories');
     // Expand the repo card
     setTimeout(function() {
       var cards = document.querySelectorAll('.repo-card');
@@ -1636,12 +1861,13 @@ export function generateDashboardHtml(data: DashboardData): string {
       var tabs = ['overview','cve-details','repositories','code-quality','about'];
       if (e.key >= '1' && e.key <= '5') {
         var idx = parseInt(e.key) - 1;
-        var tabBtn = document.querySelector('[data-tab="' + tabs[idx] + '"]');
-        if (tabBtn) tabBtn.click();
+        switchTab(tabs[idx]);
+        closeMobileNav();
       }
       if (e.key === 'Escape') {
         document.getElementById('scan-modal').classList.remove('active');
         hintPanel.classList.remove('active');
+        closeMobileNav();
       }
       if (e.key === '?') {
         hintPanel.classList.toggle('active');
