@@ -92,6 +92,41 @@ jobs:
           echo "total_alerts=$TOTAL_ALERTS" >> $GITHUB_OUTPUT
           echo "repos_with_alerts=$REPOS_WITH_ALERTS" >> $GITHUB_OUTPUT
 
+      - name: Auto-trigger security sweep for critical alerts
+        if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          CRITICAL_REPOS=""
+
+          while IFS= read -r repo; do
+            [ -z "$repo" ] && continue
+
+            CRITICAL=$(gh api "repos/$repo/dependabot/alerts" \
+              --jq '[.[] | select(.state == "open" and .security_advisory.severity == "critical")] | length' 2>/dev/null || echo "0")
+
+            if [ "$CRITICAL" -gt 0 ]; then
+              OWNER=$(echo "$repo" | cut -d'/' -f1)
+              REPO_NAME=$(echo "$repo" | cut -d'/' -f2)
+
+              if [ -n "$CRITICAL_REPOS" ]; then
+                CRITICAL_REPOS="${CRITICAL_REPOS},"
+              fi
+              CRITICAL_REPOS="${CRITICAL_REPOS}{\"owner\":\"$OWNER\",\"repo\":\"$REPO_NAME\",\"issueNumber\":0}"
+            fi
+          done <<< "${{ steps.repos.outputs.repos }}"
+
+          if [ -n "$CRITICAL_REPOS" ]; then
+            echo "Critical alerts found, dispatching security sweep..."
+            gh workflow run security-sweep.yml \
+              -f "target_repos=[${CRITICAL_REPOS}]" \
+              -f severity=critical \
+              -f job_id="heartbeat-sweep-$(date +%Y%m%d)" \
+              -f dry_run=false
+          else
+            echo "No critical alerts found, skipping auto-sweep."
+          fi
+
       - name: Log heartbeat to state
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

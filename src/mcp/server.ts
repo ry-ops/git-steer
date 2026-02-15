@@ -14,7 +14,13 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { GitHubClient } from '../github/client.js';
 import { StateManager } from '../state/manager.js';
+import { generateReport } from '../reports/templates.js';
+import { generateDashboardHtml } from '../dashboard/templates.js';
 import { createRequire } from 'module';
+import { execFileSync } from 'child_process';
+import { existsSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 
 const require = createRequire(import.meta.url);
 const { version: VERSION } = require('../../package.json');
@@ -471,6 +477,11 @@ const TOOLS: Tool[] = [
         },
         prTitle: { type: 'string', description: 'PR title (required if createPr is true)' },
         prBody: { type: 'string', description: 'PR body/description' },
+        prLabels: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Labels to apply to the PR',
+        },
       },
       required: ['owner', 'repo', 'message', 'files'],
     },
@@ -501,6 +512,166 @@ const TOOLS: Tool[] = [
         ref: { type: 'string', description: 'Branch, tag, or commit SHA', default: 'main' },
       },
       required: ['owner', 'repo'],
+    },
+  },
+
+  // ========== Autonomous Security Tools ==========
+  {
+    name: 'security_sweep',
+    description: 'Autonomous security sweep: scans repos for CVEs, creates RFC issues with ITIL-formatted change records, and dispatches a GitHub Actions workflow to fix vulnerabilities and create PRs — all in one call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        severity: {
+          type: 'string',
+          enum: ['critical', 'high', 'medium', 'low', 'all'],
+          default: 'critical',
+          description: 'Minimum severity to include',
+        },
+        repos: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific repos to sweep (owner/repo). Omit to sweep all managed repos.',
+        },
+        dryRun: {
+          type: 'boolean',
+          default: false,
+          description: 'Scan and report only, do not create issues or dispatch fixes',
+        },
+        skipRfc: {
+          type: 'boolean',
+          default: false,
+          description: 'Skip RFC issue creation (dispatch fix workflow directly)',
+        },
+      },
+    },
+  },
+
+  // ========== Code Quality Tools ==========
+  {
+    name: 'code_quality_sweep',
+    description: 'Run linters and SAST tools (ESLint, Ruff, gosec, Bandit) on a repository via GitHub Actions. Auto-detects language stack.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string' },
+        tools: {
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: ['eslint', 'ruff', 'gosec', 'bandit', 'auto'],
+          },
+          default: ['auto'],
+          description: 'Linter/SAST tools to run. "auto" detects from language stack.',
+        },
+        createIssues: {
+          type: 'boolean',
+          default: false,
+          description: 'Create GitHub issues for findings',
+        },
+        severity: {
+          type: 'string',
+          enum: ['error', 'warning', 'all'],
+          default: 'error',
+          description: 'Minimum finding severity to report',
+        },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
+
+  // ========== Report Tools ==========
+  {
+    name: 'report_generate',
+    description: 'Generate compliance and security reports from git-steer state data. Templates: executive-summary, change-records, vulnerability-report, full-audit.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        template: {
+          type: 'string',
+          enum: ['executive-summary', 'change-records', 'vulnerability-report', 'full-audit'],
+          default: 'executive-summary',
+        },
+        dateRange: {
+          type: 'object',
+          properties: {
+            start: { type: 'string', description: 'ISO date string (YYYY-MM-DD)' },
+            end: { type: 'string', description: 'ISO date string (YYYY-MM-DD)' },
+          },
+        },
+        format: {
+          type: 'string',
+          enum: ['markdown', 'json'],
+          default: 'markdown',
+        },
+        commitToRepo: {
+          type: 'boolean',
+          default: false,
+          description: 'Commit report to state repo reports/ directory',
+        },
+      },
+    },
+  },
+
+  // ========== Dashboard Tools ==========
+  {
+    name: 'dashboard_generate',
+    description: 'Generate a static analytics dashboard with SVG charts showing security metrics, MTTR, severity breakdown, and repo risk scores. Deploys to GitHub Pages.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: {
+          type: 'string',
+          description: 'Filter metrics to a specific repo (owner/repo)',
+        },
+        dateRange: {
+          type: 'object',
+          properties: {
+            start: { type: 'string' },
+            end: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+
+  // ========== Code Review Tools ==========
+  {
+    name: 'code_review',
+    description: 'Run AI-powered code review using CodeRabbit CLI. Reviews changes in a local git repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cwd: {
+          type: 'string',
+          description: 'Working directory path (must be a git repository). Defaults to current directory.',
+        },
+        type: {
+          type: 'string',
+          enum: ['all', 'committed', 'uncommitted'],
+          description: 'Review type: all changes, only committed, or only uncommitted',
+          default: 'all',
+        },
+        base: {
+          type: 'string',
+          description: 'Base branch for comparison (e.g., "main", "develop")',
+        },
+        baseCommit: {
+          type: 'string',
+          description: 'Base commit SHA on current branch for comparison',
+        },
+        promptOnly: {
+          type: 'boolean',
+          description: 'Return minimal output optimized for token efficiency',
+          default: false,
+        },
+        config: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Additional config files to include (e.g., ["CLAUDE.md", ".coderabbit.yaml"])',
+        },
+      },
     },
   },
 ];
@@ -1014,6 +1185,338 @@ export class MCPServer {
         };
       }
 
+      // ===== Autonomous Security Sweep =====
+      case 'security_sweep': {
+        const severityOrder = ['critical', 'high', 'medium', 'low'];
+        const minSev = args.severity || 'critical';
+        const minSevIndex = minSev === 'all' ? 4 : severityOrder.indexOf(minSev);
+
+        // Resolve target repos
+        let targetRepos: Array<{ owner: string; name: string; fullName: string }>;
+        if (args.repos && args.repos.length > 0) {
+          targetRepos = args.repos.map((r: string) => {
+            const [owner, name] = r.split('/');
+            return { owner, name, fullName: r };
+          });
+        } else {
+          const managed = this.state.getManagedRepos();
+          if (managed.length === 0) {
+            const allRepos = await this.github.listRepos();
+            targetRepos = allRepos.map((r) => ({ owner: r.owner, name: r.name, fullName: r.fullName }));
+          } else {
+            targetRepos = managed
+              .filter((r) => r.name !== '*')
+              .map((r) => ({ owner: r.owner, name: r.name, fullName: `${r.owner}/${r.name}` }));
+          }
+        }
+
+        // Scan each repo
+        const sweepResults: Array<{
+          repo: string;
+          owner: string;
+          name: string;
+          dependabotAlerts: any[];
+          codeScanningAlerts: any[];
+          issueNumber?: number;
+          issueUrl?: string;
+        }> = [];
+
+        for (const repo of targetRepos) {
+          try {
+            const depAlerts = await this.github.getSecurityAlertsDetailed(repo.owner, repo.name);
+            const codeAlerts = await this.github.getCodeScanningAlerts(repo.owner, repo.name);
+
+            const filteredDep = depAlerts.filter((a) => {
+              const idx = severityOrder.indexOf(a.severity);
+              return idx >= 0 && idx <= minSevIndex;
+            });
+
+            const filteredCode = codeAlerts.filter((a) => {
+              const idx = severityOrder.indexOf(a.rule.severity);
+              return idx >= 0 && idx <= minSevIndex;
+            });
+
+            if (filteredDep.length > 0 || filteredCode.length > 0) {
+              sweepResults.push({
+                repo: repo.fullName,
+                owner: repo.owner,
+                name: repo.name,
+                dependabotAlerts: filteredDep,
+                codeScanningAlerts: filteredCode,
+              });
+            }
+          } catch {
+            // Skip repos we can't access
+          }
+        }
+
+        if (args.dryRun) {
+          return {
+            dryRun: true,
+            reposScanned: targetRepos.length,
+            reposWithFindings: sweepResults.length,
+            findings: sweepResults.map((r) => ({
+              repo: r.repo,
+              dependabotAlerts: r.dependabotAlerts.length,
+              codeScanningAlerts: r.codeScanningAlerts.length,
+              vulnerabilities: r.dependabotAlerts.map((a) => ({
+                cve: a.cve,
+                package: a.package,
+                severity: a.severity,
+                fixVersion: a.fixVersion,
+              })),
+            })),
+          };
+        }
+
+        // Create RFC issues and track state
+        const jobId = `sweep-${Date.now()}`;
+        const workflowTargets: Array<{ owner: string; repo: string; issueNumber: number; vulnerabilities: any[] }> = [];
+
+        for (const result of sweepResults) {
+          if (!args.skipRfc) {
+            // Ensure labels exist
+            await this.github.ensureLabel(result.owner, result.name, 'security', 'd73a4a', 'Security vulnerability');
+            await this.github.ensureLabel(result.owner, result.name, 'rfc', '0075ca', 'Request for Change');
+            await this.github.ensureLabel(result.owner, result.name, 'dependencies', '0075ca', 'Dependency updates');
+            await this.github.ensureLabel(result.owner, result.name, 'automated', 'bfd4f2', 'Created by automation');
+
+            const maxSeverity = result.dependabotAlerts.reduce((max, a) => {
+              const idx = severityOrder.indexOf(a.severity);
+              const maxIdx = severityOrder.indexOf(max);
+              return idx < maxIdx ? a.severity : max;
+            }, 'low');
+
+            await this.github.ensureLabel(result.owner, result.name, `severity:${maxSeverity}`, maxSeverity === 'critical' ? 'b60205' : maxSeverity === 'high' ? 'ff9800' : 'fbca04', `${maxSeverity} severity`);
+
+            // Build RFC issue body
+            const cveTable = result.dependabotAlerts.map((a) =>
+              `| ${a.cve || 'N/A'} | ${a.package} | ${a.severity.toUpperCase()} | ${a.currentVersion} | ${a.fixVersion || 'N/A'} |`
+            ).join('\n');
+
+            const issueBody = `## RFC: Security Vulnerability Remediation
+
+**Repository:** ${result.repo}
+**Severity:** ${maxSeverity.toUpperCase()}
+**Date:** ${new Date().toISOString().split('T')[0]}
+**Generated by:** git-steer autonomous security sweep
+
+### Vulnerabilities
+
+| CVE | Package | Severity | Current | Fix Version |
+|-----|---------|----------|---------|-------------|
+${cveTable}
+
+${result.codeScanningAlerts.length > 0 ? `### Code Scanning Alerts
+
+| Rule | Severity | File | Line |
+|------|----------|------|------|
+${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${a.location.path} | ${a.location.startLine} |`).join('\n')}
+` : ''}
+### Change Plan
+
+1. Update vulnerable dependencies to patched versions
+2. Run automated tests to verify compatibility
+3. Create PR with fixes
+4. Merge after review
+
+### Risk Assessment
+
+- **Impact of not fixing:** Potential security breach via known CVEs
+- **Impact of fix:** Dependency version bumps, low risk of breakage
+- **Rollback plan:** Revert PR if tests fail
+
+---
+
+*This RFC was auto-generated by git-steer. A fix PR will be created automatically.*`;
+
+            const issue = await this.github.createIssue(result.owner, result.name, {
+              title: `[RFC] Security: ${result.dependabotAlerts.length} vulnerabilities (${maxSeverity})`,
+              body: issueBody,
+              labels: ['security', 'rfc', 'automated', `severity:${maxSeverity}`],
+            });
+
+            result.issueNumber = issue.number;
+            result.issueUrl = issue.url;
+
+            // Track RFC in state
+            this.state.addRfc({
+              repo: result.repo,
+              issueNumber: issue.number,
+              issueUrl: issue.url,
+              severity: maxSeverity,
+              vulnerabilities: result.dependabotAlerts.map((a) => ({
+                cve: a.cve,
+                package: a.package,
+                severity: a.severity,
+                fixVersion: a.fixVersion,
+              })),
+              status: 'open',
+            });
+          }
+
+          workflowTargets.push({
+            owner: result.owner,
+            repo: result.name,
+            issueNumber: result.issueNumber || 0,
+            vulnerabilities: result.dependabotAlerts,
+          });
+        }
+
+        // Dispatch security-sweep workflow
+        if (workflowTargets.length > 0) {
+          await this.github.triggerWorkflow(
+            'ry-ops',
+            'git-steer',
+            'security-sweep.yml',
+            'main',
+            {
+              target_repos: JSON.stringify(workflowTargets),
+              severity: minSev,
+              job_id: jobId,
+              dry_run: 'false',
+            }
+          );
+        }
+
+        return {
+          success: true,
+          jobId,
+          reposScanned: targetRepos.length,
+          reposWithFindings: sweepResults.length,
+          rfcsCreated: args.skipRfc ? 0 : sweepResults.length,
+          workflowDispatched: workflowTargets.length > 0,
+          repos: sweepResults.map((r) => ({
+            repo: r.repo,
+            dependabotAlerts: r.dependabotAlerts.length,
+            codeScanningAlerts: r.codeScanningAlerts.length,
+            issueNumber: r.issueNumber,
+            issueUrl: r.issueUrl,
+          })),
+        };
+      }
+
+      // ===== Code Quality Sweep =====
+      case 'code_quality_sweep': {
+        const jobId = `quality-${Date.now()}`;
+
+        // Ensure labels exist on target repo for issue creation
+        if (args.createIssues) {
+          await this.github.ensureLabel(args.owner, args.repo, 'code-quality', '5319e7', 'Code quality findings');
+          await this.github.ensureLabel(args.owner, args.repo, 'automated', 'bfd4f2', 'Created by automation');
+        }
+
+        // Determine tools to use
+        let tools = args.tools || ['auto'];
+        if (tools.includes('auto')) {
+          // Auto-detect from repo files
+          const files = await this.github.listFiles(args.owner, args.repo, '');
+          const fileNames = files.map((f) => f.name);
+          tools = [];
+          if (fileNames.includes('package.json') || fileNames.includes('tsconfig.json')) tools.push('eslint');
+          if (fileNames.includes('pyproject.toml') || fileNames.includes('requirements.txt') || fileNames.includes('setup.py')) {
+            tools.push('ruff', 'bandit');
+          }
+          if (fileNames.includes('go.mod')) tools.push('gosec');
+          if (tools.length === 0) tools = ['eslint']; // fallback
+        }
+
+        // Dispatch code-quality workflow
+        await this.github.triggerWorkflow(
+          'ry-ops',
+          'git-steer',
+          'code-quality.yml',
+          'main',
+          {
+            target_owner: args.owner,
+            target_repo: args.repo,
+            tools: JSON.stringify(tools),
+            create_issues: String(args.createIssues || false),
+            severity: args.severity || 'error',
+            job_id: jobId,
+          }
+        );
+
+        return {
+          success: true,
+          jobId,
+          repo: `${args.owner}/${args.repo}`,
+          tools,
+          message: 'Code quality workflow dispatched. Use workflow_status to check progress.',
+        };
+      }
+
+      // ===== Report Generation =====
+      case 'report_generate': {
+        const template = args.template || 'executive-summary';
+        const dateRange = args.dateRange;
+        const format = args.format || 'markdown';
+
+        const metrics = this.state.getMetrics(dateRange);
+        const rfcs = this.state.getRfcs();
+        const quality = this.state.getQualityResults();
+
+        const report = generateReport(template, { metrics, rfcs, quality, dateRange });
+
+        if (format === 'json') {
+          return { template, metrics, rfcs: rfcs.length, qualityResults: quality.length };
+        }
+
+        // Optionally commit to state repo
+        if (args.commitToRepo) {
+          const managedRepos = this.state.getManagedRepos();
+          const stateRepoName = 'git-steer-state';
+          const owner = managedRepos[0]?.owner || 'ry-ops';
+          const fileName = `reports/${template}-${new Date().toISOString().split('T')[0]}.md`;
+
+          await this.github.updateFileContent(
+            owner,
+            stateRepoName,
+            fileName,
+            report,
+            `Add ${template} report for ${new Date().toISOString().split('T')[0]}`
+          );
+
+          return { report, committed: true, path: fileName };
+        }
+
+        return { report };
+      }
+
+      // ===== Dashboard Generation =====
+      case 'dashboard_generate': {
+        const dateRange = args.dateRange;
+        const metrics = this.state.getMetrics(dateRange);
+        const rfcs = this.state.getRfcs(args.repo ? { repo: args.repo } : undefined);
+        const quality = this.state.getQualityResults(args.repo ? { repo: args.repo } : undefined);
+
+        const html = generateDashboardHtml({ metrics, rfcs, quality, dateRange });
+
+        // Deploy to gh-pages branch of state repo
+        const owner = 'ry-ops';
+        const stateRepo = 'git-steer-state';
+
+        const commitResult = await this.github.commitFiles(owner, stateRepo, {
+          branch: 'gh-pages',
+          message: `Update dashboard ${new Date().toISOString()}`,
+          files: [{ path: 'index.html', content: html }],
+          createBranch: true,
+          baseBranch: 'main',
+        });
+
+        return {
+          success: true,
+          dashboardUrl: `https://${owner}.github.io/${stateRepo}/`,
+          commitSha: commitResult.sha,
+          metrics: {
+            totalCves: metrics.totalCves,
+            fixedCves: metrics.fixedCves,
+            fixRate: Math.round(metrics.fixRate * 100) + '%',
+            avgMttr: Math.round(metrics.avgMttr) + ' hours',
+          },
+        };
+      }
+
       // File operation tools
       case 'repo_commit': {
         if (!args.files || args.files.length === 0) {
@@ -1051,6 +1554,7 @@ export class MCPServer {
             body: args.prBody || '',
             head: branch,
             base: args.baseBranch || 'main',
+            labels: args.prLabels,
           });
         }
 
@@ -1103,6 +1607,91 @@ export class MCPServer {
           files: files,
           count: files.length,
         };
+      }
+
+      // Code review tool
+      case 'code_review': {
+        // Find coderabbit CLI
+        const coderabbitPaths = [
+          join(homedir(), '.local', 'bin', 'coderabbit'),
+          '/usr/local/bin/coderabbit',
+          '/opt/homebrew/bin/coderabbit',
+        ];
+
+        let coderabbitPath: string | null = null;
+        for (const p of coderabbitPaths) {
+          if (existsSync(p)) {
+            coderabbitPath = p;
+            break;
+          }
+        }
+
+        if (!coderabbitPath) {
+          throw new Error(
+            'CodeRabbit CLI not found. Install it with: curl -fsSL https://cli.coderabbit.ai/install.sh | sh'
+          );
+        }
+
+        // Build command
+        const cmdParts = [coderabbitPath, 'review', '--plain'];
+
+        if (args.promptOnly) {
+          cmdParts.push('--prompt-only');
+        }
+
+        if (args.type && args.type !== 'all') {
+          cmdParts.push('--type', args.type);
+        }
+
+        if (args.base) {
+          cmdParts.push('--base', args.base);
+        }
+
+        if (args.baseCommit) {
+          cmdParts.push('--base-commit', args.baseCommit);
+        }
+
+        if (args.config && args.config.length > 0) {
+          cmdParts.push('--config', ...args.config);
+        }
+
+        const cwd = args.cwd || process.cwd();
+
+        // Verify it's a git repo
+        const gitDir = join(cwd, '.git');
+        if (!existsSync(gitDir)) {
+          throw new Error(`Not a git repository: ${cwd}`);
+        }
+
+        try {
+          const output = execFileSync(cmdParts[0], cmdParts.slice(1), {
+            cwd,
+            encoding: 'utf-8',
+            maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large reviews
+            timeout: 300000, // 5 minute timeout
+          });
+
+          return {
+            success: true,
+            cwd,
+            reviewType: args.type || 'all',
+            base: args.base || null,
+            review: output,
+          };
+        } catch (error: any) {
+          // CodeRabbit may exit with non-zero even on success (e.g., findings)
+          if (error.stdout) {
+            return {
+              success: true,
+              cwd,
+              reviewType: args.type || 'all',
+              base: args.base || null,
+              review: error.stdout,
+              stderr: error.stderr || null,
+            };
+          }
+          throw new Error(`CodeRabbit review failed: ${error.message}`);
+        }
       }
 
       default:

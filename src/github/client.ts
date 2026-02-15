@@ -625,6 +625,7 @@ export class GitHubClient {
       body: string;
       head: string;
       base?: string;
+      labels?: string[];
     }
   ): Promise<{ number: number; url: string }> {
     const octokit = this.ensureAuth();
@@ -636,6 +637,16 @@ export class GitHubClient {
       head: options.head,
       base: options.base || 'main',
     });
+
+    // GitHub's PR create API doesn't support labels, so apply them after creation
+    if (options.labels && options.labels.length > 0) {
+      await octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+        owner,
+        repo,
+        issue_number: data.number,
+        labels: options.labels,
+      });
+    }
 
     return { number: data.number, url: data.html_url };
   }
@@ -845,6 +856,203 @@ export class GitHubClient {
     } catch (error: any) {
       if (error.status === 404) {
         return null;
+      }
+      throw error;
+    }
+  }
+
+  // ========== Issue Operations ==========
+
+  async createIssue(
+    owner: string,
+    repo: string,
+    options: {
+      title: string;
+      body: string;
+      labels?: string[];
+      assignees?: string[];
+    }
+  ): Promise<{ number: number; url: string; id: number }> {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request('POST /repos/{owner}/{repo}/issues', {
+      owner,
+      repo,
+      title: options.title,
+      body: options.body,
+      labels: options.labels,
+      assignees: options.assignees,
+    });
+
+    return { number: data.number, url: data.html_url, id: data.id };
+  }
+
+  async updateIssue(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    updates: {
+      state?: 'open' | 'closed';
+      labels?: string[];
+      state_reason?: 'completed' | 'not_planned' | 'reopened';
+    }
+  ): Promise<void> {
+    const octokit = this.ensureAuth();
+    await octokit.request('PATCH /repos/{owner}/{repo}/issues/{issue_number}', {
+      owner,
+      repo,
+      issue_number: issueNumber,
+      state: updates.state,
+      labels: updates.labels,
+      state_reason: updates.state_reason,
+    });
+  }
+
+  async addIssueComment(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    body: string
+  ): Promise<{ id: number; url: string }> {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request(
+      'POST /repos/{owner}/{repo}/issues/{issue_number}/comments',
+      { owner, repo, issue_number: issueNumber, body }
+    );
+
+    return { id: data.id, url: data.html_url };
+  }
+
+  async listIssues(
+    owner: string,
+    repo: string,
+    options?: { state?: 'open' | 'closed' | 'all'; labels?: string; per_page?: number }
+  ): Promise<
+    Array<{
+      number: number;
+      title: string;
+      state: string;
+      labels: string[];
+      url: string;
+      createdAt: string;
+    }>
+  > {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/issues', {
+      owner,
+      repo,
+      state: options?.state || 'open',
+      labels: options?.labels,
+      per_page: options?.per_page || 30,
+    });
+
+    return data.map((issue: any) => ({
+      number: issue.number,
+      title: issue.title,
+      state: issue.state,
+      labels: issue.labels.map((l: any) => (typeof l === 'string' ? l : l.name)),
+      url: issue.html_url,
+      createdAt: issue.created_at,
+    }));
+  }
+
+  async ensureLabel(
+    owner: string,
+    repo: string,
+    name: string,
+    color: string,
+    description: string
+  ): Promise<void> {
+    const octokit = this.ensureAuth();
+    try {
+      await octokit.request('PATCH /repos/{owner}/{repo}/labels/{name}', {
+        owner,
+        repo,
+        name,
+        color,
+        description,
+      });
+    } catch (error: any) {
+      if (error.status === 404) {
+        await octokit.request('POST /repos/{owner}/{repo}/labels', {
+          owner,
+          repo,
+          name,
+          color,
+          description,
+        });
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  // ========== Release Operations ==========
+
+  async createDraftRelease(
+    owner: string,
+    repo: string,
+    options: {
+      tagName: string;
+      name: string;
+      body: string;
+      prerelease?: boolean;
+    }
+  ): Promise<{ id: number; url: string; htmlUrl: string }> {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request('POST /repos/{owner}/{repo}/releases', {
+      owner,
+      repo,
+      tag_name: options.tagName,
+      name: options.name,
+      body: options.body,
+      draft: true,
+      prerelease: options.prerelease ?? false,
+    });
+
+    return { id: data.id, url: data.url, htmlUrl: data.html_url };
+  }
+
+  // ========== Code Scanning Operations ==========
+
+  async getCodeScanningAlerts(
+    owner: string,
+    repo: string
+  ): Promise<
+    Array<{
+      number: number;
+      rule: { id: string; severity: string; description: string };
+      tool: string;
+      state: string;
+      location: { path: string; startLine: number };
+      url: string;
+    }>
+  > {
+    const octokit = this.ensureAuth();
+    try {
+      const { data } = await octokit.request(
+        'GET /repos/{owner}/{repo}/code-scanning/alerts',
+        { owner, repo, state: 'open' }
+      );
+
+      return data.map((alert: any) => ({
+        number: alert.number,
+        rule: {
+          id: alert.rule?.id || 'unknown',
+          severity: alert.rule?.security_severity_level || alert.rule?.severity || 'unknown',
+          description: alert.rule?.description || '',
+        },
+        tool: alert.tool?.name || 'unknown',
+        state: alert.state,
+        location: {
+          path: alert.most_recent_instance?.location?.path || '',
+          startLine: alert.most_recent_instance?.location?.start_line || 0,
+        },
+        url: alert.html_url,
+      }));
+    } catch (error: any) {
+      // Code scanning may not be enabled for all repos
+      if (error.status === 404 || error.status === 403) {
+        return [];
       }
       throw error;
     }

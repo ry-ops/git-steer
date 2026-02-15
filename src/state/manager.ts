@@ -48,6 +48,57 @@ export interface AuditEntry {
   details?: Record<string, any>;
 }
 
+export interface RfcVulnerability {
+  cve: string | null;
+  package: string;
+  severity: string;
+  fixVersion: string | null;
+}
+
+export interface RfcEntry {
+  ts: string;
+  repo: string;
+  issueNumber: number;
+  issueUrl: string;
+  severity: string;
+  vulnerabilities: RfcVulnerability[];
+  status: 'open' | 'in_progress' | 'fixed' | 'closed';
+  prNumber?: number;
+  prUrl?: string;
+  releaseId?: number;
+  releaseUrl?: string;
+  fixedAt?: string;
+  mttr?: number; // hours
+}
+
+export interface QualityFinding {
+  file: string;
+  line: number;
+  rule: string;
+  message: string;
+  severity: string;
+}
+
+export interface QualityEntry {
+  ts: string;
+  repo: string;
+  tool: string;
+  findings: number;
+  errors: number;
+  warnings: number;
+  details?: QualityFinding[];
+}
+
+export interface SecurityMetrics {
+  totalCves: number;
+  fixedCves: number;
+  fixRate: number;
+  avgMttr: number;
+  bySeverity: Record<string, { total: number; fixed: number }>;
+  byRepo: Record<string, { total: number; fixed: number }>;
+  timeline: Array<{ date: string; opened: number; fixed: number }>;
+}
+
 export interface StateData {
   config: {
     managedRepos: ManagedRepo[];
@@ -58,6 +109,8 @@ export interface StateData {
     audit: AuditEntry[];
     jobs: any[];
     cache: Record<string, any>;
+    rfcs: RfcEntry[];
+    quality: QualityEntry[];
   };
   shas: Record<string, string>;
 }
@@ -108,6 +161,8 @@ export class StateManager {
     const audit = await this.loadJsonLines('state/audit.jsonl');
     const jobs = await this.loadJsonLines('state/jobs.jsonl');
     const cache = await this.loadJson('state/cache.json');
+    const rfcs = await this.loadJsonLines('state/rfcs.jsonl');
+    const quality = await this.loadJsonLines('state/quality.jsonl');
 
     this.data = {
       config: {
@@ -119,6 +174,8 @@ export class StateManager {
         audit,
         jobs,
         cache,
+        rfcs,
+        quality,
       },
       shas: {},
     };
@@ -140,6 +197,12 @@ export class StateManager {
 
     // Save jobs
     await this.saveJsonLines('state/jobs.jsonl', this.data.state.jobs);
+
+    // Save RFCs
+    await this.saveJsonLines('state/rfcs.jsonl', this.data.state.rfcs);
+
+    // Save quality results
+    await this.saveJsonLines('state/quality.jsonl', this.data.state.quality);
 
     // Save cache
     await this.saveJson('state/cache.json', this.data.state.cache);
@@ -255,6 +318,135 @@ export class StateManager {
 
   getCache(key: string): any {
     return this.data?.state.cache[key];
+  }
+
+  // ========== RFC Operations ==========
+
+  getRfcs(filter?: { repo?: string; status?: RfcEntry['status'] }): RfcEntry[] {
+    if (!this.data) return [];
+    let rfcs = this.data.state.rfcs;
+    if (filter?.repo) {
+      rfcs = rfcs.filter((r) => r.repo === filter.repo);
+    }
+    if (filter?.status) {
+      rfcs = rfcs.filter((r) => r.status === filter.status);
+    }
+    return rfcs;
+  }
+
+  addRfc(rfc: Omit<RfcEntry, 'ts'>): void {
+    if (!this.data) return;
+    this.data.state.rfcs.push({
+      ...rfc,
+      ts: new Date().toISOString(),
+    });
+    this.dirty = true;
+  }
+
+  updateRfc(
+    repo: string,
+    issueNumber: number,
+    updates: Partial<Pick<RfcEntry, 'status' | 'prNumber' | 'prUrl' | 'releaseId' | 'releaseUrl' | 'fixedAt' | 'mttr'>>
+  ): void {
+    if (!this.data) return;
+    const rfc = this.data.state.rfcs.find(
+      (r) => r.repo === repo && r.issueNumber === issueNumber
+    );
+    if (rfc) {
+      Object.assign(rfc, updates);
+      this.dirty = true;
+    }
+  }
+
+  // ========== Quality Operations ==========
+
+  getQualityResults(filter?: { repo?: string; tool?: string }): QualityEntry[] {
+    if (!this.data) return [];
+    let results = this.data.state.quality;
+    if (filter?.repo) {
+      results = results.filter((q) => q.repo === filter.repo);
+    }
+    if (filter?.tool) {
+      results = results.filter((q) => q.tool === filter.tool);
+    }
+    return results;
+  }
+
+  addQualityResult(result: Omit<QualityEntry, 'ts'>): void {
+    if (!this.data) return;
+    this.data.state.quality.push({
+      ...result,
+      ts: new Date().toISOString(),
+    });
+    this.dirty = true;
+  }
+
+  // ========== Metrics ==========
+
+  getMetrics(dateRange?: { start: string; end: string }): SecurityMetrics {
+    const rfcs = this.data?.state.rfcs || [];
+
+    let filtered = rfcs;
+    if (dateRange) {
+      filtered = rfcs.filter((r) => r.ts >= dateRange.start && r.ts <= dateRange.end);
+    }
+
+    const totalCves = filtered.reduce((sum, r) => sum + r.vulnerabilities.length, 0);
+    const fixedRfcs = filtered.filter((r) => r.status === 'fixed');
+    const fixedCves = fixedRfcs.reduce((sum, r) => sum + r.vulnerabilities.length, 0);
+
+    // MTTR calculation
+    const mttrs = fixedRfcs.filter((r) => r.mttr != null).map((r) => r.mttr!);
+    const avgMttr = mttrs.length > 0 ? mttrs.reduce((a, b) => a + b, 0) / mttrs.length : 0;
+
+    // By severity
+    const bySeverity: Record<string, { total: number; fixed: number }> = {};
+    for (const rfc of filtered) {
+      const sev = rfc.severity;
+      if (!bySeverity[sev]) bySeverity[sev] = { total: 0, fixed: 0 };
+      bySeverity[sev].total += rfc.vulnerabilities.length;
+      if (rfc.status === 'fixed') {
+        bySeverity[sev].fixed += rfc.vulnerabilities.length;
+      }
+    }
+
+    // By repo
+    const byRepo: Record<string, { total: number; fixed: number }> = {};
+    for (const rfc of filtered) {
+      if (!byRepo[rfc.repo]) byRepo[rfc.repo] = { total: 0, fixed: 0 };
+      byRepo[rfc.repo].total += rfc.vulnerabilities.length;
+      if (rfc.status === 'fixed') {
+        byRepo[rfc.repo].fixed += rfc.vulnerabilities.length;
+      }
+    }
+
+    // Timeline (group by date)
+    const timelineMap = new Map<string, { opened: number; fixed: number }>();
+    for (const rfc of filtered) {
+      const date = rfc.ts.split('T')[0];
+      if (!timelineMap.has(date)) timelineMap.set(date, { opened: 0, fixed: 0 });
+      timelineMap.get(date)!.opened += rfc.vulnerabilities.length;
+    }
+    for (const rfc of fixedRfcs) {
+      if (rfc.fixedAt) {
+        const date = rfc.fixedAt.split('T')[0];
+        if (!timelineMap.has(date)) timelineMap.set(date, { opened: 0, fixed: 0 });
+        timelineMap.get(date)!.fixed += rfc.vulnerabilities.length;
+      }
+    }
+    const timeline = Array.from(timelineMap.entries())
+      .map(([date, counts]) => ({ date, ...counts }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    return {
+      totalCves,
+      fixedCves,
+      fixRate: totalCves > 0 ? fixedCves / totalCves : 0,
+      avgMttr,
+      bySeverity,
+      byRepo,
+      timeline,
+    };
   }
 
   // ========== File Helpers ==========

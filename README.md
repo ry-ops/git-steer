@@ -46,6 +46,8 @@ git-steer gives you 100% autonomous control over your GitHub account through a M
 │   ├── state/                                                    │
 │   │   ├── jobs.jsonl            (job history, append-only)      │
 │   │   ├── audit.jsonl           (action log)                    │
+│   │   ├── rfcs.jsonl            (RFC lifecycle tracking)        │
+│   │   ├── quality.jsonl         (linter/SAST results)           │
 │   │   └── cache.json            (rate limits, etags)            │
 │   └── .github/workflows/                                        │
 │       └── heartbeat.yml         (scheduled triggers)            │
@@ -134,6 +136,12 @@ That's it. No config files. No dotfiles. No `~/.git-steer`. No cloned repos.
 - `security_dismiss` - Dismiss alert with reason
 - `security_digest` - Summary across all managed repos
 
+### Autonomous Security Operations (v0.2.0)
+- `security_sweep` - **Full autonomous pipeline**: scan repos, create RFC issues, dispatch fix workflows, and track everything — in one call
+- `code_quality_sweep` - Run linters/SAST (ESLint, Ruff, gosec, Bandit) on repos via GitHub Actions
+- `report_generate` - Generate compliance reports (executive summary, change records, vulnerability report, full audit)
+- `dashboard_generate` - Generate an interactive BI-style security dashboard, deployed to GitHub Pages
+
 ### GitHub Actions
 - `actions_workflows` - List workflows
 - `actions_trigger` - Manually trigger a workflow
@@ -147,6 +155,54 @@ That's it. No config files. No dotfiles. No `~/.git-steer`. No cloned repos.
 - `steer_status` - Health and rate limits
 - `steer_sync` - Force save state to GitHub
 - `steer_logs` - View audit log
+
+## v0.2.0: Autonomous Security Operations
+
+v0.2.0 adds a fully autonomous security pipeline that replaces manual repo-by-repo CVE sweeps with a single tool call.
+
+### Security Sweep Pipeline
+
+```
+security_sweep(severity: "high", repos: ["org/app1", "org/app2"])
+```
+
+What happens:
+1. Scans each repo for Dependabot alerts + CodeQL findings
+2. Creates ITIL-formatted RFC issues with CVE tables and risk assessments
+3. Dispatches a GitHub Actions workflow that fixes dependencies across all repos in parallel
+4. Workflow creates branches, commits fixes, opens PRs linked to RFC issues
+5. Heartbeat auto-triggers sweeps when new critical alerts appear
+
+### Code Quality
+
+```
+code_quality_sweep(owner: "org", repo: "app", tools: ["auto"])
+```
+
+Auto-detects language stack and runs appropriate linters (ESLint, Ruff, Bandit, gosec) via GitHub Actions.
+
+### Reports & Dashboard
+
+```
+report_generate(template: "executive-summary")
+dashboard_generate()
+```
+
+- **Reports**: Executive summaries, change records, vulnerability reports, full audits — as markdown
+- **Dashboard**: Interactive BI-style single-page HTML dashboard deployed to GitHub Pages with:
+  - **4 tabs**: Overview, CVE Details, Repositories, Code Quality
+  - **Overview**: Metric cards, severity donut chart, CVE timeline, top 5 riskiest repos
+  - **CVE Details**: Full sortable table of all vulnerabilities with live search, NVD links, severity pills, and status badges
+  - **Repositories**: Expandable repo cards with severity breakdown bars and per-repo CVE tables
+  - **Code Quality**: Sortable findings table with search across linter/SAST results
+  - **Global severity filter**: Filter by CRITICAL/HIGH/MEDIUM/LOW across all tabs
+  - **Zero dependencies**: All data embedded as JSON, rendered client-side with vanilla JS
+
+### Release Strategy
+
+- `npx git-steer@0.1` — v0.1.x stable (manual security ops)
+- `npx git-steer@0.2` — v0.2.x (autonomous security ops)
+- `npx git-steer@latest` — latest version
 
 ## Example Usage
 
@@ -204,10 +260,13 @@ The git-steer GitHub App needs these permissions:
 
 - **Repository**: Read & Write (contents, metadata)
 - **Pull Requests**: Read & Write
+- **Issues**: Read & Write (for RFC tracking)
 - **Actions**: Read & Write (for workflow dispatch)
 - **Dependabot alerts**: Read
+- **Code scanning alerts**: Read (for CodeQL integration)
 - **Secrets**: Read & Write (for Actions secrets)
 - **Administration**: Read & Write (for repo settings)
+- **Pages**: Read & Write (for dashboard deployment)
 
 ## Setting Up Secrets
 

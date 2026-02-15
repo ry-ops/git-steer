@@ -1,14 +1,14 @@
-name: Security Fix Worker
+name: Security Sweep Worker
 
 on:
   workflow_dispatch:
     inputs:
-      target_repo:
-        description: 'Target repository (owner/repo)'
+      target_repos:
+        description: 'JSON array of target repositories [{owner, repo, issueNumber, vulnerabilities}]'
         required: true
         type: string
       severity:
-        description: 'Minimum severity to fix'
+        description: 'Minimum severity level'
         required: false
         default: 'critical'
         type: choice
@@ -18,43 +18,43 @@ on:
           - medium
           - low
           - all
+      job_id:
+        description: 'Job ID for tracking'
+        required: false
+        type: string
       dry_run:
         description: 'Preview only, no changes'
         required: false
         default: false
         type: boolean
-      job_id:
-        description: 'Job ID for tracking (from git-steer)'
-        required: false
-        type: string
 
 jobs:
-  fix-vulnerabilities:
+  sweep-repo:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+      issues: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJson(inputs.target_repos) }}
 
     steps:
-      - name: Parse target repo
-        id: parse
-        run: |
-          echo "owner=$(echo '${{ inputs.target_repo }}' | cut -d'/' -f1)" >> $GITHUB_OUTPUT
-          echo "repo=$(echo '${{ inputs.target_repo }}' | cut -d'/' -f2)" >> $GITHUB_OUTPUT
-
-      - name: Generate token
+      - name: Generate token for target repo
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.GIT_STEER_APP_ID }}
           private-key: ${{ secrets.GIT_STEER_PRIVATE_KEY }}
-          owner: ${{ steps.parse.outputs.owner }}
-          repositories: ${{ steps.parse.outputs.repo }}
+          owner: ${{ matrix.target.owner }}
+          repositories: ${{ matrix.target.repo }}
 
       - name: Checkout target repo
         uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.target_repo }}
+          repository: ${{ matrix.target.owner }}/${{ matrix.target.repo }}
           token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
 
@@ -71,12 +71,30 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: false
+
+      - name: Detect ecosystem
+        id: ecosystem
+        run: |
+          ECOSYSTEMS=""
+          if [ -f "package.json" ]; then ECOSYSTEMS="${ECOSYSTEMS},npm"; fi
+          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "setup.py" ]; then ECOSYSTEMS="${ECOSYSTEMS},pip"; fi
+          if [ -f "go.mod" ]; then ECOSYSTEMS="${ECOSYSTEMS},go"; fi
+          ECOSYSTEMS="${ECOSYSTEMS#,}"
+          echo "detected=$ECOSYSTEMS" >> $GITHUB_OUTPUT
+          echo "Detected ecosystems: $ECOSYSTEMS"
+
       - name: Get Dependabot alerts
         id: alerts
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          ALERTS=$(gh api repos/${{ inputs.target_repo }}/dependabot/alerts \
+          REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
+          ALERTS=$(gh api "repos/$REPO/dependabot/alerts" \
             --jq '[.[] | select(.state == "open") | {
               package: .dependency.package.name,
               ecosystem: .dependency.package.ecosystem,
@@ -85,7 +103,7 @@ jobs:
               manifest: .dependency.manifest_path,
               cve: .security_advisory.cve_id,
               summary: .security_advisory.summary
-            }]')
+            }]' 2>/dev/null || echo '[]')
 
           echo "alerts<<EOF" >> $GITHUB_OUTPUT
           echo "$ALERTS" >> $GITHUB_OUTPUT
@@ -118,35 +136,25 @@ jobs:
           COUNT=$(echo "$FIXABLE" | jq 'length')
           echo "count=$COUNT" >> $GITHUB_OUTPUT
 
-      - name: Check if fixes needed
-        if: steps.filter.outputs.count == '0'
-        run: |
-          echo "No fixable vulnerabilities found at ${{ inputs.severity }}+ severity"
-          exit 0
-
       - name: Fix npm dependencies
-        if: steps.filter.outputs.count != '0'
+        if: steps.filter.outputs.count != '0' && contains(steps.ecosystem.outputs.detected, 'npm')
         run: |
           ALERTS='${{ steps.filter.outputs.filtered }}'
 
-          # Find all package.json files
           find . -name "package.json" -not -path "*/node_modules/*" | while read pkg; do
             DIR=$(dirname "$pkg")
             echo "Processing $pkg..."
 
-            # Check if any alerts affect this manifest
             MANIFEST_ALERTS=$(echo "$ALERTS" | jq --arg m "$pkg" '[.[] | select(.manifest == $m or .ecosystem == "npm")]')
 
             if [ "$(echo "$MANIFEST_ALERTS" | jq 'length')" -gt 0 ]; then
               cd "$DIR"
 
-              # Remove lock file and regenerate
               if [ -f "package-lock.json" ]; then
                 rm package-lock.json
                 npm install --package-lock-only 2>/dev/null || true
               fi
 
-              # Run npm audit fix
               npm audit fix --force 2>/dev/null || true
 
               cd - > /dev/null
@@ -154,22 +162,18 @@ jobs:
           done
 
       - name: Fix Python dependencies
-        if: steps.filter.outputs.count != '0'
+        if: steps.filter.outputs.count != '0' && contains(steps.ecosystem.outputs.detected, 'pip')
         run: |
           ALERTS='${{ steps.filter.outputs.filtered }}'
 
-          # Find all requirements.txt files
           find . -name "requirements*.txt" -type f | while read req; do
             echo "Processing $req..."
 
-            # Get Python alerts
             PY_ALERTS=$(echo "$ALERTS" | jq '[.[] | select(.ecosystem == "pip")]')
 
             if [ "$(echo "$PY_ALERTS" | jq 'length')" -gt 0 ]; then
-              # Update each vulnerable package
               echo "$PY_ALERTS" | jq -r '.[] | "\(.package) \(.fix_version)"' | while read PKG VER; do
                 if [ -n "$VER" ] && [ "$VER" != "null" ]; then
-                  # Update version constraint in requirements file
                   sed -i "s/^${PKG}[=<>!~].*/${PKG}>=${VER}/" "$req" 2>/dev/null || true
                   sed -i "s/^${PKG}$/${PKG}>=${VER}/" "$req" 2>/dev/null || true
                 fi
@@ -177,7 +181,6 @@ jobs:
             fi
           done
 
-          # Regenerate uv.lock files
           find . -name "pyproject.toml" -type f | while read toml; do
             DIR=$(dirname "$toml")
             if [ -f "$DIR/uv.lock" ]; then
@@ -188,6 +191,33 @@ jobs:
               cd - > /dev/null
             fi
           done
+
+      - name: Fix Go dependencies
+        if: steps.filter.outputs.count != '0' && contains(steps.ecosystem.outputs.detected, 'go')
+        run: |
+          ALERTS='${{ steps.filter.outputs.filtered }}'
+          GO_ALERTS=$(echo "$ALERTS" | jq '[.[] | select(.ecosystem == "gomod" or .ecosystem == "go")]')
+
+          if [ "$(echo "$GO_ALERTS" | jq 'length')" -gt 0 ]; then
+            echo "$GO_ALERTS" | jq -r '.[] | "\(.package)@v\(.fix_version)"' | while read MOD; do
+              if [ -n "$MOD" ] && [[ "$MOD" != *"null"* ]]; then
+                go get "$MOD" 2>/dev/null || true
+              fi
+            done
+            go mod tidy 2>/dev/null || true
+          fi
+
+      - name: Bump patch version
+        id: version
+        run: |
+          if [ -f "package.json" ]; then
+            CURRENT=$(jq -r '.version // "0.0.0"' package.json)
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+            NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+            jq --arg v "$NEW_VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
+            echo "bumped=true" >> $GITHUB_OUTPUT
+            echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          fi
 
       - name: Check for changes
         id: changes
@@ -201,18 +231,18 @@ jobs:
 
       - name: Create branch and commit
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
+        id: commit
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          BRANCH="security/fix-${{ inputs.severity }}-$(date +%Y%m%d-%H%M%S)"
-          echo "branch=$BRANCH" >> $GITHUB_ENV
+          BRANCH="security/sweep-$(date +%Y%m%d-%H%M%S)"
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
           git config user.name "git-steer[bot]"
           git config user.email "git-steer[bot]@users.noreply.github.com"
 
           git checkout -b "$BRANCH"
 
-          # Build commit message
           ALERTS='${{ steps.filter.outputs.filtered }}'
           PACKAGES=$(echo "$ALERTS" | jq -r '[.[].package] | unique | join(", ")')
           CVES=$(echo "$ALERTS" | jq -r '[.[].cve // empty] | unique | join(", ")')
@@ -223,7 +253,8 @@ jobs:
           Updates packages: $PACKAGES
           CVEs: $CVES
 
-          Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+          RFC: #${{ matrix.target.issueNumber }}
+          Generated by git-steer security sweep"
 
           git push -u origin "$BRANCH"
 
@@ -232,12 +263,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          REPO="${{ steps.parse.outputs.owner }}/${{ steps.parse.outputs.repo }}"
+          REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
           gh label create "security" --color "d73a4a" --description "Security vulnerability" --repo "$REPO" 2>/dev/null || true
           gh label create "dependencies" --color "0075ca" --description "Dependency updates" --repo "$REPO" 2>/dev/null || true
           gh label create "automated" --color "bfd4f2" --description "Created by automation" --repo "$REPO" 2>/dev/null || true
 
-          # Severity label
           SEVERITY="${{ inputs.severity }}"
           case $SEVERITY in
             critical) COLOR="b60205" ;;
@@ -249,16 +279,20 @@ jobs:
 
       - name: Create Pull Request
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
+        id: pr
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           ALERTS='${{ steps.filter.outputs.filtered }}'
           COUNT=$(echo "$ALERTS" | jq 'length')
+          ISSUE_NUM="${{ matrix.target.issueNumber }}"
 
-          # Build PR body
-          BODY="## Security Fix
+          BODY=$(cat <<PREOF
+          ## Security Sweep Fix
 
           This PR addresses **$COUNT** security vulnerabilities.
+
+          Closes #${ISSUE_NUM}
 
           ### Vulnerabilities Fixed
 
@@ -274,45 +308,66 @@ jobs:
 
           ---
 
-          Generated by [git-steer](https://github.com/ry-ops/git-steer) GitHub Actions worker"
+          Generated by [git-steer](https://github.com/ry-ops/git-steer) autonomous security sweep
+          PREOF
+          )
 
-          gh pr create \
+          PR_URL=$(gh pr create \
             --title "fix(security): Patch $COUNT ${{ inputs.severity }}+ vulnerabilities" \
             --body "$BODY" \
-            --head "$branch" \
+            --head "${{ steps.commit.outputs.branch }}" \
             --label "security" \
             --label "dependencies" \
             --label "automated" \
-            --label "severity:${{ inputs.severity }}"
+            --label "severity:${{ inputs.severity }}")
 
-      - name: Dry run summary
-        if: inputs.dry_run == true
+          PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+          echo "url=$PR_URL" >> $GITHUB_OUTPUT
+          echo "number=$PR_NUM" >> $GITHUB_OUTPUT
+
+      - name: Comment on RFC issue
+        if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false && matrix.target.issueNumber != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          echo "## Dry Run Summary"
-          echo ""
-          echo "Would fix ${{ steps.filter.outputs.count }} vulnerabilities:"
-          echo '${{ steps.filter.outputs.filtered }}' | jq -r '.[] | "- \(.package) (\(.severity)): \(.cve // "N/A")"'
-          echo ""
-          echo "Changes that would be made:"
-          git diff --stat || echo "No file changes detected"
+          REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
+          ISSUE_NUM="${{ matrix.target.issueNumber }}"
+          PR_URL="${{ steps.pr.outputs.url }}"
+          ALERTS='${{ steps.filter.outputs.filtered }}'
+          COUNT=$(echo "$ALERTS" | jq 'length')
 
-      - name: Report status to git-steer-state
+          COMMENT="## Fix PR Created
+
+          PR: $PR_URL
+          Fixes **$COUNT** vulnerabilities.
+
+          | Package | Fix Version |
+          |---------|-------------|
+          $(echo "$ALERTS" | jq -r '.[] | "| \(.package) | \(.fix_version // "N/A") |"')
+
+          Status: **in_progress** — awaiting PR merge."
+
+          gh api "repos/$REPO/issues/$ISSUE_NUM/comments" -f body="$COMMENT"
+
+      - name: Report results to git-steer-state
         if: always() && inputs.job_id != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          # Update job status in git-steer-state repo
           STATUS="${{ job.status }}"
           JOB_ID="${{ inputs.job_id }}"
+          REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
 
-          # Append to jobs.jsonl
           ENTRY=$(jq -n \
             --arg id "$JOB_ID" \
             --arg status "$STATUS" \
-            --arg repo "${{ inputs.target_repo }}" \
+            --arg repo "$REPO" \
             --arg severity "${{ inputs.severity }}" \
             --arg fixed "${{ steps.filter.outputs.count }}" \
+            --arg pr_url "${{ steps.pr.outputs.url || '' }}" \
+            --arg pr_number "${{ steps.pr.outputs.number || '' }}" \
+            --arg issue_number "${{ matrix.target.issueNumber }}" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{id: $id, status: $status, repo: $repo, severity: $severity, fixed: ($fixed | tonumber), timestamp: $timestamp}')
+            '{id: $id, status: $status, repo: $repo, severity: $severity, fixed: ($fixed | tonumber), pr_url: $pr_url, pr_number: $pr_number, issue_number: $issue_number, timestamp: $timestamp}')
 
-          echo "Job result: $ENTRY"
+          echo "Sweep result: $ENTRY"

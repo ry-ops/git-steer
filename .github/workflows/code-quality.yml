@@ -1,0 +1,250 @@
+name: Code Quality Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_owner:
+        description: 'Target repo owner'
+        required: true
+        type: string
+      target_repo:
+        description: 'Target repo name'
+        required: true
+        type: string
+      tools:
+        description: 'JSON array of tools to run'
+        required: false
+        default: '["auto"]'
+        type: string
+      create_issues:
+        description: 'Create GitHub issues for findings'
+        required: false
+        default: false
+        type: boolean
+      severity:
+        description: 'Minimum severity to report'
+        required: false
+        default: 'error'
+        type: choice
+        options:
+          - error
+          - warning
+          - all
+      job_id:
+        description: 'Job ID for tracking'
+        required: false
+        type: string
+
+jobs:
+  quality-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GIT_STEER_APP_ID }}
+          private-key: ${{ secrets.GIT_STEER_PRIVATE_KEY }}
+          owner: ${{ inputs.target_owner }}
+          repositories: ${{ inputs.target_repo }}
+
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target_owner }}/${{ inputs.target_repo }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Detect language stack
+        id: detect
+        run: |
+          HAS_JS=false
+          HAS_PY=false
+          HAS_GO=false
+
+          if [ -f "package.json" ] || [ -f "tsconfig.json" ]; then HAS_JS=true; fi
+          if [ -f "pyproject.toml" ] || [ -f "requirements.txt" ] || [ -f "setup.py" ]; then HAS_PY=true; fi
+          if [ -f "go.mod" ]; then HAS_GO=true; fi
+
+          echo "has_js=$HAS_JS" >> $GITHUB_OUTPUT
+          echo "has_py=$HAS_PY" >> $GITHUB_OUTPUT
+          echo "has_go=$HAS_GO" >> $GITHUB_OUTPUT
+
+          TOOLS='${{ inputs.tools }}'
+          echo "tools=$TOOLS" >> $GITHUB_OUTPUT
+
+      - name: Setup Node.js
+        if: steps.detect.outputs.has_js == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        if: steps.detect.outputs.has_py == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Go
+        if: steps.detect.outputs.has_go == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: false
+
+      - name: Run ESLint
+        id: eslint
+        if: steps.detect.outputs.has_js == 'true' && (contains(inputs.tools, 'eslint') || contains(inputs.tools, 'auto'))
+        continue-on-error: true
+        run: |
+          npm install 2>/dev/null || true
+          RESULTS=$(npx eslint . --format json 2>/dev/null || echo '[]')
+          echo "results<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESULTS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          ERRORS=$(echo "$RESULTS" | jq '[.[].errorCount] | add // 0')
+          WARNINGS=$(echo "$RESULTS" | jq '[.[].warningCount] | add // 0')
+          echo "errors=$ERRORS" >> $GITHUB_OUTPUT
+          echo "warnings=$WARNINGS" >> $GITHUB_OUTPUT
+
+      - name: Run Ruff
+        id: ruff
+        if: steps.detect.outputs.has_py == 'true' && (contains(inputs.tools, 'ruff') || contains(inputs.tools, 'auto'))
+        continue-on-error: true
+        run: |
+          pip install ruff 2>/dev/null
+          RESULTS=$(ruff check . --output-format json 2>/dev/null || echo '[]')
+          echo "results<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESULTS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          ERRORS=$(echo "$RESULTS" | jq '[.[] | select(.fix == null)] | length')
+          WARNINGS=$(echo "$RESULTS" | jq '[.[] | select(.fix != null)] | length')
+          echo "errors=$ERRORS" >> $GITHUB_OUTPUT
+          echo "warnings=$WARNINGS" >> $GITHUB_OUTPUT
+
+      - name: Run Bandit
+        id: bandit
+        if: steps.detect.outputs.has_py == 'true' && (contains(inputs.tools, 'bandit') || contains(inputs.tools, 'auto'))
+        continue-on-error: true
+        run: |
+          pip install bandit 2>/dev/null
+          RESULTS=$(bandit -r . -f json 2>/dev/null || echo '{"results": []}')
+          echo "results<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESULTS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          ERRORS=$(echo "$RESULTS" | jq '[.results[] | select(.issue_severity == "HIGH" or .issue_severity == "MEDIUM")] | length')
+          WARNINGS=$(echo "$RESULTS" | jq '[.results[] | select(.issue_severity == "LOW")] | length')
+          echo "errors=$ERRORS" >> $GITHUB_OUTPUT
+          echo "warnings=$WARNINGS" >> $GITHUB_OUTPUT
+
+      - name: Run gosec
+        id: gosec
+        if: steps.detect.outputs.has_go == 'true' && (contains(inputs.tools, 'gosec') || contains(inputs.tools, 'auto'))
+        continue-on-error: true
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          RESULTS=$(gosec -fmt json ./... 2>/dev/null || echo '{"Issues": []}')
+          echo "results<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESULTS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          ERRORS=$(echo "$RESULTS" | jq '[.Issues[] | select(.severity == "HIGH" or .severity == "MEDIUM")] | length')
+          WARNINGS=$(echo "$RESULTS" | jq '[.Issues[] | select(.severity == "LOW")] | length')
+          echo "errors=$ERRORS" >> $GITHUB_OUTPUT
+          echo "warnings=$WARNINGS" >> $GITHUB_OUTPUT
+
+      - name: Normalize and summarize results
+        id: summary
+        run: |
+          TOTAL_ERRORS=0
+          TOTAL_WARNINGS=0
+          TOTAL_FINDINGS=0
+
+          if [ -n "${{ steps.eslint.outputs.errors }}" ]; then
+            TOTAL_ERRORS=$((TOTAL_ERRORS + ${{ steps.eslint.outputs.errors || 0 }}))
+            TOTAL_WARNINGS=$((TOTAL_WARNINGS + ${{ steps.eslint.outputs.warnings || 0 }}))
+          fi
+          if [ -n "${{ steps.ruff.outputs.errors }}" ]; then
+            TOTAL_ERRORS=$((TOTAL_ERRORS + ${{ steps.ruff.outputs.errors || 0 }}))
+            TOTAL_WARNINGS=$((TOTAL_WARNINGS + ${{ steps.ruff.outputs.warnings || 0 }}))
+          fi
+          if [ -n "${{ steps.bandit.outputs.errors }}" ]; then
+            TOTAL_ERRORS=$((TOTAL_ERRORS + ${{ steps.bandit.outputs.errors || 0 }}))
+            TOTAL_WARNINGS=$((TOTAL_WARNINGS + ${{ steps.bandit.outputs.warnings || 0 }}))
+          fi
+          if [ -n "${{ steps.gosec.outputs.errors }}" ]; then
+            TOTAL_ERRORS=$((TOTAL_ERRORS + ${{ steps.gosec.outputs.errors || 0 }}))
+            TOTAL_WARNINGS=$((TOTAL_WARNINGS + ${{ steps.gosec.outputs.warnings || 0 }}))
+          fi
+
+          TOTAL_FINDINGS=$((TOTAL_ERRORS + TOTAL_WARNINGS))
+
+          echo "total_errors=$TOTAL_ERRORS" >> $GITHUB_OUTPUT
+          echo "total_warnings=$TOTAL_WARNINGS" >> $GITHUB_OUTPUT
+          echo "total_findings=$TOTAL_FINDINGS" >> $GITHUB_OUTPUT
+
+          echo "## Code Quality Summary"
+          echo "- Errors: $TOTAL_ERRORS"
+          echo "- Warnings: $TOTAL_WARNINGS"
+          echo "- Total findings: $TOTAL_FINDINGS"
+
+      - name: Ensure labels exist
+        if: inputs.create_issues == true && steps.summary.outputs.total_findings != '0'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          REPO="${{ inputs.target_owner }}/${{ inputs.target_repo }}"
+          gh label create "code-quality" --color "5319e7" --description "Code quality findings" --repo "$REPO" 2>/dev/null || true
+          gh label create "automated" --color "bfd4f2" --description "Created by automation" --repo "$REPO" 2>/dev/null || true
+
+      - name: Create issues for findings
+        if: inputs.create_issues == true && steps.summary.outputs.total_findings != '0'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          REPO="${{ inputs.target_owner }}/${{ inputs.target_repo }}"
+          ERRORS="${{ steps.summary.outputs.total_errors }}"
+          WARNINGS="${{ steps.summary.outputs.total_warnings }}"
+
+          gh issue create \
+            --repo "$REPO" \
+            --title "Code Quality: $ERRORS errors, $WARNINGS warnings found" \
+            --body "## Code Quality Report
+
+          **Repository:** $REPO
+          **Date:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          ### Summary
+          - **Errors:** $ERRORS
+          - **Warnings:** $WARNINGS
+
+          ### Tools Run
+          ${{ inputs.tools }}
+
+          ---
+          Generated by [git-steer](https://github.com/ry-ops/git-steer) code quality sweep" \
+            --label "code-quality" \
+            --label "automated"
+
+      - name: Report to git-steer-state
+        if: always() && inputs.job_id != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          ENTRY=$(jq -n \
+            --arg id "${{ inputs.job_id }}" \
+            --arg repo "${{ inputs.target_owner }}/${{ inputs.target_repo }}" \
+            --arg status "${{ job.status }}" \
+            --arg errors "${{ steps.summary.outputs.total_errors || 0 }}" \
+            --arg warnings "${{ steps.summary.outputs.total_warnings || 0 }}" \
+            --arg tools "${{ inputs.tools }}" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{id: $id, repo: $repo, status: $status, errors: ($errors | tonumber), warnings: ($warnings | tonumber), tools: $tools, timestamp: $timestamp}')
+
+          echo "Quality result: $ENTRY"
