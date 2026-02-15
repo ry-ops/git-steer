@@ -226,12 +226,40 @@ A single `dashboard_generate()` call scans your repos, builds an interactive das
 </details>
 
 **Key features:**
-- **4 interactive tabs**: Overview, CVE Details, Repositories, Code Quality
+- **5 interactive tabs**: Overview, CVE Details, Repositories, Code Quality, About
 - **Global severity filter**: Click CRITICAL/HIGH/MEDIUM/LOW to filter across all tabs
 - **Sortable tables**: Click any column header to sort asc/desc
 - **Live search**: Filter CVE and quality tables by typing
 - **Expandable repo cards**: Click to drill into per-repo vulnerability details
+- **Hover tooltips**: Hover metric cards to see what each metric means
+- **Run Security Scan**: Trigger a workflow dispatch from the dashboard (requires PAT)
+- **CSV export**: Download current tab data as CSV (respects active filters)
+- **Click-to-copy CVE IDs**: Click any CVE link to copy to clipboard
+- **Keyboard shortcuts**: `1`-`5` switch tabs, `Esc` close modals, `?` show hints
+- **Fullscreen mode**: Toggle fullscreen from the header
 - **NVD links**: Every CVE ID links directly to the NVD detail page
+
+### Daily Automated Scans
+
+The dashboard is automatically refreshed daily by the Heartbeat GitHub Actions workflow:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  GITHUB ACTIONS (daily at 6 AM UTC)                             │
+│                                                                 │
+│  Heartbeat workflow:                                            │
+│    1. Scan all repos for Dependabot alerts                      │
+│    2. Auto-trigger security sweep for critical alerts           │
+│    3. Regenerate dashboard HTML from scan results               │
+│    4. Deploy to GitHub Pages                                    │
+│                                                                 │
+│  No local machine needed. Everything runs in the cloud.         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+You can also trigger a manual refresh from:
+- The dashboard's **Run Security Scan** button (dispatches the workflow)
+- GitHub Actions UI → Heartbeat → Run workflow → `dashboard-refresh`
 
 ### Release Strategy
 
@@ -317,6 +345,9 @@ These allow the workflow to generate installation tokens for any repo in your in
 ```bash
 git-steer init     # First-time setup
 git-steer          # Start MCP server (default)
+git-steer scan     # Run security scan across all repos
+git-steer scan --repo owner/name  # Scan a specific repo
+git-steer scan --severity critical  # Filter by severity
 git-steer status   # Show status
 git-steer sync     # Force sync state to GitHub
 git-steer reset    # Remove local credentials
