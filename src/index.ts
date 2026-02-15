@@ -129,6 +129,14 @@ export class GitSteer {
   }
 
   /**
+   * Expose GitHub client for CLI commands
+   */
+  _getGitHub(): GitHubClient {
+    if (!this.github) throw new Error('Not initialized. Call syncState() first.');
+    return this.github;
+  }
+
+  /**
    * Display current status
    */
   async showStatus(): Promise<void> {
