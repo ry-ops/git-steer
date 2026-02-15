@@ -453,78 +453,13 @@ export function generateDashboardHtml(data: DashboardData): string {
       border-top: 1px solid #21262d;
     }
 
-    /* ===== Cara-style Animated Background ===== */
-    @keyframes upDown {
-      from { transform: translateY(0); }
-      to { transform: translateY(30px); }
-    }
-    @keyframes upDownWide {
-      from { transform: translateY(0); }
-      to { transform: translateY(200px); }
-    }
-    @keyframes waveAnim {
-      0% { d: path("M 0 100 Q 250 50 400 200 Q 550 350 800 300 L 800 0 L 0 0 L 0 100 Z"); }
-      50% { d: path("M 0 100 Q 200 150 400 200 Q 600 250 800 300 L 800 0 L 0 0 L 0 100 Z"); }
-      100% { d: path("M 0 100 Q 150 350 400 200 Q 650 50 800 300 L 800 0 L 0 0 L 0 100 Z"); }
-    }
-    .bg-shapes {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      z-index: 0;
-      pointer-events: none;
-      overflow: hidden;
-      opacity: 0.18;
-    }
-    .bg-shapes .up-down {
-      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-      animation: upDown 4s ease-in-out infinite alternate;
-    }
-    .bg-shapes .up-down-wide {
-      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-      animation: upDownWide 18s ease-in-out infinite alternate;
-    }
-    .bg-shape {
-      position: absolute;
-      display: block;
-    }
-    .wave-footer {
-      position: relative;
-      width: 100%;
-      margin-top: 24px;
-      overflow: hidden;
-    }
-    .wave-footer svg { display: block; width: 100%; height: 80px; }
-    .wave-footer path { fill: #161b22; animation: waveAnim 20s linear infinite alternate; }
-
-    /* Glassmorphism cards */
-    body { position: relative; z-index: 1; }
+    /* Subtle card hover */
     .metric-card {
-      background: rgba(22, 27, 34, 0.7);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(48, 54, 61, 0.6);
       transition: transform 0.2s, box-shadow 0.2s;
     }
     .metric-card:hover {
       transform: translateY(-2px);
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-    }
-    .chart-card {
-      background: rgba(22, 27, 34, 0.7);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(48, 54, 61, 0.6);
-    }
-    .repo-card {
-      background: rgba(22, 27, 34, 0.7);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(48, 54, 61, 0.6);
-    }
-    .data-table {
-      background: rgba(22, 27, 34, 0.7);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
     }
 
     /* ===== Tooltips ===== */
@@ -788,79 +723,12 @@ export function generateDashboardHtml(data: DashboardData): string {
       .data-table th, .data-table td { padding: 6px 8px; }
       .metrics-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
       .metric-card .value { font-size: 24px; }
-      .bg-shapes .hidden-mobile { display: none; }
       .action-bar { gap: 6px; }
       .action-btn { padding: 6px 10px; font-size: 11px; }
     }
   </style>
 </head>
 <body>
-  <!-- SVG Symbol Defs (Cara shapes) -->
-  <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
-    <defs>
-      <symbol id="s-triangle" viewBox="0 0 30 30">
-        <polygon stroke-width="1px" stroke-linejoin="round" stroke-miterlimit="10" points="14.921,2.27 28.667,25.5 1.175,25.5"/>
-      </symbol>
-      <symbol id="s-circle" viewBox="0 0 30 30">
-        <path d="M15,30A15,15,0,1,1,30,15,15,15,0,0,1,15,30ZM15,6.23A8.77,8.77,0,1,0,23.77,15,8.77,8.77,0,0,0,15,6.23Z"/>
-      </symbol>
-      <symbol id="s-arrowUp" viewBox="0 0 30 42">
-        <path d="M28.74,20.81H1.26a1.26,1.26,0,0,1-1-2L14.16.5a1.25,1.25,0,0,1,1-.5h0a1.24,1.24,0,0,1,1,.51L29.75,18.8a1.25,1.25,0,0,1-1,2ZM3.81,18.29H26.22L15.16,3.37Z"/>
-        <path d="M28.74,42H1.26a1.28,1.28,0,0,1-1.13-.71A1.26,1.26,0,0,1,.26,40l13.9-18.29a1.28,1.28,0,0,1,1-.5h0a1.24,1.24,0,0,1,1,.51L29.75,40a1.26,1.26,0,0,1,.12,1.32A1.28,1.28,0,0,1,28.74,42ZM3.81,39.47H26.22L15.16,24.55Z"/>
-      </symbol>
-      <symbol id="s-upDown" viewBox="0 0 30 44.58">
-        <path d="M28.74,44.58a1.28,1.28,0,0,1-1-.51L15.16,27.13l-12.89,17a1.26,1.26,0,1,1-2-1.53l13.9-18.29a1.34,1.34,0,0,1,1-.5,1.24,1.24,0,0,1,1,.51L29.75,42.56a1.27,1.27,0,0,1-1,2Z"/>
-        <path d="M14.83,20.82h0a1.28,1.28,0,0,1-1-.52L.25,2a1.27,1.27,0,0,1,2-1.51L14.84,17.45,27.73.5a1.26,1.26,0,0,1,2,1.53L15.84,20.32A1.28,1.28,0,0,1,14.83,20.82Z"/>
-      </symbol>
-      <symbol id="s-box" viewBox="0 0 30 30">
-        <path d="M28,2V28H2V2H28m.13-2H1.88A1.88,1.88,0,0,0,0,1.88V28.13A1.88,1.88,0,0,0,1.88,30H28.13A1.87,1.87,0,0,0,30,28.13V1.88A1.88,1.88,0,0,0,28.13,0Z"/>
-      </symbol>
-      <symbol id="s-hexa" viewBox="0 0 30 30">
-        <polygon stroke-linejoin="round" stroke-miterlimit="10" points="27.5,21.904 15,28.809 2.5,21.904 2.5,8.095 15,1.19 27.5,8.095"/>
-      </symbol>
-      <symbol id="s-cross" viewBox="0 0 100 100">
-        <path stroke-width="3px" d="M60.5,50l34.8-34.8c2.9-2.9,2.9-7.6,0-10.5c-2.9-2.9-7.6-2.9-10.5,0L50,39.5L15.2,4.7c-2.9-2.9-7.6-2.9-10.5,0c-2.9,2.9-2.9,7.6,0,10.5L39.5,50L4.7,84.8c-2.9,2.9-2.9,7.6,0,10.5c1.4,1.4,3.3,2.2,5.2,2.2s3.8-0.7,5.2-2.2L50,60.5l34.8,34.8c1.4,1.4,3.3,2.2,5.2,2.2c1.9,0,3.8-0.7,5.2-2.2c2.9-2.9,2.9-7.6,0-10.5L60.5,50z"/>
-      </symbol>
-    </defs>
-  </svg>
-
-  <!-- Animated Background Shapes (Cara-style) -->
-  <div class="bg-shapes">
-    <div class="up-down">
-      <svg class="bg-shape hidden-mobile" style="left:10%;top:20%;width:48px;stroke:currentColor;fill:none;color:#db6d28"><use href="#s-triangle"/></svg>
-      <svg class="bg-shape" style="left:60%;top:70%;width:40px;stroke:currentColor;fill:none;color:#f85149"><use href="#s-hexa"/></svg>
-      <svg class="bg-shape" style="left:60%;top:15%;width:6px;color:#21262d"><use href="#s-box"/></svg>
-      <svg class="bg-shape hidden-mobile" style="left:50%;top:75%;width:6px;color:#58a6ff"><use href="#s-box"/></svg>
-      <svg class="bg-shape hidden-mobile" style="left:70%;top:20%;width:8px;color:#21262d"><use href="#s-upDown"/></svg>
-      <svg class="bg-shape" style="left:25%;top:5%;width:8px;stroke:currentColor;fill:none;color:#21262d"><use href="#s-triangle"/></svg>
-      <svg class="bg-shape hidden-mobile" style="left:80%;top:80%;width:20px;color:#db6d28"><use href="#s-upDown"/></svg>
-    </div>
-    <div class="up-down-wide">
-      <svg class="bg-shape hidden-mobile" style="left:80%;top:10%;width:14px;color:#58a6ff"><use href="#s-arrowUp"/></svg>
-      <svg class="bg-shape" style="left:90%;top:50%;width:10px;stroke:currentColor;fill:none;color:#e0e0e0"><use href="#s-triangle"/></svg>
-      <svg class="bg-shape" style="left:70%;top:90%;width:14px;color:#21262d"><use href="#s-circle"/></svg>
-      <svg class="bg-shape" style="left:30%;top:65%;width:14px;stroke:currentColor;fill:none;color:#21262d"><use href="#s-triangle"/></svg>
-      <svg class="bg-shape hidden-mobile" style="left:28%;top:15%;width:14px;stroke:currentColor;fill:none;color:#f778ba"><use href="#s-cross"/></svg>
-      <svg class="bg-shape" style="left:75%;top:10%;width:6px;color:#21262d"><use href="#s-circle"/></svg>
-      <svg class="bg-shape hidden-mobile" style="left:45%;top:10%;width:8px;color:#21262d"><use href="#s-upDown"/></svg>
-      <svg class="bg-shape hidden-mobile" style="left:20%;top:90%;width:14px;color:#3fb950"><use href="#s-arrowUp"/></svg>
-      <svg class="bg-shape" style="left:70%;top:90%;width:14px;color:#d29922"><use href="#s-circle"/></svg>
-      <svg class="bg-shape hidden-mobile" style="left:18%;top:75%;width:14px;stroke:currentColor;fill:none;color:#58a6ff"><use href="#s-triangle"/></svg>
-    </div>
-    <!-- Static shapes (no animation wrapper) -->
-    <svg class="bg-shape hidden-mobile" style="left:5%;top:70%;width:20px;color:#30363d"><use href="#s-circle"/></svg>
-    <svg class="bg-shape" style="left:4%;top:20%;width:6px;color:#21262d"><use href="#s-circle"/></svg>
-    <svg class="bg-shape" style="left:50%;top:60%;width:10px;color:#21262d"><use href="#s-circle"/></svg>
-    <svg class="bg-shape" style="left:95%;top:90%;width:8px;color:#21262d"><use href="#s-upDown"/></svg>
-    <svg class="bg-shape hidden-mobile" style="left:40%;top:80%;width:20px;color:#30363d"><use href="#s-upDown"/></svg>
-    <svg class="bg-shape" style="left:95%;top:5%;width:48px;color:#3fb950"><use href="#s-circle"/></svg>
-    <svg class="bg-shape hidden-mobile" style="left:5%;top:90%;width:48px;color:#bc8cff"><use href="#s-box"/></svg>
-    <svg class="bg-shape" style="left:10%;top:10%;width:6px;color:#21262d"><use href="#s-box"/></svg>
-    <svg class="bg-shape" style="left:40%;top:30%;width:10px;color:#21262d"><use href="#s-box"/></svg>
-    <svg class="bg-shape" style="left:10%;top:50%;width:14px;stroke:currentColor;fill:none;color:#30363d"><use href="#s-hexa"/></svg>
-    <svg class="bg-shape" style="left:80%;top:70%;width:8px;stroke:currentColor;fill:none;color:#30363d"><use href="#s-hexa"/></svg>
-  </div>
-
   <div class="header">
     <h1>git-steer Security Dashboard <button class="fullscreen-btn" id="fullscreen-btn" title="Toggle fullscreen"><svg viewBox="0 0 16 16"><path d="M1.5 1a.5.5 0 0 0-.5.5v4a.5.5 0 0 1-1 0v-4A1.5 1.5 0 0 1 1.5 0h4a.5.5 0 0 1 0 1h-4zM10 .5a.5.5 0 0 1 .5-.5h4A1.5 1.5 0 0 1 16 1.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 0-.5-.5h-4a.5.5 0 0 1-.5-.5zM.5 10a.5.5 0 0 1 .5.5v4a.5.5 0 0 0 .5.5h4a.5.5 0 0 1 0 1h-4A1.5 1.5 0 0 1 0 14.5v-4a.5.5 0 0 1 .5-.5zm15 0a.5.5 0 0 1 .5.5v4a1.5 1.5 0 0 1-1.5 1.5h-4a.5.5 0 0 1 0-1h4a.5.5 0 0 0 .5-.5v-4a.5.5 0 0 1 .5-.5z"/></svg></button></h1>
     <div class="subtitle" id="subtitle"></div>
@@ -987,16 +855,6 @@ export function generateDashboardHtml(data: DashboardData): string {
     </div>
   </div>
 
-  <!-- Wave Footer (Cara-style morphing wave) -->
-  <div class="wave-footer">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 338.05" preserveAspectRatio="none">
-      <path>
-        <animate attributeName="d"
-          values="M 0 100 Q 250 50 400 200 Q 550 350 800 300 L 800 0 L 0 0 L 0 100 Z;M 0 100 Q 200 150 400 200 Q 600 250 800 300 L 800 0 L 0 0 L 0 100 Z;M 0 100 Q 150 350 400 200 Q 650 50 800 300 L 800 0 L 0 0 L 0 100 Z"
-          repeatCount="indefinite" dur="30s"/>
-      </path>
-    </svg>
-  </div>
   <div class="footer">
     Powered by <a href="https://github.com/ry-ops/git-steer">git-steer</a> &middot; Open RFCs: ${openRfcs}
   </div>
