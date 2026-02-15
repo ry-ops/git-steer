@@ -6,14 +6,16 @@
 
 git-steer gives you 100% autonomous control over your GitHub account through a Model Context Protocol (MCP) server. Manage repos, branches, security, Actions—everything—through natural language.
 
-## Philosophy: Bare Tin Foil
+## Philosophy: Zero Footprint
 
-**Your PC or Mac is just the steering wheel.** The engine lives on GitHub.
+**Your machine steers. GitHub does everything else.**
 
-- **Zero local code**: No repos cloned to your machine
-- **Keychain only**: Just GitHub App credentials stored locally
-- **Git as database**: All state lives in a private repo
-- **Actions as compute**: Code changes happen in ephemeral cloud workers
+Nothing lives locally — no cloned repos, no config files, no build artifacts. git-steer treats your Mac as a thin control plane and GitHub as the entire runtime.
+
+- **Zero local code**: No repos cloned, no `node_modules`, no lock files
+- **Keychain only**: GitHub App credentials in macOS Keychain — nothing else on disk
+- **Git as database**: All config, state, and audit logs live in a private GitHub repo
+- **Actions as compute**: Dependency fixes, linting, and PRs happen in ephemeral cloud runners
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
