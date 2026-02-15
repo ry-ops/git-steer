@@ -890,9 +890,8 @@ export function generateDashboardHtml(data: DashboardData): string {
       .data-table th, .data-table td { padding: 6px 8px; }
       .metrics-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
       .metric-card .value { font-size: 24px; }
-      .action-bar { flex-direction: column; gap: 8px; align-items: stretch; }
-      .action-btn { justify-content: center; padding: 10px 16px; font-size: 13px; }
-      .last-scanned { justify-content: center; }
+      .action-bar .action-btn { display: none; }
+      .action-bar { justify-content: center; }
       .fullscreen-btn { display: none; }
     }
 
