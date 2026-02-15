@@ -1215,7 +1215,7 @@ export function generateDashboardHtml(data: DashboardData): string {
   var mobileCveCount = document.getElementById('mobile-cve-count');
   var mobileRepoCount = document.getElementById('mobile-repo-count');
   if (mobileCveCount) mobileCveCount.textContent = DATA.vulnerabilities.length || '0';
-  if (mobileRepoCount) mobileRepoCount.textContent = DATA.repos.length || '0';
+  if (mobileRepoCount) mobileRepoCount.textContent = DATA.repos.total || '0';
 
   // ===== Global Severity Filter State =====
   var activeSeverity = 'all';
