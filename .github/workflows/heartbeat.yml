@@ -15,6 +15,7 @@ on:
           - security-scan
           - branch-reap
           - full-audit
+          - dashboard-refresh
 
 jobs:
   heartbeat:
@@ -25,6 +26,14 @@ jobs:
     steps:
       - name: Checkout git-steer
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies and build
+        run: npm ci && npm run build
 
       - name: Generate token
         id: app-token
@@ -126,6 +135,14 @@ jobs:
           else
             echo "No critical alerts found, skipping auto-sweep."
           fi
+
+      - name: Regenerate dashboard
+        if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit' || inputs.task == 'dashboard-refresh'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STATE_OWNER: ry-ops
+          STATE_REPO: git-steer-state
+        run: node scripts/ci-dashboard.mjs
 
       - name: Log heartbeat to state
         env:

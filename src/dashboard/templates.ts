@@ -711,6 +711,56 @@ export function generateDashboardHtml(data: DashboardData): string {
       pointer-events: none;
     }
 
+    /* ===== About Tab ===== */
+    .about-content {
+      max-width: 720px;
+      margin: 0 auto;
+      line-height: 1.7;
+      font-size: 14px;
+    }
+    .about-content h2 {
+      font-size: 20px;
+      margin: 28px 0 12px 0;
+      color: #e0e0e0;
+      border-bottom: 1px solid #21262d;
+      padding-bottom: 8px;
+    }
+    .about-content h2:first-child { margin-top: 0; }
+    .about-content p { color: #8b949e; margin-bottom: 12px; }
+    .about-content ul { color: #8b949e; margin: 0 0 12px 20px; }
+    .about-content li { margin-bottom: 6px; }
+    .about-content code {
+      background: #1c2128;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #e0e0e0;
+    }
+    .about-content kbd {
+      display: inline-block;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-size: 11px;
+      font-family: monospace;
+    }
+    .about-content .metric-explainer {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 8px 16px;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    .about-content .metric-explainer dt {
+      font-weight: 600;
+      color: #e0e0e0;
+    }
+    .about-content .metric-explainer dd {
+      color: #8b949e;
+      margin: 0;
+    }
+
     /* Responsive */
     @media (max-width: 768px) {
       body { padding: 12px; }
@@ -760,7 +810,7 @@ export function generateDashboardHtml(data: DashboardData): string {
   <!-- Keyboard hints -->
   <button class="kb-hint-btn" id="kb-hint-btn" title="Keyboard shortcuts">?</button>
   <div class="kb-hints" id="kb-hints">
-    <div><kbd>1</kbd>-<kbd>4</kbd> Switch tabs</div>
+    <div><kbd>1</kbd>-<kbd>5</kbd> Switch tabs</div>
     <div><kbd>Esc</kbd> Close modal</div>
     <div><kbd>?</kbd> Toggle this panel</div>
   </div>
@@ -770,6 +820,7 @@ export function generateDashboardHtml(data: DashboardData): string {
     <button class="tab-btn" data-tab="cve-details">CVE Details</button>
     <button class="tab-btn" data-tab="repositories">Repositories</button>
     <button class="tab-btn" data-tab="code-quality">Code Quality</button>
+    <button class="tab-btn" data-tab="about">About</button>
   </div>
 
   <!-- Tab 1: Overview -->
@@ -852,6 +903,66 @@ export function generateDashboardHtml(data: DashboardData): string {
         </thead>
         <tbody id="quality-tbody"></tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- Tab 5: About -->
+  <div class="tab-content" id="tab-about">
+    <div class="about-content">
+      <h2>What is git-steer?</h2>
+      <p><a href="https://github.com/ry-ops/git-steer">git-steer</a> is a self-hosting GitHub autonomy engine that provides 100% autonomous control over your GitHub account through a Model Context Protocol (MCP) server. It scans repositories for security vulnerabilities, tracks remediation via RFC issues, and generates this dashboard automatically.</p>
+      <p>This dashboard is regenerated daily by a GitHub Actions workflow and deployed to GitHub Pages. No local machine required.</p>
+
+      <h2>Reading the Metrics</h2>
+      <dl class="metric-explainer">
+        <dt>Total CVEs</dt>
+        <dd>Total Common Vulnerabilities and Exposures detected across all scanned repositories.</dd>
+        <dt>Fixed</dt>
+        <dd>Number of CVEs that have been remediated with patches or dependency updates.</dd>
+        <dt>Fix Rate</dt>
+        <dd>Percentage of detected CVEs resolved. <span class="green">Green &ge;80%</span>, <span class="yellow">Yellow &ge;50%</span>, <span class="red">Red &lt;50%</span>.</dd>
+        <dt>Avg MTTR</dt>
+        <dd>Mean Time To Resolution &mdash; average hours from CVE detection to fix. <span class="green">Green &le;24h</span>, <span class="yellow">Yellow &le;48h</span>, <span class="red">Red &gt;48h</span>.</dd>
+        <dt>Open RFCs</dt>
+        <dd>Active Request for Change issues tracking vulnerability remediation in progress.</dd>
+        <dt>Total Runs</dt>
+        <dd>Number of code quality tool executions (e.g. CodeQL scans) across repositories.</dd>
+        <dt>Total Errors</dt>
+        <dd>Code quality issues classified as errors requiring immediate attention.</dd>
+        <dt>Total Warnings</dt>
+        <dd>Code quality issues classified as warnings for review.</dd>
+      </dl>
+
+      <h2>Dashboard Features</h2>
+      <ul>
+        <li><strong>5 interactive tabs</strong>: Overview, CVE Details, Repositories, Code Quality, and this About page</li>
+        <li><strong>Global severity filter</strong>: Click CRITICAL / HIGH / MEDIUM / LOW to filter across all tabs</li>
+        <li><strong>Sortable tables</strong>: Click any column header to sort ascending/descending</li>
+        <li><strong>Live search</strong>: Type to filter CVE and quality tables in real time</li>
+        <li><strong>Expandable repo cards</strong>: Click to drill into per-repo vulnerability details</li>
+        <li><strong>Hover tooltips</strong>: Hover over metric cards for descriptions</li>
+        <li><strong>Click-to-copy CVE IDs</strong>: Click any CVE link to copy the ID to clipboard</li>
+        <li><strong>CSV export</strong>: Download the current tab's data as a CSV file</li>
+        <li><strong>NVD links</strong>: Every CVE ID links directly to the NVD detail page</li>
+      </ul>
+
+      <h2>Keyboard Shortcuts</h2>
+      <ul>
+        <li><kbd>1</kbd> &ndash; <kbd>5</kbd> &mdash; Switch between tabs</li>
+        <li><kbd>Esc</kbd> &mdash; Close any open modal or panel</li>
+        <li><kbd>?</kbd> &mdash; Toggle keyboard shortcuts hint</li>
+      </ul>
+
+      <h2>Automation</h2>
+      <p>This dashboard is automatically refreshed daily at 6:00 AM UTC by the <code>Heartbeat</code> GitHub Actions workflow. The workflow scans all managed repositories for Dependabot alerts, regenerates the dashboard HTML, and deploys it to GitHub Pages.</p>
+      <p>You can also trigger a manual refresh using the <strong>Run Security Scan</strong> button in the header, which dispatches the workflow on demand.</p>
+
+      <h2>Links</h2>
+      <ul>
+        <li><a href="https://github.com/ry-ops/git-steer" target="_blank" rel="noopener">git-steer on GitHub</a></li>
+        <li><a href="https://github.com/ry-ops/git-steer/actions/workflows/heartbeat.yml" target="_blank" rel="noopener">Heartbeat Workflow (daily scans)</a></li>
+        <li><a href="https://github.com/ry-ops/git-steer-state" target="_blank" rel="noopener">State Repository</a></li>
+      </ul>
     </div>
   </div>
 
@@ -1522,8 +1633,8 @@ export function generateDashboardHtml(data: DashboardData): string {
       // Don't trigger shortcuts when typing in inputs
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-      var tabs = ['overview','cve-details','repositories','code-quality'];
-      if (e.key >= '1' && e.key <= '4') {
+      var tabs = ['overview','cve-details','repositories','code-quality','about'];
+      if (e.key >= '1' && e.key <= '5') {
         var idx = parseInt(e.key) - 1;
         var tabBtn = document.querySelector('[data-tab="' + tabs[idx] + '"]');
         if (tabBtn) tabBtn.click();
