@@ -28,7 +28,7 @@ export function generateDashboardHtml(data: DashboardData): string {
 
   // Flatten vulnerabilities from RFCs into individual rows
   const vulnerabilities = rfcs.flatMap((rfc) =>
-    rfc.vulnerabilities.map((v) => ({
+    (rfc.vulnerabilities || []).map((v) => ({
       cve: v.cve || 'N/A',
       package: v.package,
       severity: v.severity,
@@ -93,7 +93,7 @@ export function generateDashboardHtml(data: DashboardData): string {
       status: r.status,
       prNumber: r.prNumber || null,
       prUrl: r.prUrl || null,
-      vulnCount: r.vulnerabilities.length,
+      vulnCount: (r.vulnerabilities || []).length,
     })),
     quality: quality.map((q) => ({
       repo: q.repo,
