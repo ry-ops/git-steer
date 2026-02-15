@@ -1577,10 +1577,16 @@ export function generateDashboardHtml(data: DashboardData): string {
           return w.name.toLowerCase().indexOf('steer') !== -1 || w.name.toLowerCase().indexOf('security') !== -1;
         }) || data.workflows[0];
 
-        return fetch('https://api.github.com/repos/' + owner + '/' + repo + '/actions/workflows/' + wf.id + '/dispatches', {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ref: 'main' })
+        // Resolve default branch before dispatching
+        return fetch('https://api.github.com/repos/' + owner + '/' + repo, {
+          headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github.v3+json' }
+        }).then(function(r) { return r.json(); }).then(function(repoData) {
+          var defaultBranch = (repoData && repoData.default_branch) || 'main';
+          return fetch('https://api.github.com/repos/' + owner + '/' + repo + '/actions/workflows/' + wf.id + '/dispatches', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ref: defaultBranch })
+          });
         }).then(function(res) {
           if (res.status === 204) {
             feedback.style.color = '#3fb950';
