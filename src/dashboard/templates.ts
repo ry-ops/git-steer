@@ -869,6 +869,30 @@ export function generateDashboardHtml(data: DashboardData): string {
       color: #8b949e;
       margin: 0;
     }
+    .about-actions {
+      display: flex;
+      gap: 12px;
+      margin: 20px 0;
+      flex-wrap: wrap;
+    }
+    .about-actions a {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 6px;
+      border: 1px solid #30363d;
+      background: #161b22;
+      color: #e0e0e0;
+      font-size: 14px;
+      font-weight: 500;
+      text-decoration: none;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .about-actions a:hover { border-color: #58a6ff; background: #1c2128; text-decoration: none; }
+    .about-actions a.primary { background: #238636; border-color: #2ea043; color: #fff; }
+    .about-actions a.primary:hover { background: #2ea043; border-color: #3fb950; }
+    .about-actions a svg { width: 16px; height: 16px; fill: currentColor; }
 
     /* Responsive - Tablet */
     @media (max-width: 900px) {
@@ -1113,6 +1137,14 @@ export function generateDashboardHtml(data: DashboardData): string {
       <h2>Automation</h2>
       <p>This dashboard is automatically refreshed daily at 6:00 AM UTC by the <code>Heartbeat</code> GitHub Actions workflow. The workflow scans all managed repositories for Dependabot alerts, regenerates the dashboard HTML, and deploys it to GitHub Pages.</p>
       <p>You can also trigger a manual refresh using the <strong>Run Security Scan</strong> button in the header, which dispatches the workflow on demand.</p>
+
+      <h2>Contribute</h2>
+      <p>Found something wrong? Have an idea? We welcome contributions and feedback.</p>
+      <div class="about-actions">
+        <a href="https://github.com/ry-ops/git-steer/issues/new" target="_blank" rel="noopener" class="primary"><svg viewBox="0 0 16 16"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0z"/></svg> Report Issue</a>
+        <a href="https://github.com/ry-ops/git-steer/fork" target="_blank" rel="noopener"><svg viewBox="0 0 16 16"><path d="M5 5.372v.878c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-.878a2.25 2.25 0 1 1 1.5 0v.878a2.25 2.25 0 0 1-2.25 2.25h-1.5v2.128a2.251 2.251 0 1 1-1.5 0V8.5h-1.5A2.25 2.25 0 0 1 3.5 6.25v-.878a2.25 2.25 0 1 1 1.5 0zM5 3.25a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0zm6.75.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5zM8 12.75a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5z"/></svg> Fork &amp; Contribute</a>
+        <a href="https://github.com/ry-ops/git-steer" target="_blank" rel="noopener"><svg viewBox="0 0 16 16"><path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5v-9zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8V1.5z"/></svg> View Source</a>
+      </div>
 
       <h2>Links</h2>
       <ul>
