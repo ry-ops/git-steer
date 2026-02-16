@@ -114,9 +114,10 @@ jobs:
 
       - name: Filter by severity
         id: filter
+        env:
+          ALERTS: ${{ steps.alerts.outputs.alerts }}
         run: |
           SEVERITY="${{ inputs.severity }}"
-          ALERTS='${{ steps.alerts.outputs.alerts }}'
 
           case $SEVERITY in
             critical) PATTERN='critical' ;;
@@ -138,9 +139,9 @@ jobs:
 
       - name: Fix npm dependencies
         if: steps.filter.outputs.count != '0' && contains(steps.ecosystem.outputs.detected, 'npm')
+        env:
+          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
-          ALERTS='${{ steps.filter.outputs.filtered }}'
-
           find . -name "package.json" -not -path "*/node_modules/*" | while read pkg; do
             DIR=$(dirname "$pkg")
             echo "Processing $pkg..."
@@ -163,9 +164,9 @@ jobs:
 
       - name: Fix Python dependencies
         if: steps.filter.outputs.count != '0' && contains(steps.ecosystem.outputs.detected, 'pip')
+        env:
+          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
-          ALERTS='${{ steps.filter.outputs.filtered }}'
-
           find . -name "requirements*.txt" -type f | while read req; do
             echo "Processing $req..."
 
@@ -194,8 +195,9 @@ jobs:
 
       - name: Fix Go dependencies
         if: steps.filter.outputs.count != '0' && contains(steps.ecosystem.outputs.detected, 'go')
+        env:
+          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
-          ALERTS='${{ steps.filter.outputs.filtered }}'
           GO_ALERTS=$(echo "$ALERTS" | jq '[.[] | select(.ecosystem == "gomod" or .ecosystem == "go")]')
 
           if [ "$(echo "$GO_ALERTS" | jq 'length')" -gt 0 ]; then
@@ -234,6 +236,7 @@ jobs:
         id: commit
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
           BRANCH="security/sweep-$(date +%Y%m%d-%H%M%S)"
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
@@ -242,8 +245,6 @@ jobs:
           git config user.email "git-steer[bot]@users.noreply.github.com"
 
           git checkout -b "$BRANCH"
-
-          ALERTS='${{ steps.filter.outputs.filtered }}'
           PACKAGES=$(echo "$ALERTS" | jq -r '[.[].package] | unique | join(", ")')
           CVES=$(echo "$ALERTS" | jq -r '[.[].cve // empty] | unique | join(", ")')
 
@@ -282,8 +283,8 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
-          ALERTS='${{ steps.filter.outputs.filtered }}'
           COUNT=$(echo "$ALERTS" | jq 'length')
           ISSUE_NUM="${{ matrix.target.issueNumber }}"
 
@@ -329,11 +330,11 @@ jobs:
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false && matrix.target.issueNumber != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
           REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
           ISSUE_NUM="${{ matrix.target.issueNumber }}"
           PR_URL="${{ steps.pr.outputs.url }}"
-          ALERTS='${{ steps.filter.outputs.filtered }}'
           COUNT=$(echo "$ALERTS" | jq 'length')
 
           COMMENT="## Fix PR Created

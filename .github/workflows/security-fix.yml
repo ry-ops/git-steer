@@ -96,9 +96,10 @@ jobs:
 
       - name: Filter by severity
         id: filter
+        env:
+          ALERTS: ${{ steps.alerts.outputs.alerts }}
         run: |
           SEVERITY="${{ inputs.severity }}"
-          ALERTS='${{ steps.alerts.outputs.alerts }}'
 
           case $SEVERITY in
             critical) PATTERN='critical' ;;
@@ -126,8 +127,9 @@ jobs:
 
       - name: Fix npm dependencies
         if: steps.filter.outputs.count != '0'
+        env:
+          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
-          ALERTS='${{ steps.filter.outputs.filtered }}'
 
           # Find all package.json files
           find . -name "package.json" -not -path "*/node_modules/*" | while read pkg; do
@@ -155,8 +157,9 @@ jobs:
 
       - name: Fix Python dependencies
         if: steps.filter.outputs.count != '0'
+        env:
+          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
-          ALERTS='${{ steps.filter.outputs.filtered }}'
 
           # Find all requirements.txt files
           find . -name "requirements*.txt" -type f | while read req; do
@@ -203,6 +206,7 @@ jobs:
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
           BRANCH="security/fix-${{ inputs.severity }}-$(date +%Y%m%d-%H%M%S)"
           echo "branch=$BRANCH" >> $GITHUB_ENV
@@ -213,7 +217,6 @@ jobs:
           git checkout -b "$BRANCH"
 
           # Build commit message
-          ALERTS='${{ steps.filter.outputs.filtered }}'
           PACKAGES=$(echo "$ALERTS" | jq -r '[.[].package] | unique | join(", ")')
           CVES=$(echo "$ALERTS" | jq -r '[.[].cve // empty] | unique | join(", ")')
 
@@ -251,8 +254,8 @@ jobs:
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
-          ALERTS='${{ steps.filter.outputs.filtered }}'
           COUNT=$(echo "$ALERTS" | jq 'length')
 
           # Build PR body
@@ -287,11 +290,13 @@ jobs:
 
       - name: Dry run summary
         if: inputs.dry_run == true
+        env:
+          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
           echo "## Dry Run Summary"
           echo ""
           echo "Would fix ${{ steps.filter.outputs.count }} vulnerabilities:"
-          echo '${{ steps.filter.outputs.filtered }}' | jq -r '.[] | "- \(.package) (\(.severity)): \(.cve // "N/A")"'
+          echo "$ALERTS" | jq -r '.[] | "- \(.package) (\(.severity)): \(.cve // "N/A")"'
           echo ""
           echo "Changes that would be made:"
           git diff --stat || echo "No file changes detected"
