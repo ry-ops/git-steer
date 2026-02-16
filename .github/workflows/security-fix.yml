@@ -311,12 +311,14 @@ jobs:
           JOB_ID="${{ inputs.job_id }}"
 
           # Append to jobs.jsonl
+          FIXED_COUNT="${{ steps.filter.outputs.count }}"
+          FIXED_COUNT="${FIXED_COUNT:-0}"
           ENTRY=$(jq -n \
             --arg id "$JOB_ID" \
             --arg status "$STATUS" \
             --arg repo "${{ inputs.target_repo }}" \
             --arg severity "${{ inputs.severity }}" \
-            --arg fixed "${{ steps.filter.outputs.count }}" \
+            --arg fixed "$FIXED_COUNT" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{id: $id, status: $status, repo: $repo, severity: $severity, fixed: ($fixed | tonumber), timestamp: $timestamp}')
 

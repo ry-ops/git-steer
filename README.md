@@ -137,6 +137,7 @@ That's it. No config files. No dotfiles. No `~/.git-steer`. No cloned repos.
 - `security_alerts` - List Dependabot/code scanning alerts
 - `security_dismiss` - Dismiss alert with reason
 - `security_digest` - Summary across all managed repos
+- `security_enforce` - Ensure Dependabot alerts + automated fixes are enabled on all managed repos
 
 ### Autonomous Security Operations (v0.2.0)
 - `security_sweep` - **Full autonomous pipeline**: scan repos, create RFC issues, dispatch fix workflows, and track everything — in one call
@@ -150,9 +151,17 @@ That's it. No config files. No dotfiles. No `~/.git-steer`. No cloned repos.
 - `actions_secrets` - Manage Actions secrets
 - `workflow_status` - Check status of dispatched workflows
 
+### File Operations
+- `repo_commit` - Commit files directly via GitHub API (no local clone)
+- `repo_read_file` - Read a file from a repository
+- `repo_list_files` - List files in a directory
+
+### Code Review
+- `code_review` - Run AI-powered code review using CodeRabbit CLI
+
 ### Configuration
 - `config_show` - Display current config
-- `config_add_repo` - Add repo to managed list
+- `config_add_repo` - Add repo to managed list (auto-enables Dependabot)
 - `config_remove_repo` - Remove from managed list
 - `steer_status` - Health and rate limits
 - `steer_sync` - Force save state to GitHub
@@ -239,23 +248,39 @@ A single `dashboard_generate()` call scans your repos, builds an interactive das
 - **Fullscreen mode**: Toggle fullscreen from the header
 - **NVD links**: Every CVE ID links directly to the NVD detail page
 
-### Daily Automated Scans
+### Daily Automated Pipeline
 
-The dashboard is automatically refreshed daily by the Heartbeat GitHub Actions workflow:
+The full pipeline runs daily via the Heartbeat GitHub Actions workflow:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  GITHUB ACTIONS (daily at 6 AM UTC)                             │
 │                                                                 │
 │  Heartbeat workflow:                                            │
-│    1. Scan all repos for Dependabot alerts                      │
-│    2. Auto-trigger security sweep for critical alerts           │
-│    3. Regenerate dashboard HTML from scan results               │
-│    4. Deploy to GitHub Pages                                    │
+│    1. Enforce Dependabot on all managed repos                   │
+│    2. Scan all repos for Dependabot alerts                      │
+│    3. Auto-trigger security sweep for critical alerts           │
+│    4. Follow up on security PRs (merged/stale/conflict)         │
+│    5. Regenerate dashboard from fresh data                      │
+│    6. Sync changelog entries to blog                            │
+│    7. Log heartbeat status (always, even on failure)            │
 │                                                                 │
 │  No local machine needed. Everything runs in the cloud.         │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+#### PR Lifecycle Tracking
+
+Security PRs are tracked to completion automatically. The follow-up step:
+- **Merged PRs**: marks RFC as fixed, computes MTTR, closes the RFC issue
+- **Stale PRs (>48h)**: nudges reviewers with a comment, adds `stale` label
+- **Merge conflicts**: flags with a comment and `merge-conflict` label
+- **Closed without merge**: resets RFC to open (fix failed, retry needed)
+- **Orphan scan**: catches security PRs not linked to any RFC
+
+#### Changelog Pipeline
+
+Merged PRs across all managed repos are automatically turned into changelog entries and committed to the [blog repo](https://ry-ops.dev/changelog/). The pipeline classifies PRs (feature/fix/improvement), generates frontmatter, and deduplicates by filename.
 
 You can also trigger a manual refresh from:
 - The dashboard's **Run Security Scan** button (dispatches the workflow)
@@ -325,7 +350,7 @@ The git-steer GitHub App needs these permissions:
 - **Pull Requests**: Read & Write
 - **Issues**: Read & Write (for RFC tracking)
 - **Actions**: Read & Write (for workflow dispatch)
-- **Dependabot alerts**: Read
+- **Dependabot alerts**: Read & Write (for enabling vulnerability alerts)
 - **Code scanning alerts**: Read (for CodeQL integration)
 - **Secrets**: Read & Write (for Actions secrets)
 - **Administration**: Read & Write (for repo settings)

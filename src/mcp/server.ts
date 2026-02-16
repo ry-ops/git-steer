@@ -515,6 +515,19 @@ const TOOLS: Tool[] = [
     },
   },
 
+  // ========== Security Enforcement Tools ==========
+  {
+    name: 'security_enforce',
+    description: 'Ensure Dependabot vulnerability alerts and automated security fixes are enabled on all managed repos (or a specific repo)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repo owner (omit to enforce on all managed repos)' },
+        repo: { type: 'string', description: 'Repo name (omit to enforce on all managed repos)' },
+      },
+    },
+  },
+
   // ========== Autonomous Security Tools ==========
   {
     name: 'security_sweep',
@@ -981,7 +994,18 @@ export class MCPServer {
           name: args.name,
           policies: args.policies || [],
         });
-        return { added: true, repo: `${args.owner}/${args.name}` };
+
+        // Enable Dependabot on the newly onboarded repo
+        if (args.name !== '*') {
+          try {
+            await this.github.enableVulnerabilityAlerts(args.owner, args.name);
+            await this.github.enableAutomatedSecurityFixes(args.owner, args.name);
+          } catch {
+            // Non-fatal — repo may not support Dependabot
+          }
+        }
+
+        return { added: true, repo: `${args.owner}/${args.name}`, dependabotEnabled: args.name !== '*' };
       }
 
       case 'config_remove_repo': {
@@ -1182,6 +1206,58 @@ export class MCPServer {
             createdAt: r.createdAt,
             url: r.htmlUrl,
           })),
+        };
+      }
+
+      // ===== Security Enforcement =====
+      case 'security_enforce': {
+        let targetRepos: Array<{ owner: string; name: string }>;
+
+        if (args.owner && args.repo) {
+          targetRepos = [{ owner: args.owner, name: args.repo }];
+        } else {
+          const managed = this.state.getManagedRepos();
+          if (managed.length === 0) {
+            const allRepos = await this.github.listRepos();
+            targetRepos = allRepos.map((r) => ({ owner: r.owner, name: r.name }));
+          } else {
+            targetRepos = managed
+              .filter((r) => r.name !== '*')
+              .map((r) => ({ owner: r.owner, name: r.name }));
+          }
+        }
+
+        const results: Array<{
+          repo: string;
+          alerts: string;
+          autoFix: string;
+        }> = [];
+
+        for (const repo of targetRepos) {
+          const repoFullName = `${repo.owner}/${repo.name}`;
+          let alertsStatus = 'unknown';
+          let autoFixStatus = 'unknown';
+
+          try {
+            await this.github.enableVulnerabilityAlerts(repo.owner, repo.name);
+            alertsStatus = 'enabled';
+          } catch (error: any) {
+            alertsStatus = `failed: ${error.message}`;
+          }
+
+          try {
+            await this.github.enableAutomatedSecurityFixes(repo.owner, repo.name);
+            autoFixStatus = 'enabled';
+          } catch (error: any) {
+            autoFixStatus = `failed: ${error.message}`;
+          }
+
+          results.push({ repo: repoFullName, alerts: alertsStatus, autoFix: autoFixStatus });
+        }
+
+        return {
+          enforced: results.length,
+          results,
         };
       }
 
