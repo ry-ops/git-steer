@@ -83,8 +83,9 @@ async function scanRepos(repos) {
       } else {
         process.stdout.write('.');
       }
-    } catch {
+    } catch (err) {
       process.stdout.write('x');
+      console.error(`\n  Warning: ${repo.fullName}: ${err.message || 'scan failed'}`);
     }
   }
   console.log('');

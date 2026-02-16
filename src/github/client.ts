@@ -286,6 +286,77 @@ export class GitHubClient {
     );
   }
 
+  // ========== Pull Request Operations ==========
+
+  async getPullRequest(
+    owner: string,
+    repo: string,
+    pullNumber: number
+  ): Promise<{
+    number: number;
+    state: string;
+    merged: boolean;
+    mergedAt: string | null;
+    mergeable: boolean | null;
+    labels: string[];
+    updatedAt: string;
+    createdAt: string;
+    htmlUrl: string;
+  }> {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+      owner,
+      repo,
+      pull_number: pullNumber,
+    });
+
+    return {
+      number: data.number,
+      state: data.state,
+      merged: data.merged,
+      mergedAt: data.merged_at,
+      mergeable: data.mergeable,
+      labels: data.labels.map((l: any) => (typeof l === 'string' ? l : l.name)),
+      updatedAt: data.updated_at,
+      createdAt: data.created_at,
+      htmlUrl: data.html_url,
+    };
+  }
+
+  // ========== Vulnerability Alerts Management ==========
+
+  async enableVulnerabilityAlerts(owner: string, repo: string): Promise<void> {
+    const octokit = this.ensureAuth();
+    await octokit.request('PUT /repos/{owner}/{repo}/vulnerability-alerts', {
+      owner,
+      repo,
+    });
+  }
+
+  async enableAutomatedSecurityFixes(owner: string, repo: string): Promise<void> {
+    const octokit = this.ensureAuth();
+    await octokit.request('PUT /repos/{owner}/{repo}/automated-security-fixes', {
+      owner,
+      repo,
+    });
+  }
+
+  async checkVulnerabilityAlertsEnabled(owner: string, repo: string): Promise<boolean> {
+    const octokit = this.ensureAuth();
+    try {
+      await octokit.request('GET /repos/{owner}/{repo}/vulnerability-alerts', {
+        owner,
+        repo,
+      });
+      return true; // 204 = enabled
+    } catch (error: any) {
+      if (error.status === 404) {
+        return false; // 404 = disabled
+      }
+      throw error;
+    }
+  }
+
   // ========== Repository Settings ==========
 
   async updateRepoSettings(

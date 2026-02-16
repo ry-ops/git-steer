@@ -16,6 +16,7 @@ on:
           - branch-reap
           - full-audit
           - dashboard-refresh
+          - changelog-sync
 
 jobs:
   heartbeat:
@@ -60,6 +61,29 @@ jobs:
           echo "repos<<EOF" >> $GITHUB_OUTPUT
           echo "$REPOS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Enforce Dependabot on managed repos
+        if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          echo "## Enforcing Dependabot on managed repos"
+
+          while IFS= read -r repo; do
+            [ -z "$repo" ] && continue
+
+            # Enable vulnerability alerts
+            gh api "repos/$repo/vulnerability-alerts" \
+              -X PUT \
+              --silent 2>/dev/null && echo "  $repo: vulnerability alerts enabled" \
+              || echo "  $repo: vulnerability alerts already enabled or not accessible"
+
+            # Enable automated security fixes
+            gh api "repos/$repo/automated-security-fixes" \
+              -X PUT \
+              --silent 2>/dev/null && echo "  $repo: automated security fixes enabled" \
+              || echo "  $repo: automated security fixes already enabled or not accessible"
+          done <<< "${{ steps.repos.outputs.repos }}"
 
       - name: Security scan
         if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit'
@@ -136,6 +160,14 @@ jobs:
             echo "No critical alerts found, skipping auto-sweep."
           fi
 
+      - name: Follow up on security PRs
+        if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STATE_OWNER: ry-ops
+          STATE_REPO: git-steer-state
+        run: node scripts/ci-pr-followup.mjs
+
       - name: Regenerate dashboard
         if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit' || inputs.task == 'dashboard-refresh'
         env:
@@ -144,11 +176,22 @@ jobs:
           STATE_REPO: git-steer-state
         run: node scripts/ci-dashboard.mjs
 
+      - name: Sync changelog to blog
+        if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit' || inputs.task == 'changelog-sync'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STATE_OWNER: ry-ops
+          STATE_REPO: git-steer-state
+          BLOG_OWNER: ry-ops
+          BLOG_REPO: blog
+        run: node scripts/ci-changelog.mjs
+
       - name: Log heartbeat to state
+        if: always()
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          ENTRY="{\"timestamp\":\"$TIMESTAMP\",\"task\":\"${{ inputs.task || 'scheduled' }}\",\"status\":\"completed\"}"
+          ENTRY="{\"timestamp\":\"$TIMESTAMP\",\"task\":\"${{ inputs.task || 'scheduled' }}\",\"status\":\"${{ job.status }}\"}"
 
           echo "Heartbeat completed at $TIMESTAMP"

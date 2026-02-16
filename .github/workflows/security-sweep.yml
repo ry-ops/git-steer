@@ -288,12 +288,17 @@ jobs:
           COUNT=$(echo "$ALERTS" | jq 'length')
           ISSUE_NUM="${{ matrix.target.issueNumber }}"
 
+          CLOSE_LINE=""
+          if [ "$ISSUE_NUM" -gt 0 ] 2>/dev/null; then
+            CLOSE_LINE="Closes #${ISSUE_NUM}"
+          fi
+
           BODY=$(cat <<PREOF
           ## Security Sweep Fix
 
           This PR addresses **$COUNT** security vulnerabilities.
 
-          Closes #${ISSUE_NUM}
+          ${CLOSE_LINE}
 
           ### Vulnerabilities Fixed
 
@@ -327,7 +332,7 @@ jobs:
           echo "number=$PR_NUM" >> $GITHUB_OUTPUT
 
       - name: Comment on RFC issue
-        if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false && matrix.target.issueNumber != ''
+        if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false && matrix.target.issueNumber != '' && matrix.target.issueNumber != 0
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ALERTS: ${{ steps.filter.outputs.filtered }}
@@ -350,6 +355,46 @@ jobs:
 
           gh api "repos/$REPO/issues/$ISSUE_NUM/comments" -f body="$COMMENT"
 
+      - name: Persist PR number to state repo
+        if: steps.pr.outputs.number != '' && inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
+          PR_NUM="${{ steps.pr.outputs.number }}"
+          PR_URL="${{ steps.pr.outputs.url }}"
+          ISSUE_NUM="${{ matrix.target.issueNumber }}"
+          STATE_REPO="ry-ops/git-steer-state"
+
+          # Fetch current rfcs.jsonl, update the matching RFC with prNumber/prUrl
+          RFCS_CONTENT=$(gh api "repos/$STATE_REPO/contents/state/rfcs.jsonl" \
+            --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+          RFCS_SHA=$(gh api "repos/$STATE_REPO/contents/state/rfcs.jsonl" \
+            --jq '.sha' 2>/dev/null || echo "")
+
+          if [ -n "$RFCS_CONTENT" ]; then
+            # Update matching RFC line with prNumber and prUrl
+            UPDATED=$(echo "$RFCS_CONTENT" | while IFS= read -r line; do
+              if echo "$line" | jq -e --arg r "$REPO" --argjson i "${ISSUE_NUM:-0}" \
+                'select(.repo == $r and .issueNumber == $i)' >/dev/null 2>&1; then
+                echo "$line" | jq -c --arg pn "$PR_NUM" --arg pu "$PR_URL" \
+                  '. + {prNumber: ($pn | tonumber), prUrl: $pu, status: "in_progress"}'
+              else
+                echo "$line"
+              fi
+            done)
+
+            # Commit updated rfcs.jsonl
+            ENCODED=$(echo "$UPDATED" | base64 -w0 2>/dev/null || echo "$UPDATED" | base64)
+            gh api "repos/$STATE_REPO/contents/state/rfcs.jsonl" \
+              -X PUT \
+              -f message="state: link PR #$PR_NUM to RFC for $REPO" \
+              -f content="$ENCODED" \
+              -f sha="$RFCS_SHA" 2>/dev/null \
+              && echo "Updated rfcs.jsonl with PR #$PR_NUM for $REPO" \
+              || echo "Warning: could not update rfcs.jsonl"
+          fi
+
       - name: Report results to git-steer-state
         if: always() && inputs.job_id != ''
         env:
@@ -358,13 +403,15 @@ jobs:
           STATUS="${{ job.status }}"
           JOB_ID="${{ inputs.job_id }}"
           REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
+          FIXED_COUNT="${{ steps.filter.outputs.count }}"
+          FIXED_COUNT="${FIXED_COUNT:-0}"
 
           ENTRY=$(jq -n \
             --arg id "$JOB_ID" \
             --arg status "$STATUS" \
             --arg repo "$REPO" \
             --arg severity "${{ inputs.severity }}" \
-            --arg fixed "${{ steps.filter.outputs.count }}" \
+            --arg fixed "$FIXED_COUNT" \
             --arg pr_url "${{ steps.pr.outputs.url || '' }}" \
             --arg pr_number "${{ steps.pr.outputs.number || '' }}" \
             --arg issue_number "${{ matrix.target.issueNumber }}" \
