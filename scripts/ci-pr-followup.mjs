@@ -19,8 +19,8 @@
 import { Octokit } from 'octokit';
 
 const token = process.env.GH_TOKEN;
-if (!token) {
-  console.error('GH_TOKEN environment variable is required');
+if (!token || typeof token !== 'string' || !/^(ghp_|gho_|ghs_|ghu_|github_pat_)[a-zA-Z0-9_]+$/.test(token)) {
+  console.error('GH_TOKEN environment variable is required and must be a valid GitHub token');
   process.exit(1);
 }
 

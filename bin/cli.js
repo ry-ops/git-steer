@@ -79,7 +79,7 @@ program
     } catch (error) {
       spinner.fail('Failed to start');
       console.error(chalk.red('Failed to start git-steer. Check your credentials and try again.'));
-      if (process.env.DEBUG) console.error(error.message || 'Unknown error');
+      if (process.env.DEBUG) console.error(String(error.message || 'Unknown error').replace(/ghp_\w+|gho_\w+|ghs_\w+|github_pat_\w+/g, '[REDACTED]'));
       process.exit(1);
     }
   });
@@ -94,7 +94,7 @@ program
       await steer.showStatus();
     } catch (error) {
       console.error(chalk.red('Failed to retrieve status. Check your credentials and try again.'));
-      if (process.env.DEBUG) console.error(error.message || 'Unknown error');
+      if (process.env.DEBUG) console.error(String(error.message || 'Unknown error').replace(/ghp_\w+|gho_\w+|ghs_\w+|github_pat_\w+/g, '[REDACTED]'));
       process.exit(1);
     }
   });
@@ -113,7 +113,7 @@ program
     } catch (error) {
       spinner.fail('Sync failed');
       console.error(chalk.red('Failed to sync state. Check your credentials and try again.'));
-      if (process.env.DEBUG) console.error(error.message || 'Unknown error');
+      if (process.env.DEBUG) console.error(String(error.message || 'Unknown error').replace(/ghp_\w+|gho_\w+|ghs_\w+|github_pat_\w+/g, '[REDACTED]'));
       process.exit(1);
     }
   });
@@ -207,7 +207,7 @@ program
     } catch (error) {
       spinner.fail('Scan failed');
       console.error(chalk.red('Failed to run security scan.'));
-      if (process.env.DEBUG) console.error(error.message || 'Unknown error');
+      if (process.env.DEBUG) console.error(String(error.message || 'Unknown error').replace(/ghp_\w+|gho_\w+|ghs_\w+|github_pat_\w+/g, '[REDACTED]'));
       process.exit(1);
     }
   });
