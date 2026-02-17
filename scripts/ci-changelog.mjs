@@ -17,8 +17,8 @@
 import { Octokit } from 'octokit';
 
 const token = process.env.GH_TOKEN;
-if (!token) {
-  console.error('GH_TOKEN environment variable is required');
+if (!token || typeof token !== 'string' || !/^(ghp_|gho_|ghs_|ghu_|github_pat_)[a-zA-Z0-9_]+$/.test(token)) {
+  console.error('GH_TOKEN environment variable is required and must be a valid GitHub token');
   process.exit(1);
 }
 
@@ -157,10 +157,14 @@ function generateBody(pr, repoName, classification) {
 
   // Main description — extract first meaningful paragraph from PR body
   if (pr.body) {
-    const cleaned = pr.body
-      .replace(/<!--[\s\S]*?-->/g, '')
-      .replace(/^#+ .+$/gm, '')
-      .trim();
+    let cleaned = pr.body;
+    // Loop until stable to prevent bypass via nested HTML comments
+    let prev;
+    do {
+      prev = cleaned;
+      cleaned = cleaned.replace(/<!--[\s\S]*?-->/g, '');
+    } while (cleaned !== prev);
+    cleaned = cleaned.replace(/^#+ .+$/gm, '').trim();
     const firstPara = cleaned.split(/\n\n/)[0]?.trim();
     if (firstPara && firstPara.length > 20 && firstPara.length < 500) {
       lines.push(firstPara);
@@ -307,7 +311,7 @@ function buildEntry(pr, repoFullName, classification) {
 
   const frontmatter = [
     '---',
-    `title: "${title.replace(/"/g, '\\"')}"`,
+    `title: "${title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
     `date: ${mergedAt.toISOString()}`,
     `type: ${classification.type}`,
     `category: ${category}`,
