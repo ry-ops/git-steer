@@ -12,8 +12,9 @@ import {
   ListToolsRequestSchema,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { GitHubClient } from '../github/client.js';
+import { GitHubClient, RateLimitSnapshot } from '../github/client.js';
 import { StateManager } from '../state/manager.js';
+import { readLimit, writeLimit } from '../core/concurrency.js';
 import { generateReport } from '../reports/templates.js';
 import { generateDashboardHtml } from '../dashboard/templates.js';
 import { createRequire } from 'module';
@@ -531,7 +532,7 @@ const TOOLS: Tool[] = [
   // ========== Autonomous Security Tools ==========
   {
     name: 'security_sweep',
-    description: 'Autonomous security sweep: scans repos for CVEs, creates RFC issues with ITIL-formatted change records, and dispatches a GitHub Actions workflow to fix vulnerabilities and create PRs — all in one call.',
+    description: 'Autonomous security sweep: scans repos for CVEs, creates RFC issues with ITIL-formatted change records, and dispatches a GitHub Actions workflow to fix vulnerabilities and create PRs — all in one call. Supports chunked execution: set chunkSize to process a subset per call and call again with resume:true to continue.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -555,6 +556,19 @@ const TOOLS: Tool[] = [
           type: 'boolean',
           default: false,
           description: 'Skip RFC issue creation (dispatch fix workflow directly)',
+        },
+        chunkSize: {
+          type: 'number',
+          description: 'Max repos to process per call. Omit to process all in one shot. When set, a cursor is persisted and the next call with resume:true continues where this left off.',
+        },
+        resume: {
+          type: 'boolean',
+          default: false,
+          description: 'Resume a previously chunked sweep from the saved cursor. Ignores repos/severity/skipRfc (carried from the original call).',
+        },
+        skipRecentHours: {
+          type: 'number',
+          description: 'Skip repos swept within this many hours (default: no skip). Useful for polling fallback — set to 6 to avoid re-scanning repos touched in the last 6h.',
         },
       },
     },
@@ -694,6 +708,8 @@ export class MCPServer {
   private github: GitHubClient;
   private state: StateManager;
   private config: MCPServerConfig;
+  private rateLimitCache: RateLimitSnapshot | null = null;
+  private rateLimitTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(config: MCPServerConfig) {
     this.config = config;
@@ -727,13 +743,22 @@ export class MCPServer {
 
       try {
         const result = await this.executeTool(name, args || {});
-        
+
+        // Snapshot rate limit telemetry accumulated during this tool call
+        const throttle = this.github.getAndResetThrottleStats();
+        const coreRl = this.rateLimitCache?.buckets['core'];
+
         // Log to audit
         this.state.addAuditEntry({
           action: name,
           repo: args?.repo ? `${args.owner}/${args.repo}` : undefined,
           result: 'success',
           details: args,
+          rate_remaining: coreRl?.remaining,
+          rate_reset: coreRl?.reset.toISOString(),
+          is_secondary_limit_hit: throttle.isSecondaryLimitHit || undefined,
+          retry_count: throttle.retryCount || undefined,
+          backoff_ms: throttle.backoffMs || undefined,
         });
 
         return {
@@ -745,12 +770,21 @@ export class MCPServer {
           ],
         };
       } catch (error: any) {
+        // Snapshot rate limit telemetry even on failure
+        const throttle = this.github.getAndResetThrottleStats();
+        const coreRl = this.rateLimitCache?.buckets['core'];
+
         // Log error to audit
         this.state.addAuditEntry({
           action: name,
           repo: args?.repo ? `${args.owner}/${args.repo}` : undefined,
           result: 'error',
           details: { error: error.message },
+          rate_remaining: coreRl?.remaining,
+          rate_reset: coreRl?.reset.toISOString(),
+          is_secondary_limit_hit: throttle.isSecondaryLimitHit || undefined,
+          retry_count: throttle.retryCount || undefined,
+          backoff_ms: throttle.backoffMs || undefined,
         });
 
         return {
@@ -826,7 +860,7 @@ export class MCPServer {
 
       // Branch tools
       case 'branch_list': {
-        const branches = await this.github.listBranches(args.owner, args.repo);
+        const branches = await this.github.listBranchesGraphQL(args.owner, args.repo);
         const staleDays = args.staleDays || 30;
         const staleDate = new Date();
         staleDate.setDate(staleDate.getDate() - staleDays);
@@ -860,7 +894,7 @@ export class MCPServer {
       }
 
       case 'branch_reap': {
-        const branches = await this.github.listBranches(args.owner, args.repo);
+        const branches = await this.github.listBranchesGraphQL(args.owner, args.repo);
         const staleDays = args.daysStale || 30;
         const staleDate = new Date();
         staleDate.setDate(staleDate.getDate() - staleDays);
@@ -914,38 +948,65 @@ export class MCPServer {
         const managedRepos = this.state.getManagedRepos();
         const digest: Record<string, any[]> = {};
 
-        for (const repo of managedRepos) {
-          if (repo.name === '*') continue; // Skip wildcard entries for now
-          
-          try {
-            const alerts = await this.github.getSecurityAlerts(repo.owner, repo.name);
-            const filtered =
-              args.severity === 'all'
-                ? alerts
-                : alerts.filter((a) => a.severity === args.severity);
-            
-            if (filtered.length > 0) {
-              digest[`${repo.owner}/${repo.name}`] = filtered;
-            }
-          } catch {
-            // Skip repos we can't access
-          }
-        }
+        // Fetch alerts in parallel, capped at readLimit (8 concurrent).
+        await Promise.all(
+          managedRepos
+            .filter((repo) => repo.name !== '*')
+            .map((repo) =>
+              readLimit(async () => {
+                try {
+                  const alerts = await this.github.getSecurityAlerts(repo.owner, repo.name);
+                  const filtered =
+                    args.severity === 'all'
+                      ? alerts
+                      : alerts.filter((a) => a.severity === args.severity);
+                  if (filtered.length > 0) {
+                    digest[`${repo.owner}/${repo.name}`] = filtered;
+                  }
+                } catch {
+                  // Skip repos we can't access
+                }
+              })
+            )
+        );
 
         return digest;
       }
 
       // State tools
       case 'steer_status': {
-        const rateLimit = await this.github.getRateLimit();
+        // If cache is stale (>30 min) or missing, refresh inline
+        const cacheAgeMs = this.rateLimitCache
+          ? Date.now() - this.rateLimitCache.fetchedAt.getTime()
+          : Infinity;
+        if (cacheAgeMs > 30 * 60 * 1000) {
+          await this.refreshRateLimit();
+        }
+
+        const rl = this.rateLimitCache;
+        const rateLimitInfo = rl
+          ? {
+              buckets: Object.fromEntries(
+                Object.entries(rl.buckets).map(([name, b]) => [
+                  name,
+                  {
+                    remaining: b.remaining,
+                    limit: b.limit,
+                    percentRemaining: b.percentRemaining,
+                    resetsAt: b.reset.toISOString(),
+                  },
+                ])
+              ),
+              fetchedAt: rl.fetchedAt.toISOString(),
+              warnings: rl.warnings,
+              hasWarnings: rl.warnings.length > 0,
+            }
+          : null;
+
         return {
           github: {
             authenticated: this.github.isAuthenticated(),
-            rateLimit: {
-              remaining: rateLimit.remaining,
-              limit: rateLimit.limit,
-              resetsAt: rateLimit.reset.toISOString(),
-            },
+            rateLimit: rateLimitInfo,
           },
           state: {
             lastSync: this.state.getLastSync()?.toISOString(),
@@ -1083,23 +1144,28 @@ export class MCPServer {
         const severityOrder = ['critical', 'high', 'medium', 'low'];
         const minSeverityIndex = args.severity === 'all' ? 4 : severityOrder.indexOf(args.severity);
 
-        for (const repo of repos) {
-          try {
-            const alerts = await this.github.getSecurityAlertsDetailed(
-              repo.owner || args.owner,
-              repo.name
-            );
-            const filtered = alerts.filter((a) => {
-              const idx = severityOrder.indexOf(a.severity);
-              return idx <= minSeverityIndex;
-            });
-            if (filtered.length > 0) {
-              results[repo.fullName || `${args.owner}/${repo.name}`] = filtered;
-            }
-          } catch {
-            // Skip repos we can't access
-          }
-        }
+        // Fetch alerts in parallel, capped at readLimit (8 concurrent).
+        await Promise.all(
+          repos.map((repo) =>
+            readLimit(async () => {
+              try {
+                const alerts = await this.github.getSecurityAlertsDetailed(
+                  repo.owner || args.owner,
+                  repo.name
+                );
+                const filtered = alerts.filter((a) => {
+                  const idx = severityOrder.indexOf(a.severity);
+                  return idx <= minSeverityIndex;
+                });
+                if (filtered.length > 0) {
+                  results[repo.fullName || `${args.owner}/${repo.name}`] = filtered;
+                }
+              } catch {
+                // Skip repos we can't access
+              }
+            })
+          )
+        );
 
         const summary = {
           reposScanned: repos.length,
@@ -1264,27 +1330,75 @@ export class MCPServer {
       // ===== Autonomous Security Sweep =====
       case 'security_sweep': {
         const severityOrder = ['critical', 'high', 'medium', 'low'];
-        const minSev = args.severity || 'critical';
-        const minSevIndex = minSev === 'all' ? 4 : severityOrder.indexOf(minSev);
 
-        // Resolve target repos
-        let targetRepos: Array<{ owner: string; name: string; fullName: string }>;
-        if (args.repos && args.repos.length > 0) {
-          targetRepos = args.repos.map((r: string) => {
-            const [owner, name] = r.split('/');
-            return { owner, name, fullName: r };
-          });
+        // ── Cursor / resume logic ─────────────────────────────────────────────
+        let cursor = this.state.getSweepCursor();
+        let allRepos: Array<{ owner: string; name: string; fullName: string }>;
+        let minSev: string;
+        let effectiveSkipRfc: boolean;
+        let effectiveDryRun: boolean;
+
+        if (args.resume && cursor) {
+          // Continuing a previous chunked sweep — carry params from cursor
+          allRepos = cursor.repos;
+          minSev = cursor.params.severity;
+          effectiveSkipRfc = cursor.params.skipRfc;
+          effectiveDryRun = cursor.params.dryRun;
         } else {
-          const managed = this.state.getManagedRepos();
-          if (managed.length === 0) {
-            const allRepos = await this.github.listRepos();
-            targetRepos = allRepos.map((r) => ({ owner: r.owner, name: r.name, fullName: r.fullName }));
+          // Fresh sweep — resolve full repo list
+          minSev = args.severity || 'critical';
+          effectiveSkipRfc = args.skipRfc || false;
+          effectiveDryRun = args.dryRun || false;
+
+          if (args.repos && args.repos.length > 0) {
+            allRepos = args.repos.map((r: string) => {
+              const [owner, name] = r.split('/');
+              return { owner, name, fullName: r };
+            });
           } else {
-            targetRepos = managed
-              .filter((r) => r.name !== '*')
-              .map((r) => ({ owner: r.owner, name: r.name, fullName: `${r.owner}/${r.name}` }));
+            const managed = this.state.getManagedRepos();
+            if (managed.length === 0) {
+              const fetched = await this.github.listRepos();
+              allRepos = fetched.map((r) => ({ owner: r.owner, name: r.name, fullName: r.fullName }));
+            } else {
+              allRepos = managed
+                .filter((r) => r.name !== '*')
+                .map((r) => ({ owner: r.owner, name: r.name, fullName: `${r.owner}/${r.name}` }));
+            }
+          }
+
+          // Start a new cursor if chunkSize is requested
+          if (args.chunkSize) {
+            cursor = {
+              repos: allRepos,
+              nextIndex: 0,
+              startedAt: new Date().toISOString(),
+              params: { severity: minSev, skipRfc: effectiveSkipRfc, dryRun: effectiveDryRun },
+            };
+          } else {
+            // Full run — clear any stale cursor
+            this.state.clearSweepCursor();
+            cursor = null;
           }
         }
+
+        const minSevIndex = minSev === 'all' ? 4 : severityOrder.indexOf(minSev);
+
+        // ── Determine the slice to process this call ──────────────────────────
+        const startIndex = cursor?.nextIndex ?? 0;
+        const chunkSize = args.chunkSize ?? allRepos.length;
+        let slicedRepos = allRepos.slice(startIndex, startIndex + chunkSize);
+
+        // ── Skip recently-swept repos (polling fallback) ───────────────────────
+        if (args.skipRecentHours && args.skipRecentHours > 0) {
+          const cutoff = Date.now() - args.skipRecentHours * 60 * 60 * 1000;
+          slicedRepos = slicedRepos.filter((r) => {
+            const last = this.state.getLastSweptAt(r.fullName);
+            return !last || new Date(last).getTime() < cutoff;
+          });
+        }
+
+        let targetRepos = slicedRepos;
 
         // Scan each repo
         const sweepResults: Array<{
@@ -1297,36 +1411,57 @@ export class MCPServer {
           issueUrl?: string;
         }> = [];
 
+        // Fetch all Dependabot alerts for the full repo batch in ONE GraphQL
+        // round-trip, then fetch code-scanning alerts in parallel via REST
+        // (no GraphQL equivalent exists). This replaces 2N REST calls with
+        // 1 GraphQL + N REST calls.
+        const [vulnBatch, codeScanMap] = await Promise.all([
+          // Single GraphQL call for all repos' vulnerability alerts
+          this.github.getVulnerabilityAlertsBatch(targetRepos),
+          // Code-scanning: still REST, still parallelised with readLimit
+          (async () => {
+            const map: Record<string, any[]> = {};
+            await Promise.all(
+              targetRepos.map((repo) =>
+                readLimit(async () => {
+                  try {
+                    map[repo.fullName] = await this.github.getCodeScanningAlerts(repo.owner, repo.name);
+                  } catch {
+                    map[repo.fullName] = [];
+                  }
+                })
+              )
+            );
+            return map;
+          })(),
+        ]);
+
         for (const repo of targetRepos) {
-          try {
-            const depAlerts = await this.github.getSecurityAlertsDetailed(repo.owner, repo.name);
-            const codeAlerts = await this.github.getCodeScanningAlerts(repo.owner, repo.name);
+          const depAlerts = vulnBatch[repo.fullName] ?? [];
+          const codeAlerts = codeScanMap[repo.fullName] ?? [];
 
-            const filteredDep = depAlerts.filter((a) => {
-              const idx = severityOrder.indexOf(a.severity);
-              return idx >= 0 && idx <= minSevIndex;
+          const filteredDep = depAlerts.filter((a) => {
+            const idx = severityOrder.indexOf(a.severity);
+            return idx >= 0 && idx <= minSevIndex;
+          });
+
+          const filteredCode = codeAlerts.filter((a) => {
+            const idx = severityOrder.indexOf(a.rule.severity);
+            return idx >= 0 && idx <= minSevIndex;
+          });
+
+          if (filteredDep.length > 0 || filteredCode.length > 0) {
+            sweepResults.push({
+              repo: repo.fullName,
+              owner: repo.owner,
+              name: repo.name,
+              dependabotAlerts: filteredDep,
+              codeScanningAlerts: filteredCode,
             });
-
-            const filteredCode = codeAlerts.filter((a) => {
-              const idx = severityOrder.indexOf(a.rule.severity);
-              return idx >= 0 && idx <= minSevIndex;
-            });
-
-            if (filteredDep.length > 0 || filteredCode.length > 0) {
-              sweepResults.push({
-                repo: repo.fullName,
-                owner: repo.owner,
-                name: repo.name,
-                dependabotAlerts: filteredDep,
-                codeScanningAlerts: filteredCode,
-              });
-            }
-          } catch {
-            // Skip repos we can't access
           }
         }
 
-        if (args.dryRun) {
+        if (effectiveDryRun) {
           return {
             dryRun: true,
             reposScanned: targetRepos.length,
@@ -1349,28 +1484,33 @@ export class MCPServer {
         const jobId = `sweep-${Date.now()}`;
         const workflowTargets: Array<{ owner: string; repo: string; issueNumber: number; vulnerabilities: any[] }> = [];
 
-        for (const result of sweepResults) {
-          if (!args.skipRfc) {
-            // Ensure labels exist
-            await this.github.ensureLabel(result.owner, result.name, 'security', 'd73a4a', 'Security vulnerability');
-            await this.github.ensureLabel(result.owner, result.name, 'rfc', '0075ca', 'Request for Change');
-            await this.github.ensureLabel(result.owner, result.name, 'dependencies', '0075ca', 'Dependency updates');
-            await this.github.ensureLabel(result.owner, result.name, 'automated', 'bfd4f2', 'Created by automation');
+        // Create RFC issues in parallel, capped at writeLimit (2 concurrent) to avoid
+        // triggering GitHub's secondary rate limit on back-to-back write bursts.
+        await Promise.all(
+          sweepResults.map((result) =>
+            writeLimit(async () => {
+              if (!effectiveSkipRfc) {
+                // Ensure labels exist (parallelise the 5 label checks within one slot)
+                const maxSeverity = result.dependabotAlerts.reduce((max, a) => {
+                  const idx = severityOrder.indexOf(a.severity);
+                  const maxIdx = severityOrder.indexOf(max);
+                  return idx < maxIdx ? a.severity : max;
+                }, 'low');
 
-            const maxSeverity = result.dependabotAlerts.reduce((max, a) => {
-              const idx = severityOrder.indexOf(a.severity);
-              const maxIdx = severityOrder.indexOf(max);
-              return idx < maxIdx ? a.severity : max;
-            }, 'low');
+                await Promise.all([
+                  this.github.ensureLabel(result.owner, result.name, 'security', 'd73a4a', 'Security vulnerability'),
+                  this.github.ensureLabel(result.owner, result.name, 'rfc', '0075ca', 'Request for Change'),
+                  this.github.ensureLabel(result.owner, result.name, 'dependencies', '0075ca', 'Dependency updates'),
+                  this.github.ensureLabel(result.owner, result.name, 'automated', 'bfd4f2', 'Created by automation'),
+                  this.github.ensureLabel(result.owner, result.name, `severity:${maxSeverity}`, maxSeverity === 'critical' ? 'b60205' : maxSeverity === 'high' ? 'ff9800' : 'fbca04', `${maxSeverity} severity`),
+                ]);
 
-            await this.github.ensureLabel(result.owner, result.name, `severity:${maxSeverity}`, maxSeverity === 'critical' ? 'b60205' : maxSeverity === 'high' ? 'ff9800' : 'fbca04', `${maxSeverity} severity`);
+                // Build RFC issue body
+                const cveTable = result.dependabotAlerts.map((a) =>
+                  `| ${a.cve || 'N/A'} | ${a.package} | ${a.severity.toUpperCase()} | ${a.currentVersion} | ${a.fixVersion || 'N/A'} |`
+                ).join('\n');
 
-            // Build RFC issue body
-            const cveTable = result.dependabotAlerts.map((a) =>
-              `| ${a.cve || 'N/A'} | ${a.package} | ${a.severity.toUpperCase()} | ${a.currentVersion} | ${a.fixVersion || 'N/A'} |`
-            ).join('\n');
-
-            const issueBody = `## RFC: Security Vulnerability Remediation
+                const issueBody = `## RFC: Security Vulnerability Remediation
 
 **Repository:** ${result.repo}
 **Severity:** ${maxSeverity.toUpperCase()}
@@ -1406,38 +1546,40 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
 
 *This RFC was auto-generated by git-steer. A fix PR will be created automatically.*`;
 
-            const issue = await this.github.createIssue(result.owner, result.name, {
-              title: `[RFC] Security: ${result.dependabotAlerts.length} vulnerabilities (${maxSeverity})`,
-              body: issueBody,
-              labels: ['security', 'rfc', 'automated', `severity:${maxSeverity}`],
-            });
+                const issue = await this.github.createIssue(result.owner, result.name, {
+                  title: `[RFC] Security: ${result.dependabotAlerts.length} vulnerabilities (${maxSeverity})`,
+                  body: issueBody,
+                  labels: ['security', 'rfc', 'automated', `severity:${maxSeverity}`],
+                });
 
-            result.issueNumber = issue.number;
-            result.issueUrl = issue.url;
+                result.issueNumber = issue.number;
+                result.issueUrl = issue.url;
 
-            // Track RFC in state
-            this.state.addRfc({
-              repo: result.repo,
-              issueNumber: issue.number,
-              issueUrl: issue.url,
-              severity: maxSeverity,
-              vulnerabilities: result.dependabotAlerts.map((a) => ({
-                cve: a.cve,
-                package: a.package,
-                severity: a.severity,
-                fixVersion: a.fixVersion,
-              })),
-              status: 'open',
-            });
-          }
+                // Track RFC in state
+                this.state.addRfc({
+                  repo: result.repo,
+                  issueNumber: issue.number,
+                  issueUrl: issue.url,
+                  severity: maxSeverity,
+                  vulnerabilities: result.dependabotAlerts.map((a) => ({
+                    cve: a.cve,
+                    package: a.package,
+                    severity: a.severity,
+                    fixVersion: a.fixVersion,
+                  })),
+                  status: 'open',
+                });
+              }
 
-          workflowTargets.push({
-            owner: result.owner,
-            repo: result.name,
-            issueNumber: result.issueNumber || 0,
-            vulnerabilities: result.dependabotAlerts,
-          });
-        }
+              workflowTargets.push({
+                owner: result.owner,
+                repo: result.name,
+                issueNumber: result.issueNumber || 0,
+                vulnerabilities: result.dependabotAlerts,
+              });
+            })
+          )
+        );
 
         // Dispatch security-sweep workflow
         if (workflowTargets.length > 0) {
@@ -1455,13 +1597,38 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
           );
         }
 
+        // ── Record last-swept timestamp for each processed repo ───────────────
+        const sweepTs = new Date().toISOString();
+        for (const r of targetRepos) {
+          this.state.setLastSweptAt(r.fullName, sweepTs);
+        }
+
+        // ── Advance or clear cursor ───────────────────────────────────────────
+        const nextIndex = startIndex + chunkSize;
+        const hasMore = cursor !== null && nextIndex < allRepos.length;
+        if (hasMore && cursor) {
+          this.state.setSweepCursor({ ...cursor, nextIndex });
+        } else {
+          this.state.clearSweepCursor();
+        }
+
         return {
           success: true,
           jobId,
           reposScanned: targetRepos.length,
           reposWithFindings: sweepResults.length,
-          rfcsCreated: args.skipRfc ? 0 : sweepResults.length,
+          rfcsCreated: effectiveSkipRfc ? 0 : sweepResults.length,
           workflowDispatched: workflowTargets.length > 0,
+          // Pagination metadata
+          pagination: cursor !== null
+            ? {
+                chunked: true,
+                processedRange: [startIndex, Math.min(nextIndex, allRepos.length) - 1],
+                totalRepos: allRepos.length,
+                hasMore,
+                nextIndex: hasMore ? nextIndex : null,
+              }
+            : undefined,
           repos: sweepResults.map((r) => ({
             repo: r.repo,
             dependabotAlerts: r.dependabotAlerts.length,
@@ -1775,7 +1942,22 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
     }
   }
 
+  private async refreshRateLimit(): Promise<void> {
+    try {
+      this.rateLimitCache = await this.github.getRateLimit();
+      if (this.rateLimitCache.warnings.length > 0) {
+        console.warn(`[git-steer] Rate limit warnings: ${this.rateLimitCache.warnings.join(' | ')}`);
+      }
+    } catch {
+      // Non-fatal — keep existing cache if refresh fails
+    }
+  }
+
   async start(): Promise<void> {
+    // Fetch rate limits at startup and refresh every 30 minutes
+    await this.refreshRateLimit();
+    this.rateLimitTimer = setInterval(() => void this.refreshRateLimit(), 30 * 60 * 1000);
+
     if (this.config.transport === 'stdio') {
       const transport = new StdioServerTransport();
       await this.server.connect(transport);
@@ -1786,6 +1968,10 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
   }
 
   async stop(): Promise<void> {
+    if (this.rateLimitTimer) {
+      clearInterval(this.rateLimitTimer);
+      this.rateLimitTimer = null;
+    }
     await this.server.close();
   }
 }

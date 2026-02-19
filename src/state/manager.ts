@@ -7,6 +7,7 @@
 
 import { GitHubClient } from '../github/client.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { etagCache } from '../core/etag-cache.js';
 
 export interface StateManagerConfig {
   github: GitHubClient;
@@ -46,6 +47,12 @@ export interface AuditEntry {
   branch?: string;
   result: string;
   details?: Record<string, any>;
+  // Rate limit telemetry (Step 6)
+  rate_remaining?: number;   // core bucket remaining at time of log
+  rate_reset?: string;       // ISO timestamp when core bucket resets
+  is_secondary_limit_hit?: boolean;
+  retry_count?: number;
+  backoff_ms?: number;
 }
 
 export interface RfcVulnerability {
@@ -99,6 +106,17 @@ export interface SecurityMetrics {
   timeline: Array<{ date: string; opened: number; fixed: number }>;
 }
 
+export interface SweepCursor {
+  /** Full repo list the sweep was started with, in stable order. */
+  repos: Array<{ owner: string; name: string; fullName: string }>;
+  /** Index of the next repo to process. */
+  nextIndex: number;
+  /** ISO timestamp when the sweep was initiated. */
+  startedAt: string;
+  /** Sweep parameters carried forward for resume calls. */
+  params: { severity: string; skipRfc: boolean; dryRun: boolean };
+}
+
 export interface StateData {
   config: {
     managedRepos: ManagedRepo[];
@@ -142,15 +160,9 @@ export class StateManager {
    * Load all state from GitHub
    */
   async load(): Promise<void> {
-    // Get owner from authenticated user
-    const repos = await this.github.listRepos();
-    const stateRepo = repos.find((r) => r.name === this.repo);
-    
-    if (!stateRepo) {
-      throw new Error(`State repo ${this.repo} not found. Run 'git-steer init' first.`);
-    }
-
-    this.owner = stateRepo.owner;
+    // Resolve the installation owner via GraphQL viewer query — one round-trip
+    // instead of paginating GET /installation/repositories just to read owner.login.
+    this.owner = await this.github.getViewerLogin();
 
     // Load config files
     const managedRepos = await this.loadYaml('config/managed-repos.yaml');
@@ -180,6 +192,12 @@ export class StateManager {
       shas: {},
     };
 
+    // Restore ETag cache from persisted state so conditional requests work
+    // across process restarts, not just within a single session.
+    if (cache._etags && typeof cache._etags === 'object') {
+      etagCache.load(cache._etags);
+    }
+
     this.lastSync = new Date();
     this.dirty = false;
   }
@@ -203,6 +221,9 @@ export class StateManager {
 
     // Save quality results
     await this.saveJsonLines('state/quality.jsonl', this.data.state.quality);
+
+    // Persist ETag map so conditional requests survive process restarts.
+    this.data.state.cache._etags = etagCache.snapshot();
 
     // Save cache
     await this.saveJson('state/cache.json', this.data.state.cache);
@@ -318,6 +339,38 @@ export class StateManager {
 
   getCache(key: string): any {
     return this.data?.state.cache[key];
+  }
+
+  // ========== Sweep Cursor ==========
+
+  getSweepCursor(): SweepCursor | null {
+    return this.data?.state.cache['_sweepCursor'] ?? null;
+  }
+
+  setSweepCursor(cursor: SweepCursor): void {
+    if (!this.data) return;
+    this.data.state.cache['_sweepCursor'] = cursor;
+    this.dirty = true;
+  }
+
+  clearSweepCursor(): void {
+    if (!this.data) return;
+    delete this.data.state.cache['_sweepCursor'];
+    this.dirty = true;
+  }
+
+  /** Record when a repo was last successfully swept (ISO string). */
+  setLastSweptAt(fullName: string, ts: string): void {
+    if (!this.data) return;
+    const map: Record<string, string> = this.data.state.cache['_lastSwept'] ?? {};
+    map[fullName] = ts;
+    this.data.state.cache['_lastSwept'] = map;
+    this.dirty = true;
+  }
+
+  /** Return ISO timestamp of last successful sweep for a repo, or null. */
+  getLastSweptAt(fullName: string): string | null {
+    return this.data?.state.cache['_lastSwept']?.[fullName] ?? null;
   }
 
   // ========== RFC Operations ==========

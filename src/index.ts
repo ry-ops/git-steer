@@ -146,7 +146,7 @@ export class GitSteer {
     const status = {
       github: {
         authenticated: this.github?.isAuthenticated() || false,
-        rateLimit: await this.github?.getRateLimit(),
+        rateLimit: this.github?.isAuthenticated() ? await this.github.getRateLimit() : null,
       },
       state: {
         repo: this.stateRepo,

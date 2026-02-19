@@ -6,6 +6,51 @@
  */
 
 import { App, Octokit } from 'octokit';
+import { throttling } from '@octokit/plugin-throttling';
+import { retry } from '@octokit/plugin-retry';
+import { writeLimit } from '../core/concurrency.js';
+import { etagCache, ETagCache } from '../core/etag-cache.js';
+
+/**
+ * Octokit with throttling and retry plugins wired in.
+ *
+ * onRateLimit   — primary rate limit (429). Retries up to 4 times,
+ *                 honouring the Retry-After interval supplied by GitHub.
+ * onSecondaryRateLimit — abuse / secondary rate limit (403 with
+ *                 x-github-sse-secondary-rate-limit header). Always
+ *                 backs off and retries; GitHub's guidance is to never
+ *                 skip secondary-rate-limit responses.
+ */
+/** Mutable counters written by throttle callbacks and read by GitHubClient. */
+const throttleStats = {
+  isSecondaryLimitHit: false,
+  retryCount: 0,
+  backoffMs: 0,
+};
+
+const ThrottledOctokit = Octokit.plugin(throttling, retry).defaults({
+  throttle: {
+    onRateLimit(retryAfter: number, options: Record<string, unknown>, _octokit: unknown, retryCount: number): boolean {
+      throttleStats.retryCount += 1;
+      throttleStats.backoffMs += retryAfter * 1000;
+      console.warn(
+        `[git-steer] Primary rate limit hit for ${options.method} ${options.url}. ` +
+        `Retry-After: ${retryAfter}s (attempt ${retryCount + 1}/4)`
+      );
+      return retryCount < 4;
+    },
+    onSecondaryRateLimit(retryAfter: number, options: Record<string, unknown>, _octokit: unknown): boolean {
+      throttleStats.isSecondaryLimitHit = true;
+      throttleStats.retryCount += 1;
+      throttleStats.backoffMs += retryAfter * 1000;
+      console.warn(
+        `[git-steer] Secondary rate limit hit for ${options.method} ${options.url}. ` +
+        `Backing off ${retryAfter}s and retrying.`
+      );
+      return true;
+    },
+  },
+});
 
 export interface GitHubClientConfig {
   appId: string;
@@ -30,6 +75,19 @@ export interface BranchInfo {
   merged: boolean;
 }
 
+export interface RateLimitBucket {
+  remaining: number;
+  limit: number;
+  reset: Date;
+  percentRemaining: number;
+}
+
+export interface RateLimitSnapshot {
+  buckets: Record<string, RateLimitBucket>;
+  fetchedAt: Date;
+  warnings: string[]; // buckets below 15% threshold
+}
+
 export class GitHubClient {
   private app: App;
   private octokit: Octokit | null = null;
@@ -40,6 +98,7 @@ export class GitHubClient {
     this.app = new App({
       appId: config.appId,
       privateKey: config.privateKey,
+      Octokit: ThrottledOctokit,
     });
     this.installationId = parseInt(config.installationId, 10);
     if (isNaN(this.installationId) || this.installationId <= 0) {
@@ -61,6 +120,18 @@ export class GitHubClient {
     return this.authenticated;
   }
 
+  /**
+   * Return accumulated throttle telemetry since the last call, then reset counters.
+   * Called by the MCP handler after each tool execution to attach to audit entries.
+   */
+  getAndResetThrottleStats(): { isSecondaryLimitHit: boolean; retryCount: number; backoffMs: number } {
+    const snapshot = { ...throttleStats };
+    throttleStats.isSecondaryLimitHit = false;
+    throttleStats.retryCount = 0;
+    throttleStats.backoffMs = 0;
+    return snapshot;
+  }
+
   private ensureAuth(): Octokit {
     if (!this.octokit) {
       throw new Error('Not authenticated. Call authenticate() first.');
@@ -70,14 +141,27 @@ export class GitHubClient {
 
   // ========== Rate Limits ==========
 
-  async getRateLimit(): Promise<{ remaining: number; limit: number; reset: Date }> {
+  async getRateLimit(): Promise<RateLimitSnapshot> {
     const octokit = this.ensureAuth();
     const { data } = await octokit.request('GET /rate_limit');
-    return {
-      remaining: data.resources.core.remaining,
-      limit: data.resources.core.limit,
-      reset: new Date(data.resources.core.reset * 1000),
-    };
+
+    const buckets: Record<string, RateLimitBucket> = {};
+    const warnings: string[] = [];
+
+    for (const [name, resource] of Object.entries(data.resources) as Array<[string, { remaining: number; limit: number; reset: number }]>) {
+      const pct = resource.limit > 0 ? resource.remaining / resource.limit : 1;
+      buckets[name] = {
+        remaining: resource.remaining,
+        limit: resource.limit,
+        reset: new Date(resource.reset * 1000),
+        percentRemaining: Math.round(pct * 100),
+      };
+      if (pct < 0.15) {
+        warnings.push(`${name}: ${resource.remaining}/${resource.limit} remaining (resets ${new Date(resource.reset * 1000).toISOString()})`);
+      }
+    }
+
+    return { buckets, fetchedAt: new Date(), warnings };
   }
 
   // ========== Repository Operations ==========
@@ -576,23 +660,47 @@ export class GitHubClient {
     path: string
   ): Promise<{ content: string; sha: string }> {
     const octokit = this.ensureAuth();
-    const { data } = await octokit.request(
-      'GET /repos/{owner}/{repo}/contents/{path}',
-      {
-        owner,
-        repo,
-        path,
+    const cacheKey = ETagCache.key(owner, repo, path);
+    const storedETag = etagCache.getETag(cacheKey);
+
+    try {
+      const response = await octokit.request(
+        'GET /repos/{owner}/{repo}/contents/{path}',
+        {
+          owner,
+          repo,
+          path,
+          headers: storedETag ? { 'If-None-Match': storedETag } : {},
+        }
+      );
+
+      const { data, headers } = response as typeof response & { headers: Record<string, string> };
+
+      if (Array.isArray(data) || data.type !== 'file') {
+        throw new Error(`${path} is not a file`);
       }
-    );
 
-    if (Array.isArray(data) || data.type !== 'file') {
-      throw new Error(`${path} is not a file`);
+      const decoded = Buffer.from(data.content, 'base64').toString('utf-8');
+
+      // Store ETag for next request (strip surrounding quotes if present)
+      const etag = (headers['etag'] || '').replace(/^"|"$/g, '');
+      if (etag) {
+        etagCache.set(cacheKey, etag, decoded, data.sha);
+      }
+
+      return { content: decoded, sha: data.sha };
+    } catch (error: any) {
+      // Octokit throws a RequestError with status 304 for Not Modified.
+      // Return the cached value — the file hasn't changed.
+      if (error.status === 304) {
+        const cached = etagCache.hit(cacheKey);
+        if (cached) return cached;
+        // Cache miss despite 304 (shouldn't happen) — re-fetch without ETag
+        etagCache.invalidate(cacheKey);
+        return this.getFileContent(owner, repo, path);
+      }
+      throw error;
     }
-
-    return {
-      content: Buffer.from(data.content, 'base64').toString('utf-8'),
-      sha: data.sha,
-    };
   }
 
   async updateFileContent(
@@ -623,6 +731,9 @@ export class GitHubClient {
       content: Buffer.from(content).toString('base64'),
       sha,
     });
+
+    // Invalidate ETag — the file has changed, next read must fetch fresh.
+    etagCache.invalidate(ETagCache.key(owner, repo, path));
   }
 
   // ========== Security Operations (Extended) ==========
@@ -815,43 +926,42 @@ export class GitHubClient {
       { owner, repo, commit_sha: baseSha }
     );
 
-    // Create blobs for each file and build tree entries
+    // Create blobs in parallel, capped at writeLimit (2 concurrent) to avoid
+    // triggering GitHub's secondary rate limit on Git Data API writes.
     const treeEntries: Array<{
       path: string;
       mode: '100644' | '100755' | '040000' | '160000' | '120000';
       type: 'blob' | 'tree' | 'commit';
       sha?: string | null;
-    }> = [];
-
-    for (const file of options.files) {
-      if (file.delete) {
-        // To delete, set sha to null
-        treeEntries.push({
-          path: file.path,
-          mode: '100644',
-          type: 'blob',
-          sha: null,
-        });
-      } else {
-        // Create blob for file content
-        const { data: blob } = await octokit.request(
-          'POST /repos/{owner}/{repo}/git/blobs',
-          {
-            owner,
-            repo,
-            content: Buffer.from(file.content).toString('base64'),
-            encoding: 'base64',
+    }> = await Promise.all(
+      options.files.map((file) =>
+        writeLimit(async () => {
+          if (file.delete) {
+            return {
+              path: file.path,
+              mode: '100644' as const,
+              type: 'blob' as const,
+              sha: null,
+            };
           }
-        );
-
-        treeEntries.push({
-          path: file.path,
-          mode: '100644',
-          type: 'blob',
-          sha: blob.sha,
-        });
-      }
-    }
+          const { data: blob } = await octokit.request(
+            'POST /repos/{owner}/{repo}/git/blobs',
+            {
+              owner,
+              repo,
+              content: Buffer.from(file.content).toString('base64'),
+              encoding: 'base64',
+            }
+          );
+          return {
+            path: file.path,
+            mode: '100644' as const,
+            type: 'blob' as const,
+            sha: blob.sha,
+          };
+        })
+      )
+    );
 
     // Create new tree
     const { data: newTree } = await octokit.request(
@@ -909,22 +1019,38 @@ export class GitHubClient {
     ref?: string
   ): Promise<{ content: string; sha: string } | null> {
     const octokit = this.ensureAuth();
+    const cacheKey = ETagCache.key(owner, repo, path, ref);
+    const storedETag = etagCache.getETag(cacheKey);
 
     try {
-      const { data } = await octokit.request(
+      const response = await octokit.request(
         'GET /repos/{owner}/{repo}/contents/{path}',
-        { owner, repo, path, ref }
+        {
+          owner,
+          repo,
+          path,
+          ref,
+          headers: storedETag ? { 'If-None-Match': storedETag } : {},
+        }
       );
+
+      const { data, headers } = response as typeof response & { headers: Record<string, string> };
 
       if (Array.isArray(data) || data.type !== 'file') {
         return null;
       }
 
-      return {
-        content: Buffer.from(data.content, 'base64').toString('utf-8'),
-        sha: data.sha,
-      };
+      const decoded = Buffer.from(data.content, 'base64').toString('utf-8');
+      const etag = (headers['etag'] || '').replace(/^"|"$/g, '');
+      if (etag) {
+        etagCache.set(cacheKey, etag, decoded, data.sha);
+      }
+
+      return { content: decoded, sha: data.sha };
     } catch (error: any) {
+      if (error.status === 304) {
+        return etagCache.hit(cacheKey);
+      }
       if (error.status === 404) {
         return null;
       }
@@ -1162,5 +1288,172 @@ export class GitHubClient {
       }
       throw error;
     }
+  }
+
+  // ========== GraphQL Methods ==========
+
+  /**
+   * Hot path 1 — Owner resolution.
+   *
+   * Replaces the `listRepos()` call in StateManager.load() that paginates
+   * GET /installation/repositories just to find the viewer's login.
+   * One GraphQL round-trip instead of 1-N paginated REST pages.
+   */
+  async getViewerLogin(): Promise<string> {
+    const octokit = this.ensureAuth();
+    const result = await octokit.graphql<{ viewer: { login: string } }>(
+      `query { viewer { login } }`
+    );
+    return result.viewer.login;
+  }
+
+  /**
+   * Hot path 2 — Branch listing with real commit dates.
+   *
+   * Replaces `listBranches()` (REST paginated, commit dates wrong) with a
+   * GraphQL query that returns branch names, protection status, and the
+   * actual committedDate from the branch tip commit — all in one call.
+   * Up to 100 branches per call; falls back to REST for repos with >100.
+   */
+  async listBranchesGraphQL(owner: string, repo: string): Promise<BranchInfo[]> {
+    const octokit = this.ensureAuth();
+
+    const result = await octokit.graphql<{
+      repository: {
+        refs: {
+          nodes: Array<{
+            name: string;
+            branchProtectionRule: { id: string } | null;
+            target: {
+              oid: string;
+              // Only present when target is a Commit
+              committedDate?: string;
+            };
+          }>;
+          pageInfo: { hasNextPage: boolean };
+        };
+      };
+    }>(
+      `query listBranches($owner: String!, $repo: String!) {
+        repository(owner: $owner, name: $repo) {
+          refs(refPrefix: "refs/heads/", first: 100, orderBy: { field: TAG_COMMIT_DATE, direction: DESC }) {
+            nodes {
+              name
+              branchProtectionRule { id }
+              target {
+                oid
+                ... on Commit { committedDate }
+              }
+            }
+            pageInfo { hasNextPage }
+          }
+        }
+      }`,
+      { owner, repo }
+    );
+
+    const nodes = result.repository?.refs?.nodes ?? [];
+
+    // If >100 branches exist fall back to REST so nothing is silently truncated.
+    if (result.repository?.refs?.pageInfo?.hasNextPage) {
+      return this.listBranches(owner, repo);
+    }
+
+    return nodes.map((node) => ({
+      name: node.name,
+      protected: node.branchProtectionRule !== null,
+      lastCommit: node.target.oid,
+      lastCommitDate: node.target.committedDate
+        ? new Date(node.target.committedDate)
+        : new Date(0),
+      merged: false,
+    }));
+  }
+
+  /**
+   * Hot path 3 — Multi-repo vulnerability scan via GraphQL.
+   *
+   * Fetches Dependabot (vulnerabilityAlerts) for up to 20 repos in a single
+   * GraphQL call using aliased repository fields. Replaces one REST call per
+   * repo with a single round-trip for the entire batch.
+   *
+   * Code-scanning alerts have no GraphQL equivalent and are still fetched
+   * via REST (getCodeScanningAlerts) — but those are already parallelised
+   * in the sweep scan phase with readLimit.
+   *
+   * Returns a map of `owner/repo` → alert array.
+   */
+  async getVulnerabilityAlertsBatch(
+    repos: Array<{ owner: string; name: string }>
+  ): Promise<Record<string, Array<{
+    id: number;
+    state: string;
+    severity: string;
+    package: string;
+    currentVersion: string;
+    fixVersion: string | null;
+    cve: string | null;
+    summary: string;
+    manifestPath: string;
+    url: string;
+  }>>> {
+    const octokit = this.ensureAuth();
+
+    // Build aliased fields — GraphQL doesn't support dynamic keys so we alias
+    // each repo as r0, r1, ... and map back by index.
+    const fields = repos
+      .map(
+        (r, i) =>
+          `r${i}: repository(owner: ${JSON.stringify(r.owner)}, name: ${JSON.stringify(r.name)}) {
+            vulnerabilityAlerts(first: 100, states: [OPEN]) {
+              nodes {
+                number
+                state
+                securityAdvisory { cvss { score } severity summary cveId }
+                securityVulnerability {
+                  package { name }
+                  vulnerableVersionRange
+                  firstPatchedVersion { identifier }
+                }
+                dependencyScope
+                vulnerableManifestPath
+                permalink
+              }
+            }
+          }`
+      )
+      .join('\n');
+
+    const query = `query batchVulnAlerts { ${fields} }`;
+
+    let raw: Record<string, any>;
+    try {
+      raw = await octokit.graphql<Record<string, any>>(query);
+    } catch {
+      // GraphQL errors (e.g. missing permission) — return empty map so callers
+      // fall back gracefully rather than crashing the sweep.
+      return {};
+    }
+
+    const result: ReturnType<typeof this.getVulnerabilityAlertsBatch> extends Promise<infer T> ? T : never = {};
+
+    for (let i = 0; i < repos.length; i++) {
+      const key = `${repos[i].owner}/${repos[i].name}`;
+      const nodes: any[] = raw[`r${i}`]?.vulnerabilityAlerts?.nodes ?? [];
+      result[key] = nodes.map((n) => ({
+        id: n.number,
+        state: (n.state as string).toLowerCase(),
+        severity: (n.securityAdvisory?.severity ?? 'unknown').toLowerCase(),
+        package: n.securityVulnerability?.package?.name ?? 'unknown',
+        currentVersion: n.securityVulnerability?.vulnerableVersionRange ?? 'unknown',
+        fixVersion: n.securityVulnerability?.firstPatchedVersion?.identifier ?? null,
+        cve: n.securityAdvisory?.cveId ?? null,
+        summary: n.securityAdvisory?.summary ?? 'Unknown vulnerability',
+        manifestPath: n.vulnerableManifestPath ?? 'unknown',
+        url: n.permalink ?? '',
+      }));
+    }
+
+    return result;
   }
 }
