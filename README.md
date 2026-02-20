@@ -26,7 +26,8 @@ Nothing lives locally — no cloned repos, no config files, no build artifacts. 
 │     - GitHub App private key                                    │
 │     - App ID / Installation ID                                  │
 │                                                                 │
-│   $ npx git-steer                                               │
+│   $ npx git-steer                  (stdio → Claude Desktop)     │
+│   $ npx git-steer --http           (portal → localhost:3333)    │
 │         │                                                       │
 │         ├─► Pulls itself from ry-ops/git-steer                  │
 │         ├─► Pulls state from ry-ops/git-steer-state             │
@@ -446,17 +447,47 @@ For the security-fix workflow to authenticate to target repos, add these secrets
 
 These allow the workflow to generate installation tokens for any repo in your installation.
 
+## Local Portal
+
+git-steer includes an HTTP/SSE transport mode that exposes the MCP server as a local web portal:
+
+```bash
+# Start portal on default port 3333
+git-steer start --http
+
+# Custom port
+git-steer start --http --port 8080
+```
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  LOCAL PORTAL  →  http://localhost:3333                         │
+│                                                                 │
+│  Same MCP tools, same GitHub state — accessible via HTTP/SSE    │
+│  instead of Claude Desktop stdio.                               │
+│                                                                 │
+│  Use cases:                                                     │
+│    - Connect any MCP-compatible client (not just Claude)        │
+│    - Run git-steer headless on a server or NAS                  │
+│    - Script against the MCP API directly                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+The portal uses the same Keychain credentials, same state repo, and same rate-limit-hardened API stack as stdio mode. No extra setup required.
+
 ## Commands
 
 ```bash
-git-steer init     # First-time setup
-git-steer          # Start MCP server (default)
-git-steer scan     # Run security scan across all repos
-git-steer scan --repo owner/name  # Scan a specific repo
-git-steer scan --severity critical  # Filter by severity
-git-steer status   # Show status + rate limit budget
-git-steer sync     # Force sync state to GitHub
-git-steer reset    # Remove local credentials
+git-steer init                       # First-time setup
+git-steer                            # Start MCP server via stdio (Claude Desktop)
+git-steer start --http               # Start local portal on port 3333
+git-steer start --http --port 8080   # Start portal on custom port
+git-steer scan                       # Run security scan across all repos
+git-steer scan --repo owner/name     # Scan a specific repo
+git-steer scan --severity critical   # Filter by severity
+git-steer status                     # Show status + rate limit budget
+git-steer sync                       # Force sync state to GitHub
+git-steer reset                      # Remove local credentials
 ```
 
 ## Release History
