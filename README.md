@@ -1,10 +1,10 @@
 # git-steer
 
-<img src="https://github.com/ry-ops/git-steer/blob/main/git-steer.png" width="100%">
+<img src="git-steer-banner.svg" width="100%">
 
 **Self-hosting GitHub autonomy engine.** A skid steer for your repos.
 
-git-steer gives you 100% autonomous control over your GitHub account through a Model Context Protocol (MCP) server. Manage repos, branches, security, Actions—everything—through natural language.
+git-steer gives you 100% autonomous control over your GitHub account through a Model Context Protocol (MCP) server. Manage repos, branches, security, Actions — everything — through natural language. Rate-limit-hardened from the ground up: ETag caching, GraphQL batching, concurrency caps, and chunked execution keep it well inside GitHub's API guardrails at any fleet size.
 
 ## Philosophy: Zero Footprint
 
@@ -16,10 +16,11 @@ Nothing lives locally — no cloned repos, no config files, no build artifacts. 
 - **Keychain only**: GitHub App credentials in macOS Keychain — nothing else on disk
 - **Git as database**: All config, state, and audit logs live in a private GitHub repo
 - **Actions as compute**: Dependency fixes, linting, and PRs happen in ephemeral cloud runners
+- **Rate-limit-hardened**: Throttle/retry plugins, ETag caching, GraphQL batching, concurrency caps — safe at any fleet size
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        YOUR PC or MAC                           │
+│                        YOUR MAC                                 │
 │                                                                 │
 │   Keychain:                                                     │
 │     - GitHub App private key                                    │
@@ -29,10 +30,13 @@ Nothing lives locally — no cloned repos, no config files, no build artifacts. 
 │         │                                                       │
 │         ├─► Pulls itself from ry-ops/git-steer                  │
 │         ├─► Pulls state from ry-ops/git-steer-state             │
-│         ├─► Runs MCP server in-memory                           │
+│         ├─► Runs MCP server in-memory (rate-limit-aware)        │
 │         └─► Commits state changes back on shutdown              │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
+                               │
+                    Throttled, ETag-cached,
+                    GraphQL-batched API calls
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -47,10 +51,10 @@ Nothing lives locally — no cloned repos, no config files, no build artifacts. 
 │   │   └── managed-repos.yaml    (what git-steer controls)       │
 │   ├── state/                                                    │
 │   │   ├── jobs.jsonl            (job history, append-only)      │
-│   │   ├── audit.jsonl           (action log)                    │
+│   │   ├── audit.jsonl           (action log + rate telemetry)   │
 │   │   ├── rfcs.jsonl            (RFC lifecycle tracking)        │
 │   │   ├── quality.jsonl         (linter/SAST results)           │
-│   │   └── cache.json            (rate limits, etags)            │
+│   │   └── cache.json            (ETag map + sweep cursor)       │
 │   └── .github/workflows/                                        │
 │       └── heartbeat.yml         (scheduled triggers)            │
 │                                                                 │
@@ -127,9 +131,9 @@ That's it. No config files. No dotfiles. No `~/.git-steer`. No cloned repos.
 - `repo_settings` - Update repo settings
 
 ### Branch Operations
-- `branch_list` - List branches with staleness info
+- `branch_list` - List branches with staleness info *(GraphQL-batched)*
 - `branch_protect` - Apply protection rules
-- `branch_reap` - Delete stale/merged branches
+- `branch_reap` - Delete stale/merged branches *(GraphQL-batched)*
 
 ### Security
 - `security_scan` - Scan repos for vulnerabilities with fix info
@@ -139,8 +143,8 @@ That's it. No config files. No dotfiles. No `~/.git-steer`. No cloned repos.
 - `security_digest` - Summary across all managed repos
 - `security_enforce` - Ensure Dependabot alerts + automated fixes are enabled on all managed repos
 
-### Autonomous Security Operations (v0.2.0)
-- `security_sweep` - **Full autonomous pipeline**: scan repos, create RFC issues, dispatch fix workflows, and track everything — in one call
+### Autonomous Security Operations (v0.3.0)
+- `security_sweep` - **Full autonomous pipeline**: scan repos, create RFC issues, dispatch fix workflows, track everything — in one call. Supports **chunked execution** for large fleets and **resume** across sessions
 - `code_quality_sweep` - Run linters/SAST (ESLint, Ruff, gosec, Bandit) on repos via GitHub Actions
 - `report_generate` - Generate compliance reports (executive summary, change records, vulnerability report, full audit)
 - `dashboard_generate` - Generate an interactive BI-style security dashboard, deployed to GitHub Pages
@@ -153,23 +157,104 @@ That's it. No config files. No dotfiles. No `~/.git-steer`. No cloned repos.
 
 ### File Operations
 - `repo_commit` - Commit files directly via GitHub API (no local clone)
-- `repo_read_file` - Read a file from a repository
+- `repo_read_file` - Read a file from a repository *(ETag-cached)*
 - `repo_list_files` - List files in a directory
 
 ### Code Review
 - `code_review` - Run AI-powered code review using CodeRabbit CLI
 
-### Configuration
+### Configuration & Observability
 - `config_show` - Display current config
 - `config_add_repo` - Add repo to managed list (auto-enables Dependabot)
 - `config_remove_repo` - Remove from managed list
-- `steer_status` - Health and rate limits
+- `steer_status` - Health check with **full rate limit budget** (all buckets, % remaining, warnings)
 - `steer_sync` - Force save state to GitHub
-- `steer_logs` - View audit log
+- `steer_logs` - View audit log with rate limit telemetry
+
+## v0.3.0: Rate-Limit Hardened
+
+v0.3.0 is a full API safety overhaul. git-steer now operates conservatively enough to run on large fleets without triggering GitHub's secondary rate limits or abuse detection.
+
+### What Changed
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  API SAFETY STACK (v0.3.0)                                      │
+│                                                                 │
+│  Layer 1 — Throttle/Retry plugins                               │
+│    Primary rate limit (429)   → auto-retry up to 4×             │
+│    Secondary rate limit (403) → always back off + retry         │
+│    Transient 5xx / network    → exponential backoff             │
+│                                                                 │
+│  Layer 2 — Concurrency caps (p-limit)                           │
+│    Write ops (issues, PRs, blobs)  → max 2 concurrent           │
+│    Read ops (scans, fetches, lists) → max 8 concurrent          │
+│    Search API                       → max 1 (serial)            │
+│                                                                 │
+│  Layer 3 — ETag conditional caching                             │
+│    Contents API reads send If-None-Match                        │
+│    304 Not Modified → cached content, reduced rate cost         │
+│    ETag map persisted to cache.json across restarts             │
+│                                                                 │
+│  Layer 4 — GraphQL batching                                     │
+│    Owner resolution  → viewer { login }  (1 call, not N)        │
+│    Branch listing    → refs query        (1 call, not N)        │
+│    Dependabot alerts → aliased batch     (1 call, not N)        │
+│                                                                 │
+│  Layer 5 — Rate budget visibility                               │
+│    steer_status shows all buckets + % remaining + warnings      │
+│    Refreshed at startup and every 30 minutes                    │
+│    Warns if any bucket falls below 15%                          │
+│                                                                 │
+│  Layer 6 — Audit telemetry                                      │
+│    Every audit.jsonl entry carries:                             │
+│      rate_remaining, rate_reset,                                │
+│      is_secondary_limit_hit, retry_count, backoff_ms            │
+│                                                                 │
+│  Layer 7 — Chunked sweep + cursor                               │
+│    security_sweep(chunkSize: 10) → processes 10 repos           │
+│    security_sweep(resume: true)  → continues from cursor        │
+│    Cursor persisted to cache.json between sessions              │
+│    skipRecentHours → skip repos swept within N hours            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### security_sweep: Now Fleet-Safe
+
+```
+# Process a large fleet in chunks of 10 — safe on any account size
+security_sweep({ severity: "critical", chunkSize: 10 })
+→ { hasMore: true, nextIndex: 10, totalRepos: 47, ... }
+
+# Resume from where you left off (cursor persisted to GitHub)
+security_sweep({ resume: true })
+→ { hasMore: true, nextIndex: 20, totalRepos: 47, ... }
+
+# Skip repos swept in the last 6 hours (polling-fallback)
+security_sweep({ skipRecentHours: 6 })
+```
+
+### Rate Limit Visibility
+
+```
+steer_status()
+→ {
+    rateLimit: {
+      buckets: {
+        core:          { remaining: 4823, limit: 5000, percentRemaining: 96 },
+        graphql:       { remaining: 4950, limit: 5000, percentRemaining: 99 },
+        search:        { remaining: 28,   limit: 30,   percentRemaining: 93 },
+        code_scanning: { remaining: 999,  limit: 1000, percentRemaining: 99 }
+      },
+      warnings: [],        // populated when any bucket < 15%
+      hasWarnings: false
+    }
+  }
+```
 
 ## v0.2.0: Autonomous Security Operations
 
-v0.2.0 adds a fully autonomous security pipeline that replaces manual repo-by-repo CVE sweeps with a single tool call.
+v0.2.0 added a fully autonomous security pipeline replacing manual repo-by-repo CVE sweeps with a single tool call.
 
 ### Security Sweep Pipeline
 
@@ -178,7 +263,7 @@ security_sweep(severity: "high", repos: ["org/app1", "org/app2"])
 ```
 
 What happens:
-1. Scans each repo for Dependabot alerts + CodeQL findings
+1. Scans each repo for Dependabot alerts + CodeQL findings *(GraphQL-batched)*
 2. Creates ITIL-formatted RFC issues with CVE tables and risk assessments
 3. Dispatches a GitHub Actions workflow that fixes dependencies across all repos in parallel
 4. Workflow creates branches, commits fixes, opens PRs linked to RFC issues
@@ -282,16 +367,6 @@ Security PRs are tracked to completion automatically. The follow-up step:
 
 Merged PRs across all managed repos are automatically turned into changelog entries and committed to the [blog repo](https://ry-ops.dev/changelog/). The pipeline classifies PRs (feature/fix/improvement), generates frontmatter, and deduplicates by filename.
 
-You can also trigger a manual refresh from:
-- The dashboard's **Run Security Scan** button (dispatches the workflow)
-- GitHub Actions UI → Heartbeat → Run workflow → `dashboard-refresh`
-
-### Release Strategy
-
-- `npx git-steer@0.1` — v0.1.x stable (manual security ops)
-- `npx git-steer@0.2` — v0.2.x (autonomous security ops)
-- `npx git-steer@latest` — latest version
-
 ## Example Usage
 
 ```
@@ -306,6 +381,12 @@ Claude: [calls security_fix_pr - dispatches workflow to GitHub Actions]
 
 You: "Check the status of the fix"
 Claude: [calls workflow_status]
+
+You: "Run a security sweep across all managed repos, 10 at a time"
+Claude: [calls security_sweep with chunkSize=10, then resumes until done]
+
+You: "What's my API rate limit headroom?"
+Claude: [calls steer_status - shows all buckets with % remaining]
 
 You: "Delete all branches older than 60 days in mcp-unifi, except main"
 Claude: [calls branch_reap with daysStale=60, exclude=['main']]
@@ -373,22 +454,38 @@ git-steer          # Start MCP server (default)
 git-steer scan     # Run security scan across all repos
 git-steer scan --repo owner/name  # Scan a specific repo
 git-steer scan --severity critical  # Filter by severity
-git-steer status   # Show status
+git-steer status   # Show status + rate limit budget
 git-steer sync     # Force sync state to GitHub
 git-steer reset    # Remove local credentials
 ```
 
+## Release History
+
+| Version | Highlights |
+|---------|------------|
+| `v0.3.0` | Rate-limit hardening: throttle/retry plugins, p-limit concurrency caps, ETag caching, GraphQL batching, chunked sweep with cursor, full audit telemetry |
+| `v0.2.0` | Autonomous security pipeline: sweep → RFC → fix PR → track MTTR. Dashboard, reports, code quality sweep |
+| `v0.1.0` | Manual security ops, branch management, repo settings, MCP server core |
+
+```bash
+npx git-steer@0.3   # v0.3.x (rate-limit hardened)
+npx git-steer@0.2   # v0.2.x (autonomous security ops)
+npx git-steer@0.1   # v0.1.x (manual security ops)
+npx git-steer       # latest
+```
+
 ## Offline Behavior
 
-When offline, git-steer runs in read-only mode with cached state. Write operations queue until next online session.
+When offline, git-steer runs in read-only mode with cached state. Write operations queue until next online session. ETag cache remains valid across offline periods.
 
 ## Security
 
-- All GitHub API access through a dedicated GitHub App
+- All GitHub API access through a dedicated GitHub App (not your personal token)
 - Credentials stored in macOS Keychain (syncs via iCloud Keychain if enabled)
-- Full audit log of all actions in state repo
+- Full audit log of all actions with rate limit telemetry in state repo
 - No secrets in code or config files
-- No code stored locally - everything ephemeral
+- No code stored locally — everything ephemeral
+- SSH commit signing enforced on main branch
 
 ## License
 

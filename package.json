@@ -1,6 +1,6 @@
 {
   "name": "git-steer",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Self-hosting GitHub autonomy engine. The skid steer for your repos.",
   "author": "ry-ops",
   "license": "MIT",
