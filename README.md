@@ -463,17 +463,21 @@ git-steer start --http --port 8080
 ┌─────────────────────────────────────────────────────────────────┐
 │  LOCAL PORTAL  →  http://localhost:3333                         │
 │                                                                 │
-│  Same MCP tools, same GitHub state — accessible via HTTP/SSE    │
-│  instead of Claude Desktop stdio.                               │
+│  /dashboard   Live security dashboard (rendered from state)     │
+│  /mcp         Streamable HTTP MCP endpoint (protocol 2025-11)   │
+│  /sse         Legacy SSE MCP endpoint    (protocol 2024-11)     │
+│  /messages    Legacy POST endpoint for SSE clients              │
+│  /health      JSON status + active session count                │
 │                                                                 │
 │  Use cases:                                                     │
+│    - View the security dashboard without deploying to Pages     │
 │    - Connect any MCP-compatible client (not just Claude)        │
 │    - Run git-steer headless on a server or NAS                  │
 │    - Script against the MCP API directly                        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-The portal uses the same Keychain credentials, same state repo, and same rate-limit-hardened API stack as stdio mode. No extra setup required.
+The portal uses the same Keychain credentials, same state repo, and same rate-limit-hardened API stack as stdio mode. The dashboard at `/dashboard` renders live from in-memory state on every request — no GitHub Pages deployment needed.
 
 ## Commands
 

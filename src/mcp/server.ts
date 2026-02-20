@@ -7,6 +7,10 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -22,6 +26,8 @@ import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { randomUUID } from 'crypto';
+import type { IncomingMessage, ServerResponse } from 'http';
 
 const require = createRequire(import.meta.url);
 const { version: VERSION } = require('../../package.json');
@@ -710,6 +716,9 @@ export class MCPServer {
   private config: MCPServerConfig;
   private rateLimitCache: RateLimitSnapshot | null = null;
   private rateLimitTimer: ReturnType<typeof setInterval> | null = null;
+  private httpServer: import('http').Server | null = null;
+  // Active transports keyed by session ID (HTTP mode only)
+  private transports: Record<string, SSEServerTransport | StreamableHTTPServerTransport> = {};
 
   constructor(config: MCPServerConfig) {
     this.config = config;
@@ -1962,9 +1971,124 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
       const transport = new StdioServerTransport();
       await this.server.connect(transport);
     } else {
-      // HTTP/SSE transport would go here
-      throw new Error('HTTP transport not yet implemented');
+      await this.startHttpServer(this.config.port ?? 3333);
     }
+  }
+
+  private async startHttpServer(port: number): Promise<void> {
+    // createMcpExpressApp returns an Express app pre-wired with:
+    //   - express.json() body parser
+    //   - localhost-only DNS rebinding protection
+    const app = createMcpExpressApp();
+
+    // ── Streamable HTTP transport (MCP protocol 2025-11-25) ──────────────────
+    // Single endpoint handles GET (SSE stream), POST (messages), DELETE (close)
+    app.all('/mcp', async (req: IncomingMessage & { body?: unknown }, res: ServerResponse) => {
+      try {
+        const sessionId = (req as any).headers?.['mcp-session-id'] as string | undefined;
+        let transport: StreamableHTTPServerTransport;
+
+        if (sessionId && this.transports[sessionId] instanceof StreamableHTTPServerTransport) {
+          transport = this.transports[sessionId] as StreamableHTTPServerTransport;
+        } else if (!sessionId && (req as any).method === 'POST' && isInitializeRequest((req as any).body)) {
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (sid) => {
+              this.transports[sid] = transport;
+            },
+          });
+          transport.onclose = () => {
+            const sid = transport.sessionId;
+            if (sid) delete this.transports[sid];
+          };
+          await this.server.connect(transport);
+        } else {
+          (res as any).status(400).json({
+            jsonrpc: '2.0',
+            error: { code: -32000, message: 'Bad Request: no valid session' },
+            id: null,
+          });
+          return;
+        }
+
+        await transport.handleRequest(req as any, res as any, (req as any).body);
+      } catch (err) {
+        console.error('[git-steer] HTTP transport error:', err);
+        if (!(res as any).headersSent) {
+          (res as any).status(500).json({
+            jsonrpc: '2.0',
+            error: { code: -32603, message: 'Internal server error' },
+            id: null,
+          });
+        }
+      }
+    });
+
+    // ── Legacy SSE transport (MCP protocol 2024-11-05) ───────────────────────
+    // Kept for backwards compatibility with older MCP clients
+    app.get('/sse', async (_req: IncomingMessage, res: ServerResponse) => {
+      const transport = new SSEServerTransport('/messages', res as any);
+      this.transports[transport.sessionId] = transport;
+      (res as any).on('close', () => delete this.transports[transport.sessionId]);
+      await this.server.connect(transport);
+    });
+
+    app.post('/messages', async (req: IncomingMessage & { body?: unknown }, res: ServerResponse) => {
+      const sessionId = (req as any).query?.sessionId as string | undefined;
+      const transport = sessionId ? this.transports[sessionId] : undefined;
+      if (transport instanceof SSEServerTransport) {
+        await transport.handlePostMessage(req as any, res as any, (req as any).body);
+      } else {
+        (res as any).status(400).send('No SSE transport found for sessionId');
+      }
+    });
+
+    // ── Live dashboard ───────────────────────────────────────────────────────
+    // Renders the security dashboard from current in-memory state on every request.
+    // Same HTML as dashboard_generate() but served locally — no GitHub Pages needed.
+    app.get('/dashboard', (_req: IncomingMessage, res: ServerResponse) => {
+      try {
+        const metrics = this.state.getMetrics();
+        const rfcs = this.state.getRfcs();
+        const quality = this.state.getQualityResults();
+        const html = generateDashboardHtml({ metrics, rfcs, quality });
+        (res as any).setHeader('Content-Type', 'text/html; charset=utf-8');
+        (res as any).send(html);
+      } catch (err) {
+        console.error('[git-steer] Dashboard render error:', err);
+        (res as any).status(500).send('Failed to render dashboard');
+      }
+    });
+
+    // ── Health check ─────────────────────────────────────────────────────────
+    app.get('/health', (_req: IncomingMessage, res: ServerResponse) => {
+      (res as any).json({
+        status: 'ok',
+        version: VERSION,
+        transport: 'http',
+        activeSessions: Object.keys(this.transports).length,
+        endpoints: {
+          dashboard: '/dashboard',
+          streamableHttp: '/mcp',
+          legacySse: '/sse',
+          legacyMessages: '/messages',
+          health: '/health',
+        },
+      });
+    });
+
+    // Start listening
+    await new Promise<void>((resolve, reject) => {
+      this.httpServer = (app as any).listen(port, (err?: Error) => {
+        if (err) return reject(err);
+        console.log(`[git-steer] Portal listening on http://localhost:${port}`);
+        console.log(`[git-steer]   Dashboard       : http://localhost:${port}/dashboard`);
+        console.log(`[git-steer]   Streamable HTTP : http://localhost:${port}/mcp`);
+        console.log(`[git-steer]   Legacy SSE      : http://localhost:${port}/sse`);
+        console.log(`[git-steer]   Health          : http://localhost:${port}/health`);
+        resolve();
+      });
+    });
   }
 
   async stop(): Promise<void> {
@@ -1972,6 +2096,23 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
       clearInterval(this.rateLimitTimer);
       this.rateLimitTimer = null;
     }
+
+    // Close all active HTTP transports
+    for (const [sid, transport] of Object.entries(this.transports)) {
+      try {
+        await transport.close();
+      } catch {
+        // best-effort
+      }
+      delete this.transports[sid];
+    }
+
+    // Close HTTP server if running
+    if (this.httpServer) {
+      await new Promise<void>((resolve) => this.httpServer!.close(() => resolve()));
+      this.httpServer = null;
+    }
+
     await this.server.close();
   }
 }
