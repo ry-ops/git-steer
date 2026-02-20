@@ -1260,6 +1260,7 @@ export function generateDashboardHtml(data: DashboardData): string {
     renderCveTable();
     renderRepoGrid();
     renderQualityTable();
+    renderDonutChart();
   }
 
   function buildFilterPills(container) {
@@ -1310,7 +1311,7 @@ export function generateDashboardHtml(data: DashboardData): string {
   buildFilterPills(document.getElementById('repo-filters'));
 
   // ===== Donut Chart =====
-  (function() {
+  function renderDonutChart() {
     var sev = DATA.metrics.bySeverity;
     var keys = Object.keys(sev);
     var total = keys.reduce(function(s, k) { return s + sev[k].total; }, 0);
@@ -1320,11 +1321,12 @@ export function generateDashboardHtml(data: DashboardData): string {
     }
     var colors = { critical: '#f85149', high: '#db6d28', medium: '#d29922', low: '#3fb950' };
     var cx = 120, cy = 120, r = 90, ir = 55;
-    var svg = '<svg width="320" height="260" viewBox="0 0 320 260" xmlns="http://www.w3.org/2000/svg">';
+    var svg = '<svg width="380" height="260" viewBox="0 0 380 260" xmlns="http://www.w3.org/2000/svg">';
     var angle = -Math.PI / 2;
     keys.forEach(function(k) {
-      var pct = sev[k].total / total;
-      if (pct === 0) return;
+      var count = sev[k].total;
+      if (count === 0) return;
+      var pct = count / total;
       var a1 = angle;
       var a2 = angle + pct * 2 * Math.PI;
       var large = pct > 0.5 ? 1 : 0;
@@ -1332,24 +1334,29 @@ export function generateDashboardHtml(data: DashboardData): string {
       var x2o = cx + r * Math.cos(a2), y2o = cy + r * Math.sin(a2);
       var x1i = cx + ir * Math.cos(a2), y1i = cy + ir * Math.sin(a2);
       var x2i = cx + ir * Math.cos(a1), y2i = cy + ir * Math.sin(a1);
+      var dimmed = activeSeverity !== 'all' && activeSeverity !== k;
       svg += '<path d="M ' + x1o + ' ' + y1o + ' A ' + r + ' ' + r + ' 0 ' + large + ' 1 ' + x2o + ' ' + y2o +
              ' L ' + x1i + ' ' + y1i + ' A ' + ir + ' ' + ir + ' 0 ' + large + ' 0 ' + x2i + ' ' + y2i +
-             ' Z" fill="' + (colors[k] || '#58a6ff') + '">' +
-             '<title>' + k.toUpperCase() + ': ' + sev[k].total + ' (' + Math.round(pct * 100) + '%)</title></path>';
+             ' Z" fill="' + (colors[k] || '#58a6ff') + '" opacity="' + (dimmed ? '0.2' : '1') + '">' +
+             '<title>' + k.toUpperCase() + ': ' + count + ' (' + Math.round(pct * 100) + '%)</title></path>';
       angle = a2;
     });
-    svg += '<text x="' + cx + '" y="' + (cy - 6) + '" text-anchor="middle" font-size="24" font-weight="bold" fill="#e0e0e0">' + total + '</text>';
-    svg += '<text x="' + cx + '" y="' + (cy + 14) + '" text-anchor="middle" font-size="11" fill="#8b949e">Total</text>';
+    var centerCount = activeSeverity === 'all' ? total : (sev[activeSeverity] ? sev[activeSeverity].total : 0);
+    var centerLabel = activeSeverity === 'all' ? 'Total' : activeSeverity.charAt(0).toUpperCase() + activeSeverity.slice(1);
+    svg += '<text x="' + cx + '" y="' + (cy - 6) + '" text-anchor="middle" font-size="24" font-weight="bold" fill="#e0e0e0">' + centerCount + '</text>';
+    svg += '<text x="' + cx + '" y="' + (cy + 14) + '" text-anchor="middle" font-size="11" fill="#8b949e">' + centerLabel + '</text>';
     // Legend
     var ly = 10;
     keys.forEach(function(k) {
-      svg += '<rect x="260" y="' + ly + '" width="10" height="10" rx="2" fill="' + (colors[k] || '#58a6ff') + '"/>';
-      svg += '<text x="275" y="' + (ly + 9) + '" font-size="11" fill="#8b949e">' + k.charAt(0).toUpperCase() + k.slice(1) + ' (' + sev[k].total + ')</text>';
+      var dimmed = activeSeverity !== 'all' && activeSeverity !== k;
+      svg += '<rect x="260" y="' + ly + '" width="10" height="10" rx="2" fill="' + (colors[k] || '#58a6ff') + '" opacity="' + (dimmed ? '0.3' : '1') + '"/>';
+      svg += '<text x="275" y="' + (ly + 9) + '" font-size="11" fill="' + (dimmed ? '#484f58' : '#8b949e') + '">' + k.charAt(0).toUpperCase() + k.slice(1) + ' (' + sev[k].total + ')</text>';
       ly += 20;
     });
     svg += '</svg>';
     document.getElementById('donut-chart').innerHTML = svg;
-  })();
+  }
+  renderDonutChart();
 
   // ===== Timeline Chart =====
   (function() {

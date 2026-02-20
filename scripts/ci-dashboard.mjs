@@ -109,6 +109,46 @@ async function loadRfcs() {
   }
 }
 
+// ===== Load and persist timeline snapshots =====
+async function loadTimeline() {
+  try {
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/contents/{path}',
+      { owner: STATE_OWNER, repo: STATE_REPO, path: 'state/timeline.jsonl' }
+    );
+    const content = Buffer.from(data.content, 'base64').toString('utf8');
+    return content
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+}
+
+async function saveTimeline(entries) {
+  let sha;
+  try {
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/contents/{path}',
+      { owner: STATE_OWNER, repo: STATE_REPO, path: 'state/timeline.jsonl' }
+    );
+    sha = data.sha;
+  } catch {
+    // File doesn't exist yet
+  }
+  const content = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
+  await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+    owner: STATE_OWNER,
+    repo: STATE_REPO,
+    path: 'state/timeline.jsonl',
+    message: `Update timeline snapshot ${new Date().toISOString().split('T')[0]}`,
+    content: Buffer.from(content).toString('base64'),
+    sha,
+    branch: 'main',
+  });
+}
+
 // ===== Load existing quality results =====
 async function loadQuality() {
   try {
@@ -127,7 +167,7 @@ async function loadQuality() {
 }
 
 // ===== Build metrics from scan results and RFCs =====
-function buildMetrics(scanResults, rfcs, repos) {
+function buildMetrics(scanResults, rfcs, repos, timeline) {
   const severityOrder = ['critical', 'high', 'medium', 'low'];
   const bySeverity = {};
   const byRepo = {};
@@ -177,8 +217,6 @@ function buildMetrics(scanResults, rfcs, repos) {
     }
   }
 
-  const today = new Date().toISOString().split('T')[0];
-
   return {
     totalCves: totalCves + fixedCves,
     fixedCves,
@@ -186,7 +224,7 @@ function buildMetrics(scanResults, rfcs, repos) {
     avgMttr: mttrCount > 0 ? totalMttrHours / mttrCount : 0,
     bySeverity,
     byRepo,
-    timeline: [{ date: today, opened: totalCves, fixed: fixedCves }],
+    timeline,
   };
 }
 
@@ -232,10 +270,24 @@ async function main() {
   console.log('Loading state data...');
   const rfcs = await loadRfcs();
   const quality = await loadQuality();
-  console.log(`Loaded ${rfcs.length} RFCs, ${quality.length} quality entries\n`);
+  const timelineHistory = await loadTimeline();
+  console.log(`Loaded ${rfcs.length} RFCs, ${quality.length} quality entries, ${timelineHistory.length} timeline entries\n`);
 
   console.log('Building metrics...');
-  const metrics = buildMetrics(scanResults, rfcs, repos);
+  // Count current open/fixed for today's snapshot
+  const todayStr = new Date().toISOString().split('T')[0];
+  const openCount = Object.values(scanResults).flat().length;
+  const fixedCount = rfcs.filter((r) => r.status === 'fixed' || r.status === 'closed')
+    .reduce((s, r) => s + (r.vulnerabilities || []).length, 0);
+
+  // Append today's entry (replace if already present for today)
+  const timeline = timelineHistory.filter((e) => e.date !== todayStr);
+  timeline.push({ date: todayStr, opened: openCount, fixed: fixedCount });
+  timeline.sort((a, b) => a.date.localeCompare(b.date));
+
+  await saveTimeline(timeline);
+
+  const metrics = buildMetrics(scanResults, rfcs, repos, timeline);
 
   // Convert scan results to RFC-like format for the dashboard
   const dashRfcs = rfcs.length > 0 ? rfcs : Object.entries(scanResults).map(([repo, alerts]) => ({
