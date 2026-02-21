@@ -257,6 +257,10 @@ export class StateManager {
     return this.data?.config.managedRepos || [];
   }
 
+  getStateRepo(): string {
+    return this.owner ? `${this.owner}/${this.repo}` : this.repo;
+  }
+
   getPolicies(): Record<string, Policy> {
     return this.data?.config.policies || {};
   }

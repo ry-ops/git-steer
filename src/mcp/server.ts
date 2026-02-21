@@ -19,6 +19,9 @@ import {
 import { GitHubClient, RateLimitSnapshot } from '../github/client.js';
 import { StateManager } from '../state/manager.js';
 import { readLimit, writeLimit } from '../core/concurrency.js';
+import { createGitHubAdapter, createStateAdapter } from '../fabric/adapter.js';
+import type { FabricGitHubAdapter, FabricStateAdapter } from '../fabric/adapter.js';
+import * as fabricCve from '../fabric/cve.js';
 import { generateReport } from '../reports/templates.js';
 import { generateDashboardHtml } from '../dashboard/templates.js';
 import { createRequire } from 'module';
@@ -707,6 +710,84 @@ const TOOLS: Tool[] = [
       },
     },
   },
+
+  // ========== Fabric Tools (via @git-fabric/cve) ==========
+  {
+    name: 'fabric_cve_scan',
+    description: '[git-fabric] Scan managed repos for vulnerable dependencies via GitHub Advisory Database. Queues findings to state/cve-queue.jsonl.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repos: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Repos to scan (owner/repo). Defaults to all managed repos.',
+        },
+        severity_threshold: {
+          type: 'string',
+          enum: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'],
+          default: 'HIGH',
+        },
+        dry_run: { type: 'boolean', default: false },
+      },
+    },
+  },
+  {
+    name: 'fabric_cve_enrich',
+    description: '[git-fabric] Fetch enriched vulnerability details for a CVE from NVD. Returns severity, CVSS, NVD status, CWE, and references.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cve_id: { type: 'string', description: 'CVE ID (e.g. CVE-2024-12345)' },
+      },
+      required: ['cve_id'],
+    },
+  },
+  {
+    name: 'fabric_cve_triage',
+    description: '[git-fabric] Process pending CVE queue entries: apply severity policy and open PRs. CRITICAL = confirmed PR, HIGH = draft PR.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        auto_pr_threshold: {
+          type: 'string',
+          enum: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'],
+          default: 'HIGH',
+        },
+        max_prs_per_run: { type: 'number', default: 5 },
+        dry_run: { type: 'boolean', default: false },
+      },
+    },
+  },
+  {
+    name: 'fabric_cve_queue',
+    description: '[git-fabric] List CVE queue entries filtered by status and severity.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['pending', 'pr_opened', 'skipped', 'error', 'all'],
+          default: 'pending',
+        },
+        severity_min: {
+          type: 'string',
+          enum: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'],
+          default: 'LOW',
+        },
+        repo: { type: 'string', description: 'Filter to a specific repo' },
+        limit: { type: 'number', description: 'Max entries to return (default: 50)', default: 50 },
+      },
+    },
+  },
+  {
+    name: 'fabric_cve_stats',
+    description: '[git-fabric] CVE queue health dashboard: totals by status/severity, oldest pending, top repos.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
 ];
 
 export class MCPServer {
@@ -719,6 +800,9 @@ export class MCPServer {
   private httpServer: import('http').Server | null = null;
   // Active transports keyed by session ID (HTTP mode only)
   private transports: Record<string, SSEServerTransport | StreamableHTTPServerTransport> = {};
+  // Fabric adapters (lazy-initialized on first fabric tool call)
+  private fabricGithub: FabricGitHubAdapter | null = null;
+  private fabricState: FabricStateAdapter | null = null;
 
   constructor(config: MCPServerConfig) {
     this.config = config;
@@ -1946,9 +2030,116 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
         }
       }
 
+      // ========== Fabric Tools ==========
+
+      case 'fabric_cve_scan': {
+        const { fabricGithub, fabricState } = this.getFabricAdapters();
+        const repos = (args.repos as string[]) ?? this.state.getManagedRepos()
+          .map((r: any) => `${r.owner}/${r.name}`);
+
+        const threshold = args.severity_threshold ?? 'HIGH';
+        const dryRun = args.dry_run ?? false;
+
+        const result = await fabricCve.detect(repos, threshold, fabricGithub);
+
+        if (!dryRun && result.findings.length > 0) {
+          const { added, duplicates } = await fabricCve.enqueue(result.findings, fabricState);
+
+          this.state.addAuditEntry({
+            action: 'fabric_cve_scan_result',
+            result: 'success',
+            details: { reposScanned: result.reposScanned, findings: result.findings.length, queued: added, duplicates },
+          });
+
+          return { ...result, queued: added, duplicates };
+        }
+
+        return { ...result, dry_run: dryRun };
+      }
+
+      case 'fabric_cve_enrich': {
+        if (!args.cve_id || typeof args.cve_id !== 'string') {
+          throw new Error('cve_id is required (e.g. CVE-2024-12345)');
+        }
+        const cveId = args.cve_id.toUpperCase();
+        return fabricCve.enrich(cveId, process.env.NVD_API_KEY);
+      }
+
+      case 'fabric_cve_triage': {
+        const { fabricGithub, fabricState } = this.getFabricAdapters();
+        const dryRun = args.dry_run ?? false;
+
+        const policy = {
+          ...fabricCve.DEFAULT_POLICY,
+          autoPrThreshold: args.auto_pr_threshold ?? fabricCve.DEFAULT_POLICY.autoPrThreshold,
+          maxPrsPerRun: args.max_prs_per_run ?? fabricCve.DEFAULT_POLICY.maxPrsPerRun,
+        };
+
+        const entries = await fabricCve.pending(fabricState);
+        const plans = fabricCve.triage(entries, policy);
+        const results = await fabricCve.execute(plans, fabricGithub, dryRun);
+
+        if (!dryRun) {
+          const updates = results.map((r) => ({
+            id: r.cveId,
+            repo: r.repo,
+            status: r.action === 'pr_opened' ? 'pr_opened' : r.action === 'error' ? 'error' : 'skipped',
+            prNumber: r.prNumber,
+            prUrl: r.prUrl,
+            skipReason: r.reason,
+          }));
+          await fabricCve.updateQueue(updates, fabricState);
+        }
+
+        this.state.addAuditEntry({
+          action: 'fabric_cve_triage_result',
+          result: 'success',
+          details: {
+            processed: results.length,
+            prs_opened: results.filter((r) => r.action === 'pr_opened').length,
+            dry_run: dryRun,
+          },
+        });
+
+        return {
+          processed: results.length,
+          prs_opened: results.filter((r) => r.action === 'pr_opened').length,
+          skipped: results.filter((r) => r.action === 'skipped').length,
+          errors: results.filter((r) => r.action === 'error').length,
+          dry_run: dryRun,
+          results,
+        };
+      }
+
+      case 'fabric_cve_queue': {
+        const { fabricState } = this.getFabricAdapters();
+        return fabricCve.listQueue(fabricState, {
+          status: args.status ?? 'pending',
+          severityMin: args.severity_min ?? 'LOW',
+          repo: args.repo,
+          limit: args.limit ?? 50,
+        });
+      }
+
+      case 'fabric_cve_stats': {
+        const { fabricState } = this.getFabricAdapters();
+        return fabricCve.queueStats(fabricState);
+      }
+
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
+  }
+
+  private getFabricAdapters(): { fabricGithub: FabricGitHubAdapter; fabricState: FabricStateAdapter } {
+    if (!this.fabricGithub) {
+      this.fabricGithub = createGitHubAdapter(this.github);
+    }
+    if (!this.fabricState) {
+      const stateRepo = this.state.getStateRepo();
+      this.fabricState = createStateAdapter(this.github, stateRepo);
+    }
+    return { fabricGithub: this.fabricGithub, fabricState: this.fabricState };
   }
 
   private async refreshRateLimit(): Promise<void> {
