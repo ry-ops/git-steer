@@ -2057,7 +2057,10 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
       }
 
       case 'fabric_cve_enrich': {
-        const cveId = (args.cve_id as string).toUpperCase();
+        if (!args.cve_id || typeof args.cve_id !== 'string') {
+          throw new Error('cve_id is required (e.g. CVE-2024-12345)');
+        }
+        const cveId = args.cve_id.toUpperCase();
         return fabricCve.enrich(cveId, process.env.NVD_API_KEY);
       }
 

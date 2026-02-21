@@ -110,6 +110,53 @@ function parseNpmDeps(content: string): Record<string, string> {
   } catch { return {}; }
 }
 
+function parsePipDeps(content: string): Record<string, string> {
+  const deps: Record<string, string> = {};
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const match = trimmed.match(/^([A-Za-z0-9_\-.]+)\s*[>=<!]=?\s*(.+?)(?:\s*#.*)?$/);
+    if (match) deps[match[1]] = match[2].trim();
+    else {
+      const nameOnly = trimmed.match(/^([A-Za-z0-9_\-.]+)/);
+      if (nameOnly) deps[nameOnly[1]] = 'unknown';
+    }
+  }
+  return deps;
+}
+
+function parseGoDeps(content: string): Record<string, string> {
+  const deps: Record<string, string> = {};
+  for (const line of content.split('\n')) {
+    const match = line.trim().match(/^require\s+(\S+)\s+(\S+)/) || line.trim().match(/^\s+(\S+)\s+(v[\d.]+)/);
+    if (match) deps[match[1]] = match[2];
+  }
+  return deps;
+}
+
+function parseCargoDeps(content: string): Record<string, string> {
+  const deps: Record<string, string> = {};
+  let inDeps = false;
+  for (const line of content.split('\n')) {
+    if (line.match(/^\[(?:dev-)?dependencies\]/)) { inDeps = true; continue; }
+    if (line.startsWith('[') && !line.match(/^\[(?:dev-)?dependencies\]/)) { inDeps = false; }
+    if (!inDeps) continue;
+    const match = line.match(/^(\S+)\s*=\s*"([^"]+)"/);
+    if (match) deps[match[1]] = match[2];
+  }
+  return deps;
+}
+
+function parseDeps(content: string, ecosystem: string): Record<string, string> {
+  switch (ecosystem) {
+    case 'npm': return parseNpmDeps(content);
+    case 'pip': return parsePipDeps(content);
+    case 'go': return parseGoDeps(content);
+    case 'cargo': return parseCargoDeps(content);
+    default: return {};
+  }
+}
+
 async function queryGhsa(
   ecosystem: string,
   packageName: string,
@@ -160,7 +207,7 @@ export async function detect(
       const content = await github.getFileContent(owner, repo, path);
       if (!content) continue;
 
-      const deps = ecosystem === 'npm' ? parseNpmDeps(content) : {};
+      const deps = parseDeps(content, ecosystem);
 
       for (const [pkgName, pkgVersion] of Object.entries(deps)) {
         if (!pkgName) continue;
@@ -331,7 +378,6 @@ export async function queueStats(state: FabricStateAdapter): Promise<{
 
 export const DEFAULT_POLICY = {
   autoPrThreshold: 'HIGH' as Severity,
-  draftThreshold: 'HIGH' as Severity,
   maxPrsPerRun: 5,
   requirePatchedVersion: true,
 };
