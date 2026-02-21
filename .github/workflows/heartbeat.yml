@@ -168,6 +168,14 @@ jobs:
           STATE_REPO: git-steer-state
         run: node scripts/ci-pr-followup.mjs
 
+      - name: Compact CVE queue
+        if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STATE_OWNER: ry-ops
+          STATE_REPO: git-steer-state
+        run: node scripts/ci-compact.mjs
+
       - name: Regenerate dashboard
         if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit' || inputs.task == 'dashboard-refresh'
         env:

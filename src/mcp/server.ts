@@ -788,6 +788,20 @@ const TOOLS: Tool[] = [
       properties: {},
     },
   },
+  {
+    name: 'fabric_cve_compact',
+    description: '[git-fabric] Compact the CVE queue by removing resolved entries older than the retention period.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        retention_days: {
+          type: 'number',
+          description: 'Days to retain resolved entries (default: 30)',
+          default: 30,
+        },
+      },
+    },
+  },
 ];
 
 export class MCPServer {
@@ -2124,6 +2138,21 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
       case 'fabric_cve_stats': {
         const { fabricState } = this.getFabricAdapters();
         return fabricCve.queueStats(fabricState);
+      }
+
+      case 'fabric_cve_compact': {
+        const { fabricState } = this.getFabricAdapters();
+        const result = await fabricCve.compact(fabricState, {
+          retentionDays: args.retention_days ?? 30,
+        });
+
+        this.state.addAuditEntry({
+          action: 'fabric_cve_compact',
+          result: 'success',
+          details: result,
+        });
+
+        return result;
       }
 
       default:

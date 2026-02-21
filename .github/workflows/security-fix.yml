@@ -172,9 +172,9 @@ jobs:
               # Update each vulnerable package
               echo "$PY_ALERTS" | jq -r '.[] | "\(.package) \(.fix_version)"' | while read PKG VER; do
                 if [ -n "$VER" ] && [ "$VER" != "null" ]; then
-                  # Update version constraint in requirements file
-                  sed -i "s/^${PKG}[=<>!~].*/${PKG}>=${VER}/" "$req" 2>/dev/null || true
-                  sed -i "s/^${PKG}$/${PKG}>=${VER}/" "$req" 2>/dev/null || true
+                  # Update version constraint in requirements file (case-insensitive: PyPI names are case-insensitive)
+                  sed -i "s/^${PKG}[=<>!~].*/${PKG}>=${VER}/I" "$req" 2>/dev/null || true
+                  sed -i "s/^${PKG}$/${PKG}>=${VER}/I" "$req" 2>/dev/null || true
                 fi
               done
             fi

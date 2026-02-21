@@ -149,6 +149,24 @@ async function saveTimeline(entries) {
   });
 }
 
+// ===== Load CVE queue (fabric) =====
+async function loadCveQueue() {
+  try {
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/contents/{path}',
+      { owner: STATE_OWNER, repo: STATE_REPO, path: 'state/cve-queue.jsonl' }
+    );
+    const content = Buffer.from(data.content, 'base64').toString('utf8');
+    return content
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 // ===== Load existing quality results =====
 async function loadQuality() {
   try {
@@ -271,7 +289,8 @@ async function main() {
   const rfcs = await loadRfcs();
   const quality = await loadQuality();
   const timelineHistory = await loadTimeline();
-  console.log(`Loaded ${rfcs.length} RFCs, ${quality.length} quality entries, ${timelineHistory.length} timeline entries\n`);
+  const cveQueue = await loadCveQueue();
+  console.log(`Loaded ${rfcs.length} RFCs, ${quality.length} quality entries, ${timelineHistory.length} timeline entries, ${cveQueue.length} CVE queue entries\n`);
 
   console.log('Building metrics...');
   // Count current open/fixed for today's snapshot
@@ -307,6 +326,52 @@ async function main() {
       fixVersion: a.fixVersion,
     })),
   }));
+
+  // Merge fabric CVE queue entries into dashboard data
+  if (cveQueue.length > 0) {
+    // Group queue entries by repo
+    const queueByRepo = {};
+    for (const entry of cveQueue) {
+      if (!queueByRepo[entry.repo]) queueByRepo[entry.repo] = [];
+      queueByRepo[entry.repo].push(entry);
+    }
+
+    for (const [repo, entries] of Object.entries(queueByRepo)) {
+      // Skip if already covered by an existing RFC for this repo
+      if (dashRfcs.some((r) => r.repo === repo)) continue;
+
+      const severityOrder = ['critical', 'high', 'medium', 'low'];
+      const maxSev = entries.reduce((max, e) => {
+        const s = (e.severity || 'low').toLowerCase();
+        return severityOrder.indexOf(s) < severityOrder.indexOf(max) ? s : max;
+      }, 'low');
+
+      const prOpened = entries.some((e) => e.status === 'pr_opened');
+      dashRfcs.push({
+        repo,
+        issueNumber: entries[0].prNumber || 0,
+        issueUrl: entries[0].prUrl || '',
+        severity: maxSev,
+        status: prOpened ? 'in_progress' : 'open',
+        ts: entries[0].detectedAt || new Date().toISOString(),
+        vulnerabilities: entries.map((e) => ({
+          cve: e.id || 'N/A',
+          package: e.affectedPackage,
+          severity: (e.severity || 'low').toLowerCase(),
+          fixVersion: e.patchedVersion || null,
+        })),
+      });
+    }
+
+    // Update metrics with queue stats
+    const queuePending = cveQueue.filter((e) => e.status === 'pending').length;
+    const queueFixed = cveQueue.filter((e) => e.status === 'pr_opened').length;
+    metrics.totalCves += cveQueue.length;
+    metrics.fixedCves += queueFixed;
+    metrics.fixRate = metrics.totalCves > 0 ? metrics.fixedCves / metrics.totalCves : 0;
+
+    console.log(`Merged ${cveQueue.length} CVE queue entries (${queuePending} pending, ${queueFixed} with PRs)\n`);
+  }
 
   console.log('Generating dashboard HTML...');
   const html = generateDashboardHtml({
