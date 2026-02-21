@@ -302,7 +302,7 @@ export async function enqueue(
 
 export async function listQueue(
   state: FabricStateAdapter,
-  opts: { status?: string; severityMin?: Severity; repo?: string } = {},
+  opts: { status?: string; severityMin?: Severity; repo?: string; limit?: number } = {},
 ): Promise<{ total: number; entries: CveQueueEntry[] }> {
   const raw = await state.read(QUEUE_FILE);
   if (!raw) return { total: 0, entries: [] };
@@ -319,7 +319,8 @@ export async function listQueue(
   });
 
   entries.sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) || (b.cvssScore ?? 0) - (a.cvssScore ?? 0));
-  return { total: entries.length, entries: entries.slice(0, 50) };
+  const limit = Math.max(1, opts.limit ?? 50);
+  return { total: entries.length, entries: entries.slice(0, limit) };
 }
 
 export async function pending(state: FabricStateAdapter): Promise<CveQueueEntry[]> {

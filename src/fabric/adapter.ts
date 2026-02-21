@@ -50,7 +50,11 @@ export function createGitHubAdapter(github: GitHubClient): FabricGitHubAdapter {
     // go through the client's authenticated Octokit instance anyway.
     // For fabric's detection layer (which needs a raw token for GraphQL),
     // we pass it through. In CI, it comes from env.
-    token: process.env.GITHUB_TOKEN ?? process.env.GIT_STEER_TOKEN ?? '',
+    token: (() => {
+      const t = process.env.GITHUB_TOKEN ?? process.env.GIT_STEER_TOKEN ?? '';
+      if (!t) console.warn('[git-fabric] No GITHUB_TOKEN or GIT_STEER_TOKEN found — GHSA queries will fail');
+      return t;
+    })(),
 
     async getFileContent(owner, repo, path) {
       try {
@@ -114,9 +118,10 @@ export function createStateAdapter(
   github: GitHubClient,
   stateRepo: string,
 ): FabricStateAdapter {
-  const [stateOwner, stateRepoName] = stateRepo.includes('/')
-    ? stateRepo.split('/')
-    : ['ry-ops', stateRepo];
+  if (!stateRepo.includes('/')) {
+    throw new Error(`stateRepo must be in "owner/repo" format, got: "${stateRepo}"`);
+  }
+  const [stateOwner, stateRepoName] = stateRepo.split('/') as [string, string];
 
   return {
     async read(file) {
@@ -143,7 +148,7 @@ export function createStateAdapter(
         file,
         content,
         `chore(cve): update ${file}`,
-        sha ?? '',
+        sha,
       );
     },
 

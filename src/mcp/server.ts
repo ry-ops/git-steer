@@ -776,6 +776,7 @@ const TOOLS: Tool[] = [
           default: 'LOW',
         },
         repo: { type: 'string', description: 'Filter to a specific repo' },
+        limit: { type: 'number', description: 'Max entries to return (default: 50)', default: 50 },
       },
     },
   },
@@ -2045,7 +2046,7 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
           const { added, duplicates } = await fabricCve.enqueue(result.findings, fabricState);
 
           this.state.addAuditEntry({
-            action: 'fabric_cve_scan',
+            action: 'fabric_cve_scan_result',
             result: 'success',
             details: { reposScanned: result.reposScanned, findings: result.findings.length, queued: added, duplicates },
           });
@@ -2091,7 +2092,7 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
         }
 
         this.state.addAuditEntry({
-          action: 'fabric_cve_triage',
+          action: 'fabric_cve_triage_result',
           result: 'success',
           details: {
             processed: results.length,
@@ -2116,6 +2117,7 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
           status: args.status ?? 'pending',
           severityMin: args.severity_min ?? 'LOW',
           repo: args.repo,
+          limit: args.limit ?? 50,
         });
       }
 
