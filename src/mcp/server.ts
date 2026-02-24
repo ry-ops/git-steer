@@ -804,6 +804,22 @@ const CORE_TOOLS: Tool[] = [
       },
     },
   },
+
+  // ========== Fabric Tools (via @git-fabric/git) ==========
+  { name: 'fabric_git_list_repos', description: '[git-fabric] List repositories for an org or the authenticated user.', inputSchema: { type: 'object', properties: { org: { type: 'string', description: 'GitHub org name. Omit to list repos for the authenticated user.' } } } },
+  { name: 'fabric_git_get_file', description: '[git-fabric] Get the content of a file from a repository.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string', description: 'File path relative to repo root.' }, ref: { type: 'string', description: 'Branch, tag, or commit SHA.' } }, required: ['owner', 'repo', 'path'] } },
+  { name: 'fabric_git_list_files', description: '[git-fabric] List files and directories at a path in a repository.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string', description: 'Directory path. Defaults to root.' }, ref: { type: 'string' } }, required: ['owner', 'repo'] } },
+  { name: 'fabric_git_commit_files', description: '[git-fabric] Commit one or more files to a branch via the GitHub Git Data API.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string' }, message: { type: 'string' }, files: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } }, createBranch: { type: 'boolean' }, fromBranch: { type: 'string' } }, required: ['owner', 'repo', 'branch', 'message', 'files'] } },
+  { name: 'fabric_git_list_commits', description: '[git-fabric] List recent commits on a branch.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string' }, limit: { type: 'number', description: 'Max commits to return. Default: 20.' } }, required: ['owner', 'repo'] } },
+  { name: 'fabric_git_get_commit', description: '[git-fabric] Get full details for a commit including changed files.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, sha: { type: 'string' } }, required: ['owner', 'repo', 'sha'] } },
+  { name: 'fabric_git_compare_commits', description: '[git-fabric] Compare two refs to see divergence and changed files.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' } }, required: ['owner', 'repo', 'base', 'head'] } },
+  { name: 'fabric_git_list_branches', description: '[git-fabric] List branches in a repository.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' } }, required: ['owner', 'repo'] } },
+  { name: 'fabric_git_create_branch', description: '[git-fabric] Create a new branch from an existing branch.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string', description: 'New branch name.' }, fromBranch: { type: 'string', description: 'Source branch.' } }, required: ['owner', 'repo', 'branch'] } },
+  { name: 'fabric_git_delete_branch', description: '[git-fabric] Delete a branch.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string' } }, required: ['owner', 'repo', 'branch'] } },
+  { name: 'fabric_git_list_pull_requests', description: '[git-fabric] List pull requests in a repository.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, state: { type: 'string', enum: ['open', 'closed', 'all'], description: 'PR state filter. Default: open.' } }, required: ['owner', 'repo'] } },
+  { name: 'fabric_git_get_pull_request', description: '[git-fabric] Get full details for a pull request.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, number: { type: 'number' } }, required: ['owner', 'repo', 'number'] } },
+  { name: 'fabric_git_create_pull_request', description: '[git-fabric] Open a pull request.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, title: { type: 'string' }, head: { type: 'string' }, base: { type: 'string' }, body: { type: 'string' }, draft: { type: 'boolean' }, labels: { type: 'array', items: { type: 'string' } } }, required: ['owner', 'repo', 'title', 'head'] } },
+  { name: 'fabric_git_merge_pull_request', description: '[git-fabric] Merge a pull request.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, number: { type: 'number' }, method: { type: 'string', enum: ['merge', 'squash', 'rebase'] }, commitTitle: { type: 'string' }, commitMessage: { type: 'string' } }, required: ['owner', 'repo', 'number'] } },
 ];
 
 export class MCPServer {
@@ -2086,6 +2102,53 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
 
         // Gateway tool execute() returns JSON strings — parse for MCP response
         return typeof result.result === 'string' ? JSON.parse(result.result) : result.result;
+      }
+
+      // ========== Fabric Git Tools (routed via @git-fabric/git) ==========
+      case 'fabric_git_list_repos':
+      case 'fabric_git_get_file':
+      case 'fabric_git_list_files':
+      case 'fabric_git_commit_files':
+      case 'fabric_git_list_commits':
+      case 'fabric_git_get_commit':
+      case 'fabric_git_compare_commits':
+      case 'fabric_git_list_branches':
+      case 'fabric_git_create_branch':
+      case 'fabric_git_delete_branch':
+      case 'fabric_git_list_pull_requests':
+      case 'fabric_git_get_pull_request':
+      case 'fabric_git_create_pull_request':
+      case 'fabric_git_merge_pull_request': {
+        if (!this.gateway?.available) {
+          throw new Error('Fabric git app not available.');
+        }
+
+        const GIT_TOOL_MAP: Record<string, string> = {
+          'fabric_git_list_repos':        'git_repo_list',
+          'fabric_git_get_file':          'git_file_get',
+          'fabric_git_list_files':        'git_file_list',
+          'fabric_git_commit_files':      'git_commit_push',
+          'fabric_git_list_commits':      'git_commit_list',
+          'fabric_git_get_commit':        'git_commit_get',
+          'fabric_git_compare_commits':   'git_commit_compare',
+          'fabric_git_list_branches':     'git_branch_list',
+          'fabric_git_create_branch':     'git_branch_create',
+          'fabric_git_delete_branch':     'git_branch_delete',
+          'fabric_git_list_pull_requests':'git_pr_list',
+          'fabric_git_get_pull_request':  'git_pr_get',
+          'fabric_git_create_pull_request':'git_pr_create',
+          'fabric_git_merge_pull_request':'git_pr_merge',
+        };
+
+        const gitResult = await this.gateway.router.route(GIT_TOOL_MAP[name], args);
+
+        this.state.addAuditEntry({
+          action: name,
+          result: 'success',
+          details: { routed_to: `${gitResult.app}/${gitResult.tool}`, duration_ms: gitResult.durationMs, ...args },
+        });
+
+        return typeof gitResult.result === 'string' ? JSON.parse(gitResult.result) : gitResult.result;
       }
 
       default:
