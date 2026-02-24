@@ -22,6 +22,7 @@ import { readLimit, writeLimit } from '../core/concurrency.js';
 import { createGitHubAdapter, createStateAdapter } from '../fabric/adapter.js';
 import type { FabricGitHubAdapter, FabricStateAdapter } from '../fabric/adapter.js';
 import * as fabricCve from '../fabric/cve.js';
+import * as fabricGit from '../fabric/git.js';
 import { generateReport } from '../reports/templates.js';
 import { generateDashboardHtml } from '../dashboard/templates.js';
 import { createRequire } from 'module';
@@ -800,6 +801,222 @@ const TOOLS: Tool[] = [
           default: 30,
         },
       },
+    },
+  },
+  // ========== Fabric Tools (via @git-fabric/git) ==========
+  {
+    name: 'fabric_git_list_repos',
+    description: '[git-fabric] List repositories accessible via the GitHub token. Optionally filter by org.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        org: { type: 'string', description: 'GitHub org to list repos for. Omit to list authenticated user repos.' },
+      },
+    },
+  },
+  {
+    name: 'fabric_git_get_file',
+    description: '[git-fabric] Get the decoded text content of a file from a GitHub repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner (org or user)' },
+        repo: { type: 'string', description: 'Repository name' },
+        path: { type: 'string', description: 'File path within the repository' },
+        ref: { type: 'string', description: 'Branch, tag, or commit SHA (defaults to default branch)' },
+      },
+      required: ['owner', 'repo', 'path'],
+    },
+  },
+  {
+    name: 'fabric_git_list_files',
+    description: '[git-fabric] List files and directories at a path in a GitHub repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        path: { type: 'string', description: 'Directory path to list (defaults to root)', default: '' },
+        ref: { type: 'string', description: 'Branch, tag, or commit SHA' },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
+  {
+    name: 'fabric_git_commit_files',
+    description: '[git-fabric] Commit one or more files to a branch in a GitHub repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        branch: { type: 'string', description: 'Branch to commit to' },
+        message: { type: 'string', description: 'Commit message' },
+        files: {
+          type: 'array',
+          description: 'Files to commit',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              content: { type: 'string' },
+            },
+            required: ['path', 'content'],
+          },
+        },
+        create_branch: { type: 'boolean', description: 'Create branch if it does not exist', default: false },
+        from_branch: { type: 'string', description: 'Source branch to create from when create_branch is true' },
+      },
+      required: ['owner', 'repo', 'branch', 'message', 'files'],
+    },
+  },
+  {
+    name: 'fabric_git_list_commits',
+    description: '[git-fabric] List recent commits on a branch of a GitHub repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        branch: { type: 'string', description: 'Branch name (defaults to default branch)' },
+        limit: { type: 'number', description: 'Max commits to return (default: 20)', default: 20 },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
+  {
+    name: 'fabric_git_get_commit',
+    description: '[git-fabric] Get details of a specific commit including changed files and stats.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        sha: { type: 'string', description: 'Commit SHA' },
+      },
+      required: ['owner', 'repo', 'sha'],
+    },
+  },
+  {
+    name: 'fabric_git_compare_commits',
+    description: '[git-fabric] Compare two commits, branches, or tags and return diff summary.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        base: { type: 'string', description: 'Base commit/branch/tag' },
+        head: { type: 'string', description: 'Head commit/branch/tag' },
+      },
+      required: ['owner', 'repo', 'base', 'head'],
+    },
+  },
+  {
+    name: 'fabric_git_list_branches',
+    description: '[git-fabric] List all branches in a GitHub repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
+  {
+    name: 'fabric_git_create_branch',
+    description: '[git-fabric] Create a new branch in a GitHub repository from an existing branch.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        branch: { type: 'string', description: 'Name of the new branch to create' },
+        from_branch: { type: 'string', description: 'Branch to create from' },
+      },
+      required: ['owner', 'repo', 'branch', 'from_branch'],
+    },
+  },
+  {
+    name: 'fabric_git_delete_branch',
+    description: '[git-fabric] Delete a branch from a GitHub repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        branch: { type: 'string', description: 'Branch name to delete' },
+      },
+      required: ['owner', 'repo', 'branch'],
+    },
+  },
+  {
+    name: 'fabric_git_list_pull_requests',
+    description: '[git-fabric] List pull requests in a GitHub repository, filtered by state.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        state: {
+          type: 'string',
+          enum: ['open', 'closed', 'all'],
+          description: 'Filter by PR state',
+          default: 'open',
+        },
+      },
+      required: ['owner', 'repo'],
+    },
+  },
+  {
+    name: 'fabric_git_get_pull_request',
+    description: '[git-fabric] Get full details of a specific pull request including stats and labels.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        number: { type: 'number', description: 'Pull request number' },
+      },
+      required: ['owner', 'repo', 'number'],
+    },
+  },
+  {
+    name: 'fabric_git_create_pull_request',
+    description: '[git-fabric] Create a pull request in a GitHub repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        title: { type: 'string', description: 'Pull request title' },
+        head: { type: 'string', description: 'Head branch (the branch with your changes)' },
+        base: { type: 'string', description: 'Base branch to merge into' },
+        body: { type: 'string', description: 'Pull request description body' },
+        draft: { type: 'boolean', description: 'Create as a draft PR', default: false },
+        labels: { type: 'array', items: { type: 'string' }, description: 'Labels to apply to the PR' },
+      },
+      required: ['owner', 'repo', 'title', 'head', 'base'],
+    },
+  },
+  {
+    name: 'fabric_git_merge_pull_request',
+    description: '[git-fabric] Merge a pull request in a GitHub repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        number: { type: 'number', description: 'Pull request number to merge' },
+        method: {
+          type: 'string',
+          enum: ['merge', 'squash', 'rebase'],
+          description: 'Merge method',
+          default: 'squash',
+        },
+        commit_title: { type: 'string', description: 'Custom commit title (optional)' },
+      },
+      required: ['owner', 'repo', 'number'],
     },
   },
 ];
@@ -2153,6 +2370,131 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
         });
 
         return result;
+      }
+
+
+      // ========== Fabric Git Tools ==========
+
+      case 'fabric_git_list_repos': {
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.listRepos(fabricGithub, args.org);
+      }
+
+      case 'fabric_git_get_file': {
+        if (!args.owner || !args.repo || !args.path) {
+          throw new Error('owner, repo, and path are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.getFileContent(fabricGithub, args.owner, args.repo, args.path, args.ref);
+      }
+
+      case 'fabric_git_list_files': {
+        if (!args.owner || !args.repo) {
+          throw new Error('owner and repo are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.listFiles(fabricGithub, args.owner, args.repo, args.path ?? '', args.ref);
+      }
+
+      case 'fabric_git_commit_files': {
+        if (!args.owner || !args.repo || !args.branch || !args.message || !args.files) {
+          throw new Error('owner, repo, branch, message, and files are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.commitFiles(fabricGithub, args.owner, args.repo, {
+          branch: args.branch,
+          message: args.message,
+          files: args.files,
+          createBranch: args.create_branch ?? false,
+          fromBranch: args.from_branch,
+        });
+      }
+
+      case 'fabric_git_list_commits': {
+        if (!args.owner || !args.repo) {
+          throw new Error('owner and repo are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.listCommits(fabricGithub, args.owner, args.repo, args.branch, args.limit ?? 20);
+      }
+
+      case 'fabric_git_get_commit': {
+        if (!args.owner || !args.repo || !args.sha) {
+          throw new Error('owner, repo, and sha are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.getCommit(fabricGithub, args.owner, args.repo, args.sha);
+      }
+
+      case 'fabric_git_compare_commits': {
+        if (!args.owner || !args.repo || !args.base || !args.head) {
+          throw new Error('owner, repo, base, and head are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.compareCommits(fabricGithub, args.owner, args.repo, args.base, args.head);
+      }
+
+      case 'fabric_git_list_branches': {
+        if (!args.owner || !args.repo) {
+          throw new Error('owner and repo are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.listBranches(fabricGithub, args.owner, args.repo);
+      }
+
+      case 'fabric_git_create_branch': {
+        if (!args.owner || !args.repo || !args.branch || !args.from_branch) {
+          throw new Error('owner, repo, branch, and from_branch are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.createBranch(fabricGithub, args.owner, args.repo, args.branch, args.from_branch);
+      }
+
+      case 'fabric_git_delete_branch': {
+        if (!args.owner || !args.repo || !args.branch) {
+          throw new Error('owner, repo, and branch are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.deleteBranch(fabricGithub, args.owner, args.repo, args.branch);
+      }
+
+      case 'fabric_git_list_pull_requests': {
+        if (!args.owner || !args.repo) {
+          throw new Error('owner and repo are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.listPullRequests(fabricGithub, args.owner, args.repo, args.state ?? 'open');
+      }
+
+      case 'fabric_git_get_pull_request': {
+        if (!args.owner || !args.repo || args.number == null) {
+          throw new Error('owner, repo, and number are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.getPullRequest(fabricGithub, args.owner, args.repo, args.number);
+      }
+
+      case 'fabric_git_create_pull_request': {
+        if (!args.owner || !args.repo || !args.title || !args.head || !args.base) {
+          throw new Error('owner, repo, title, head, and base are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.createPullRequest(fabricGithub, args.owner, args.repo, {
+          title: args.title,
+          head: args.head,
+          base: args.base,
+          body: args.body,
+          draft: args.draft ?? false,
+          labels: args.labels ?? [],
+        });
+      }
+
+      case 'fabric_git_merge_pull_request': {
+        if (!args.owner || !args.repo || args.number == null) {
+          throw new Error('owner, repo, and number are required');
+        }
+        const { fabricGithub } = this.getFabricAdapters();
+        return fabricGit.mergePullRequest(fabricGithub, args.owner, args.repo, args.number, args.method ?? 'squash', args.commit_title);
       }
 
       default:
