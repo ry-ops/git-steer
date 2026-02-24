@@ -9,6 +9,9 @@ import { KeychainService } from './core/keychain.js';
 import { StateManager } from './state/manager.js';
 import { MCPServer } from './mcp/server.js';
 import { GitHubClient } from './github/client.js';
+import { initGateway } from './fabric/gateway.js';
+import type { GatewayHandle } from './fabric/gateway.js';
+import { generateDashboardHtml } from './dashboard/templates.js';
 
 export interface GitSteerConfig {
   keychain: KeychainService;
@@ -25,6 +28,7 @@ export class GitSteer {
   private github: GitHubClient | null = null;
   private state: StateManager | null = null;
   private mcp: MCPServer | null = null;
+  private gateway: GatewayHandle | null = null;
   private stateRepo: string;
 
   constructor(config: GitSteerConfig) {
@@ -84,6 +88,79 @@ export class GitSteer {
   }
 
   /**
+   * Initialize the fabric gateway for CVE scanning.
+   * Prefers GITHUB_TOKEN / GIT_STEER_TOKEN env vars (MCP server path),
+   * falls back to generating an installation token from App credentials (CLI path).
+   */
+  async initFabricGateway(): Promise<GatewayHandle> {
+    if (!this.github || !this.state) {
+      throw new Error('Not initialized. Call syncState() first.');
+    }
+
+    const token = process.env.GITHUB_TOKEN
+      ?? process.env.GIT_STEER_TOKEN
+      ?? await this.github.getInstallationToken();
+
+    const managedRepos = this.state.getManagedRepos()
+      .filter((r: any) => r.name !== '*')
+      .map((r: any) => `${r.owner}/${r.name}`);
+
+    this.gateway = await initGateway({
+      githubToken: token,
+      stateRepo: this.state.getStateRepo(),
+      managedRepos,
+    });
+
+    return this.gateway;
+  }
+
+  /**
+   * Expose state manager for CLI commands
+   */
+  _getState(): StateManager {
+    if (!this.state) throw new Error('Not initialized. Call syncState() first.');
+    return this.state;
+  }
+
+  /**
+   * Expose gateway for CLI commands
+   */
+  _getGateway(): GatewayHandle {
+    if (!this.gateway) throw new Error('Gateway not initialized. Call initFabricGateway() first.');
+    return this.gateway;
+  }
+
+  /**
+   * Generate and deploy the dashboard to GitHub Pages.
+   */
+  async refreshDashboard(): Promise<{ dashboardUrl: string; commitSha: string }> {
+    if (!this.github || !this.state) {
+      throw new Error('Not initialized. Call syncState() first.');
+    }
+
+    const metrics = this.state.getMetrics();
+    const rfcs = this.state.getRfcs();
+    const quality = this.state.getQualityResults();
+    const html = generateDashboardHtml({ metrics, rfcs, quality });
+
+    const owner = 'ry-ops';
+    const stateRepo = 'git-steer-state';
+
+    const commitResult = await this.github.commitFiles(owner, stateRepo, {
+      branch: 'gh-pages',
+      message: `Update dashboard ${new Date().toISOString()}`,
+      files: [{ path: 'index.html', content: html }],
+      createBranch: true,
+      baseBranch: 'main',
+    });
+
+    return {
+      dashboardUrl: `https://${owner}.github.io/${stateRepo}/`,
+      commitSha: commitResult.sha,
+    };
+  }
+
+  /**
    * Start the MCP server
    */
   async startServer(options: ServerOptions): Promise<void> {
@@ -91,11 +168,17 @@ export class GitSteer {
       throw new Error('Not initialized. Call syncState() first.');
     }
 
+    // Initialize gateway before constructing MCPServer so it can be shared
+    if (!this.gateway) {
+      await this.initFabricGateway();
+    }
+
     this.mcp = new MCPServer({
       github: this.github,
       state: this.state,
       transport: options.transport,
       port: options.port,
+      gateway: this.gateway ?? undefined,
     });
 
     // Save state on shutdown

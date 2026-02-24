@@ -121,6 +121,17 @@ export class GitHubClient {
   }
 
   /**
+   * Get a raw installation token string.
+   * Bridges App-based auth → plain token for @git-fabric/cve's createAdaptersFromEnv().
+   * @octokit/auth-app caches tokens internally (1h TTL), so repeated calls are cheap.
+   */
+  async getInstallationToken(): Promise<string> {
+    const octokit = this.ensureAuth();
+    const auth = await (octokit as any).auth({ type: 'installation' }) as { token: string };
+    return auth.token;
+  }
+
+  /**
    * Return accumulated throttle telemetry since the last call, then reset counters.
    * Called by the MCP handler after each tool execution to attach to audit entries.
    */
