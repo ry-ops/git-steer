@@ -20,7 +20,7 @@ Nothing lives locally — no cloned repos, no config files, no build artifacts. 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        YOUR MAC                                 │
+│                        YOUR PC or MAC                                 │
 │                                                                 │
 │   Keychain:                                                     │
 │     - GitHub App private key                                    │
@@ -68,7 +68,7 @@ When you ask git-steer to fix security vulnerabilities or make other code change
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  YOUR MAC (MCP triggers intent)                                 │
+│  YOUR PC or MAC (MCP triggers intent)                           │
 │                                                                 │
 │  Claude: "Fix security vulnerabilities in cortex"               │
 │       │                                                         │
