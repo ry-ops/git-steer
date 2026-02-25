@@ -10,7 +10,7 @@ git-steer gives you 100% autonomous control over your GitHub account through a M
 
 **Your machine steers. GitHub does everything else.**
 
-Nothing lives locally — no cloned repos, no config files, no build artifacts. git-steer treats your Mac as a thin control plane and GitHub as the entire runtime.
+Nothing lives locally — no cloned repos, no config files, no build artifacts. git-steer treats your PC or Mac as a thin control plane and GitHub as the entire runtime.
 
 - **Zero local code**: No repos cloned, no `node_modules`, no lock files
 - **Keychain only**: GitHub App credentials in macOS Keychain — nothing else on disk
@@ -93,7 +93,7 @@ When you ask git-steer to fix security vulnerabilities or make other code change
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-Your Mac stays clean. No `node_modules`. No Python venvs. No lock files. Just pure orchestration.
+Your PC or Mac stays clean. No `node_modules`. No Python venvs. No lock files. Just pure orchestration.
 
 ## Quick Start
 
