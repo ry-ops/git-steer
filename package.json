@@ -57,5 +57,11 @@
   },
   "engines": {
     "node": ">=20.0.0"
-  }
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./fabric": "./dist/fabric/app.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts"
 }
