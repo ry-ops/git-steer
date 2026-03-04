@@ -805,6 +805,150 @@ const CORE_TOOLS: Tool[] = [
     },
   },
 
+  // ========== PR Deduplication ==========
+  {
+    name: 'pr_dedup_check',
+    description: 'Check if an open PR with a matching title prefix already exists. Returns the existing PR if found, or null. Use before creating alert/remediation PRs to avoid duplicates.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        title_prefix: { type: 'string', description: 'Title prefix to match against open PRs (e.g., "[GitOps Alert]")' },
+      },
+      required: ['owner', 'repo', 'title_prefix'],
+    },
+  },
+  {
+    name: 'pr_dedup_create',
+    description: 'Create a PR only if no open PR with the same title prefix exists. If a duplicate is found, returns the existing PR instead. Prevents alert PR spam from automated observers.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'Repository owner' },
+        repo: { type: 'string', description: 'Repository name' },
+        title: { type: 'string', description: 'PR title' },
+        title_prefix: { type: 'string', description: 'Title prefix for dedup matching. If omitted, uses text before the first " — " in the title.' },
+        head: { type: 'string', description: 'Head branch' },
+        base: { type: 'string', description: 'Base branch (default: main)' },
+        body: { type: 'string', description: 'PR body' },
+        labels: { type: 'array', items: { type: 'string' }, description: 'Labels to apply' },
+      },
+      required: ['owner', 'repo', 'title', 'head'],
+    },
+  },
+
+  // ========== OOMKill Remediation ==========
+  {
+    name: 'oomkill_detect',
+    description: 'Detect pods that have been OOMKilled. Returns pods with OOMKill events, their current resource limits, and restart counts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        namespace: { type: 'string', description: 'Kubernetes namespace to scan. Omit for all namespaces.' },
+        min_restarts: { type: 'number', description: 'Minimum restart count to include (default: 3)', default: 3 },
+      },
+    },
+  },
+  {
+    name: 'oomkill_remediate',
+    description: 'Auto-bump resource limits for OOMKilled pods by creating a PR to the GitOps repo. Calculates new limits as a multiplier of current limits (default: 1.5x). Uses PR dedup to avoid duplicate remediation PRs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        namespace: { type: 'string', description: 'Kubernetes namespace' },
+        deployment: { type: 'string', description: 'Deployment name to remediate' },
+        container: { type: 'string', description: 'Container name (default: first container)' },
+        multiplier: { type: 'number', description: 'Memory limit multiplier (default: 1.5)', default: 1.5 },
+        gitops_owner: { type: 'string', description: 'GitOps repo owner' },
+        gitops_repo: { type: 'string', description: 'GitOps repo name' },
+        manifest_path: { type: 'string', description: 'Path to the deployment manifest in the GitOps repo' },
+        dry_run: { type: 'boolean', description: 'Preview changes without creating a PR', default: false },
+      },
+      required: ['namespace', 'deployment', 'gitops_owner', 'gitops_repo', 'manifest_path'],
+    },
+  },
+
+  // ========== Certificate Renewal ==========
+  {
+    name: 'cert_check',
+    description: 'Detect TLS certificates approaching expiration in the cluster. Checks cert-manager Certificate resources and returns certificates expiring within the threshold.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        namespace: { type: 'string', description: 'Kubernetes namespace to scan. Omit for all namespaces.' },
+        expiry_days: { type: 'number', description: 'Alert threshold in days before expiry (default: 30)', default: 30 },
+      },
+    },
+  },
+  {
+    name: 'cert_renew',
+    description: 'Trigger certificate renewal for expiring certificates. Deletes the certificate Secret to force cert-manager to re-issue, or creates a PR to update certificate manifests.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        namespace: { type: 'string', description: 'Certificate namespace' },
+        certificate_name: { type: 'string', description: 'cert-manager Certificate resource name' },
+        method: { type: 'string', enum: ['force_renewal', 'gitops_pr'], description: 'Renewal method: force_renewal deletes the Secret; gitops_pr creates a PR with annotation bump', default: 'force_renewal' },
+        gitops_owner: { type: 'string', description: 'GitOps repo owner (required for gitops_pr method)' },
+        gitops_repo: { type: 'string', description: 'GitOps repo name (required for gitops_pr method)' },
+        manifest_path: { type: 'string', description: 'Path to cert manifest (required for gitops_pr method)' },
+      },
+      required: ['namespace', 'certificate_name'],
+    },
+  },
+
+  // ========== Slack Integration ==========
+  {
+    name: 'slack_notify',
+    description: 'Send a notification to a Slack channel via webhook. Used for PR events, alerts, and remediation updates.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel name or "default" to use configured webhook' },
+        message: { type: 'string', description: 'Message text (supports Slack mrkdwn)' },
+        blocks: { type: 'array', description: 'Slack Block Kit blocks for rich formatting' },
+        webhook_url: { type: 'string', description: 'Slack webhook URL. If omitted, uses configured default from state.' },
+      },
+      required: ['message'],
+    },
+  },
+  {
+    name: 'slack_configure',
+    description: 'Configure Slack webhook URL for notifications. Stores in state repo config.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        webhook_url: { type: 'string', description: 'Slack incoming webhook URL' },
+        default_channel: { type: 'string', description: 'Default channel name for reference' },
+        notify_on: {
+          type: 'object',
+          description: 'Events to notify on',
+          properties: {
+            pr_created: { type: 'boolean', default: true },
+            pr_merged: { type: 'boolean', default: true },
+            pr_dedup_hit: { type: 'boolean', default: false },
+            oomkill_detected: { type: 'boolean', default: true },
+            cert_expiring: { type: 'boolean', default: true },
+          },
+        },
+      },
+      required: ['webhook_url'],
+    },
+  },
+
+  // ========== Operational Metrics ==========
+  {
+    name: 'ops_metrics',
+    description: 'Get operational metrics: alert frequency, mean time to remediation, auto-merge success rate, and PR dedup hit rate.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        period: { type: 'string', enum: ['24h', '7d', '30d', 'all'], default: '7d', description: 'Time period for metrics' },
+      },
+    },
+  },
+
   // ========== Fabric Tools (via @git-fabric/git) ==========
   { name: 'fabric_git_list_repos', description: '[git-fabric] List repositories for an org or the authenticated user.', inputSchema: { type: 'object', properties: { org: { type: 'string', description: 'GitHub org name. Omit to list repos for the authenticated user.' } } } },
   { name: 'fabric_git_get_file', description: '[git-fabric] Get the content of a file from a repository.', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string', description: 'File path relative to repo root.' }, ref: { type: 'string', description: 'Branch, tag, or commit SHA.' } }, required: ['owner', 'repo', 'path'] } },
@@ -1887,6 +2031,603 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
         };
       }
 
+      // ===== PR Deduplication =====
+      case 'pr_dedup_check': {
+        const openPrs = await this.github.listPullRequests(args.owner, args.repo, { state: 'open' });
+        const match = openPrs.find((pr) => pr.title.startsWith(args.title_prefix));
+
+        this.state.addAuditEntry({
+          action: 'pr_dedup_check',
+          repo: `${args.owner}/${args.repo}`,
+          result: match ? 'duplicate_found' : 'no_duplicate',
+          details: { title_prefix: args.title_prefix, matchedPr: match?.number },
+        });
+
+        return match
+          ? { duplicate: true, existing_pr: match }
+          : { duplicate: false, existing_pr: null };
+      }
+
+      case 'pr_dedup_create': {
+        const prefix = args.title_prefix || args.title.split(' — ')[0];
+        const openPrs = await this.github.listPullRequests(args.owner, args.repo, { state: 'open' });
+        const existing = openPrs.find((pr) => pr.title.startsWith(prefix));
+
+        if (existing) {
+          this.state.addAuditEntry({
+            action: 'pr_dedup_create',
+            repo: `${args.owner}/${args.repo}`,
+            result: 'dedup_hit',
+            details: { title_prefix: prefix, existingPr: existing.number },
+          });
+
+          // Notify Slack if configured
+          const slackConfig = this.state.getCache('slack_config');
+          if (slackConfig?.webhook_url && slackConfig?.notify_on?.pr_dedup_hit) {
+            await this.sendSlackNotification(slackConfig.webhook_url, {
+              text: `🔁 PR dedup: skipped duplicate for \`${args.owner}/${args.repo}\`\nExisting: <${existing.htmlUrl}|#${existing.number} ${existing.title}>`,
+            });
+          }
+
+          return {
+            created: false,
+            dedup_hit: true,
+            existing_pr: existing,
+            message: `Duplicate PR found: #${existing.number}`,
+          };
+        }
+
+        const pr = await this.github.createPullRequest(args.owner, args.repo, {
+          title: args.title,
+          body: args.body || '',
+          head: args.head,
+          base: args.base || 'main',
+          labels: args.labels,
+        });
+
+        this.state.addAuditEntry({
+          action: 'pr_dedup_create',
+          repo: `${args.owner}/${args.repo}`,
+          result: 'created',
+          details: { prNumber: pr.number, title: args.title },
+        });
+
+        // Notify Slack if configured
+        const slackConfig = this.state.getCache('slack_config');
+        if (slackConfig?.webhook_url && slackConfig?.notify_on?.pr_created) {
+          await this.sendSlackNotification(slackConfig.webhook_url, {
+            text: `📋 New PR opened in \`${args.owner}/${args.repo}\`\n<${pr.url}|#${pr.number} ${args.title}>`,
+          });
+        }
+
+        return {
+          created: true,
+          dedup_hit: false,
+          pr: { number: pr.number, url: pr.url },
+        };
+      }
+
+      // ===== OOMKill Remediation =====
+      case 'oomkill_detect': {
+        const ns = args.namespace ? `-n ${args.namespace}` : '--all-namespaces';
+        const minRestarts = args.min_restarts || 3;
+
+        let output: string;
+        try {
+          output = execFileSync('kubectl', [
+            'get', 'pods', ...(args.namespace ? ['-n', args.namespace] : ['--all-namespaces']),
+            '-o', 'json',
+          ], { encoding: 'utf8', timeout: 30_000 });
+        } catch (e: any) {
+          throw new Error(`kubectl failed: ${e.message}`);
+        }
+
+        const pods = JSON.parse(output);
+        const oomPods: Array<{
+          namespace: string;
+          pod: string;
+          container: string;
+          restartCount: number;
+          currentLimits: Record<string, string>;
+          lastOOMKill: string | null;
+          deployment: string | null;
+        }> = [];
+
+        for (const pod of pods.items) {
+          const podNs = pod.metadata.namespace;
+          const podName = pod.metadata.name;
+          const ownerRef = pod.metadata.ownerReferences?.[0];
+          const deployment = ownerRef?.kind === 'ReplicaSet'
+            ? ownerRef.name.replace(/-[a-f0-9]+$/, '')
+            : ownerRef?.name || null;
+
+          for (const cs of pod.status?.containerStatuses || []) {
+            if (cs.restartCount >= minRestarts && cs.lastState?.terminated?.reason === 'OOMKilled') {
+              const container = pod.spec.containers.find((c: any) => c.name === cs.name);
+              oomPods.push({
+                namespace: podNs,
+                pod: podName,
+                container: cs.name,
+                restartCount: cs.restartCount,
+                currentLimits: container?.resources?.limits || {},
+                lastOOMKill: cs.lastState.terminated.finishedAt || null,
+                deployment,
+              });
+            }
+          }
+        }
+
+        this.state.addAuditEntry({
+          action: 'oomkill_detect',
+          result: 'success',
+          details: { oomPodsFound: oomPods.length, namespace: args.namespace || 'all' },
+        });
+
+        // Notify Slack if configured
+        if (oomPods.length > 0) {
+          const slackConfig = this.state.getCache('slack_config');
+          if (slackConfig?.webhook_url && slackConfig?.notify_on?.oomkill_detected) {
+            const podList = oomPods.slice(0, 5).map((p) => `• \`${p.namespace}/${p.pod}\` (${p.restartCount} restarts)`).join('\n');
+            await this.sendSlackNotification(slackConfig.webhook_url, {
+              text: `💥 OOMKill detected: ${oomPods.length} pod(s)\n${podList}${oomPods.length > 5 ? `\n...and ${oomPods.length - 5} more` : ''}`,
+            });
+          }
+        }
+
+        return { oomPods, total: oomPods.length };
+      }
+
+      case 'oomkill_remediate': {
+        const multiplier = args.multiplier || 1.5;
+
+        // Detect current OOMKill state for the deployment
+        let podOutput: string;
+        try {
+          podOutput = execFileSync('kubectl', [
+            'get', 'pods', '-n', args.namespace,
+            '-l', `app=${args.deployment}`,
+            '-o', 'json',
+          ], { encoding: 'utf8', timeout: 30_000 });
+        } catch {
+          // Fallback: try with app.kubernetes.io/name label
+          podOutput = execFileSync('kubectl', [
+            'get', 'pods', '-n', args.namespace,
+            '-l', `app.kubernetes.io/name=${args.deployment}`,
+            '-o', 'json',
+          ], { encoding: 'utf8', timeout: 30_000 });
+        }
+
+        const podData = JSON.parse(podOutput);
+        if (podData.items.length === 0) {
+          throw new Error(`No pods found for deployment ${args.deployment} in ${args.namespace}`);
+        }
+
+        // Find OOMKilled container
+        const targetContainer = args.container || podData.items[0].spec.containers[0].name;
+        const container = podData.items[0].spec.containers.find((c: any) => c.name === targetContainer);
+        if (!container) {
+          throw new Error(`Container ${targetContainer} not found`);
+        }
+
+        const currentMemLimit = container.resources?.limits?.memory || '256Mi';
+        const currentCpuLimit = container.resources?.limits?.cpu || '500m';
+
+        // Parse and bump memory limit
+        const parseMemory = (mem: string): number => {
+          if (mem.endsWith('Gi')) return parseFloat(mem) * 1024;
+          if (mem.endsWith('Mi')) return parseFloat(mem);
+          if (mem.endsWith('Ki')) return parseFloat(mem) / 1024;
+          return parseFloat(mem) / (1024 * 1024); // bytes
+        };
+
+        const formatMemory = (mi: number): string => {
+          if (mi >= 1024) return `${Math.round(mi / 1024 * 10) / 10}Gi`;
+          return `${Math.round(mi)}Mi`;
+        };
+
+        const newMemLimit = formatMemory(parseMemory(currentMemLimit) * multiplier);
+        const newMemRequest = formatMemory(parseMemory(currentMemLimit) * multiplier * 0.75);
+
+        if (args.dry_run) {
+          return {
+            dry_run: true,
+            deployment: args.deployment,
+            namespace: args.namespace,
+            container: targetContainer,
+            current: { memory: currentMemLimit, cpu: currentCpuLimit },
+            proposed: { memory: newMemLimit, memoryRequest: newMemRequest },
+            multiplier,
+          };
+        }
+
+        // Fetch the manifest from the gitops repo
+        let manifestContent: string;
+        try {
+          const file = await this.github.getFileContent(args.gitops_owner, args.gitops_repo, args.manifest_path);
+          manifestContent = file.content;
+        } catch {
+          throw new Error(`Cannot read manifest at ${args.manifest_path} in ${args.gitops_owner}/${args.gitops_repo}`);
+        }
+
+        // Update memory limits in the manifest (supports both YAML patterns)
+        let updatedManifest = manifestContent;
+        const memLimitPattern = new RegExp(`(memory:\\s*)${currentMemLimit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'g');
+        updatedManifest = updatedManifest.replace(memLimitPattern, `$1${newMemLimit}`);
+
+        if (updatedManifest === manifestContent) {
+          // Try generic pattern: bump any memory limit in the file
+          updatedManifest = manifestContent.replace(
+            /(limits:\s*\n\s*memory:\s*)([\w.]+)/,
+            `$1${newMemLimit}`
+          );
+        }
+
+        // Create a branch and PR using dedup
+        const branchName = `oomkill-remediate/${args.namespace}-${args.deployment}-${Date.now()}`;
+
+        await this.github.commitFiles(args.gitops_owner, args.gitops_repo, {
+          branch: branchName,
+          message: `fix(oomkill): bump ${args.deployment} memory limit to ${newMemLimit}`,
+          files: [{ path: args.manifest_path, content: updatedManifest }],
+          createBranch: true,
+          baseBranch: 'main',
+        });
+
+        // Use dedup to create the PR
+        const prefix = `[OOMKill] ${args.namespace}/${args.deployment}`;
+        const openPrs = await this.github.listPullRequests(args.gitops_owner, args.gitops_repo, { state: 'open' });
+        const existingPr = openPrs.find((pr) => pr.title.startsWith(prefix));
+
+        if (existingPr) {
+          this.state.addAuditEntry({
+            action: 'oomkill_remediate',
+            repo: `${args.gitops_owner}/${args.gitops_repo}`,
+            result: 'dedup_hit',
+            details: { deployment: args.deployment, existingPr: existingPr.number },
+          });
+          return { created: false, dedup_hit: true, existing_pr: existingPr };
+        }
+
+        const pr = await this.github.createPullRequest(args.gitops_owner, args.gitops_repo, {
+          title: `${prefix} — bump memory ${currentMemLimit} → ${newMemLimit}`,
+          body: `## OOMKill Remediation\n\n**Deployment:** \`${args.namespace}/${args.deployment}\`\n**Container:** \`${targetContainer}\`\n**Current limit:** ${currentMemLimit}\n**New limit:** ${newMemLimit} (${multiplier}x)\n**New request:** ${newMemRequest}\n\n_Auto-generated by git-steer oomkill_remediate_`,
+          head: branchName,
+          base: 'main',
+          labels: ['oomkill', 'auto-remediation'],
+        });
+
+        this.state.addAuditEntry({
+          action: 'oomkill_remediate',
+          repo: `${args.gitops_owner}/${args.gitops_repo}`,
+          result: 'pr_created',
+          details: { deployment: args.deployment, prNumber: pr.number, oldLimit: currentMemLimit, newLimit: newMemLimit },
+        });
+
+        return {
+          created: true,
+          pr: { number: pr.number, url: pr.url },
+          changes: {
+            deployment: args.deployment,
+            container: targetContainer,
+            oldLimit: currentMemLimit,
+            newLimit: newMemLimit,
+            multiplier,
+          },
+        };
+      }
+
+      // ===== Certificate Renewal =====
+      case 'cert_check': {
+        const expiryDays = args.expiry_days || 30;
+        const now = new Date();
+        const threshold = new Date(now.getTime() + expiryDays * 24 * 60 * 60 * 1000);
+
+        let certOutput: string;
+        try {
+          certOutput = execFileSync('kubectl', [
+            'get', 'certificates',
+            ...(args.namespace ? ['-n', args.namespace] : ['--all-namespaces']),
+            '-o', 'json',
+          ], { encoding: 'utf8', timeout: 30_000 });
+        } catch (e: any) {
+          throw new Error(`kubectl failed (cert-manager CRDs installed?): ${e.message}`);
+        }
+
+        const certs = JSON.parse(certOutput);
+        const expiring: Array<{
+          namespace: string;
+          name: string;
+          secretName: string;
+          dnsNames: string[];
+          notAfter: string;
+          daysRemaining: number;
+          issuer: string;
+          ready: boolean;
+        }> = [];
+
+        for (const cert of certs.items) {
+          const notAfter = cert.status?.notAfter;
+          if (!notAfter) continue;
+
+          const expiryDate = new Date(notAfter);
+          const daysRemaining = Math.floor((expiryDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+
+          if (expiryDate <= threshold) {
+            const readyCondition = cert.status?.conditions?.find((c: any) => c.type === 'Ready');
+            expiring.push({
+              namespace: cert.metadata.namespace,
+              name: cert.metadata.name,
+              secretName: cert.spec.secretName,
+              dnsNames: cert.spec.dnsNames || [],
+              notAfter,
+              daysRemaining,
+              issuer: cert.spec.issuerRef?.name || 'unknown',
+              ready: readyCondition?.status === 'True',
+            });
+          }
+        }
+
+        // Sort by most urgent first
+        expiring.sort((a, b) => a.daysRemaining - b.daysRemaining);
+
+        this.state.addAuditEntry({
+          action: 'cert_check',
+          result: 'success',
+          details: { expiringCerts: expiring.length, thresholdDays: expiryDays },
+        });
+
+        // Notify Slack if configured
+        if (expiring.length > 0) {
+          const slackConfig = this.state.getCache('slack_config');
+          if (slackConfig?.webhook_url && slackConfig?.notify_on?.cert_expiring) {
+            const certList = expiring.slice(0, 5).map((c) =>
+              `• \`${c.namespace}/${c.name}\` — ${c.daysRemaining}d remaining (${c.dnsNames.join(', ')})`
+            ).join('\n');
+            await this.sendSlackNotification(slackConfig.webhook_url, {
+              text: `🔒 ${expiring.length} certificate(s) expiring within ${expiryDays} days:\n${certList}`,
+            });
+          }
+        }
+
+        return { expiring, total: expiring.length, thresholdDays: expiryDays };
+      }
+
+      case 'cert_renew': {
+        const method = args.method || 'force_renewal';
+
+        if (method === 'force_renewal') {
+          // Get the Certificate to find the secret name
+          let certJson: string;
+          try {
+            certJson = execFileSync('kubectl', [
+              'get', 'certificate', args.certificate_name,
+              '-n', args.namespace, '-o', 'json',
+            ], { encoding: 'utf8', timeout: 15_000 });
+          } catch (e: any) {
+            throw new Error(`Certificate ${args.certificate_name} not found in ${args.namespace}: ${e.message}`);
+          }
+
+          const cert = JSON.parse(certJson);
+          const secretName = cert.spec.secretName;
+
+          // Use cmctl renew if available, otherwise delete the secret
+          try {
+            execFileSync('cmctl', ['renew', args.certificate_name, '-n', args.namespace], {
+              encoding: 'utf8', timeout: 15_000,
+            });
+          } catch {
+            // Fallback: delete the secret to trigger re-issuance
+            execFileSync('kubectl', [
+              'delete', 'secret', secretName, '-n', args.namespace,
+            ], { encoding: 'utf8', timeout: 15_000 });
+          }
+
+          this.state.addAuditEntry({
+            action: 'cert_renew',
+            result: 'renewed',
+            details: { certificate: args.certificate_name, namespace: args.namespace, method: 'force_renewal', secretName },
+          });
+
+          return {
+            success: true,
+            method: 'force_renewal',
+            certificate: args.certificate_name,
+            namespace: args.namespace,
+            secretDeleted: secretName,
+            message: 'Certificate renewal triggered. cert-manager will re-issue.',
+          };
+        }
+
+        if (method === 'gitops_pr') {
+          if (!args.gitops_owner || !args.gitops_repo || !args.manifest_path) {
+            throw new Error('gitops_owner, gitops_repo, and manifest_path are required for gitops_pr method');
+          }
+
+          const file = await this.github.getFileContent(args.gitops_owner, args.gitops_repo, args.manifest_path);
+          let content = file.content;
+
+          // Bump a renewal annotation to trigger re-sync
+          const renewalTs = new Date().toISOString();
+          if (content.includes('git-steer/renew-at')) {
+            content = content.replace(/git-steer\/renew-at:\s*["']?[^"'\n]+["']?/, `git-steer/renew-at: "${renewalTs}"`);
+          } else {
+            // Add annotation after metadata.annotations
+            content = content.replace(
+              /(annotations:\s*\n)/,
+              `$1    git-steer/renew-at: "${renewalTs}"\n`
+            );
+          }
+
+          const branchName = `cert-renew/${args.namespace}-${args.certificate_name}-${Date.now()}`;
+
+          await this.github.commitFiles(args.gitops_owner, args.gitops_repo, {
+            branch: branchName,
+            message: `fix(cert): trigger renewal for ${args.certificate_name}`,
+            files: [{ path: args.manifest_path, content }],
+            createBranch: true,
+            baseBranch: 'main',
+          });
+
+          const prefix = `[Cert Renewal] ${args.namespace}/${args.certificate_name}`;
+          const openPrs = await this.github.listPullRequests(args.gitops_owner, args.gitops_repo, { state: 'open' });
+          const existingPr = openPrs.find((pr) => pr.title.startsWith(prefix));
+
+          if (existingPr) {
+            return { created: false, dedup_hit: true, existing_pr: existingPr };
+          }
+
+          const pr = await this.github.createPullRequest(args.gitops_owner, args.gitops_repo, {
+            title: `${prefix} — trigger re-issuance`,
+            body: `## Certificate Renewal\n\n**Certificate:** \`${args.namespace}/${args.certificate_name}\`\n**Method:** GitOps PR with renewal annotation\n\n_Auto-generated by git-steer cert_renew_`,
+            head: branchName,
+            base: 'main',
+            labels: ['certificate', 'auto-remediation'],
+          });
+
+          this.state.addAuditEntry({
+            action: 'cert_renew',
+            result: 'pr_created',
+            details: { certificate: args.certificate_name, namespace: args.namespace, method: 'gitops_pr', prNumber: pr.number },
+          });
+
+          return {
+            success: true,
+            method: 'gitops_pr',
+            pr: { number: pr.number, url: pr.url },
+          };
+        }
+
+        throw new Error(`Unknown method: ${method}`);
+      }
+
+      // ===== Slack Integration =====
+      case 'slack_notify': {
+        const webhookUrl = args.webhook_url || this.state.getCache('slack_config')?.webhook_url;
+        if (!webhookUrl) {
+          throw new Error('No Slack webhook URL configured. Use slack_configure first or pass webhook_url.');
+        }
+
+        const payload: Record<string, any> = { text: args.message };
+        if (args.blocks) payload.blocks = args.blocks;
+
+        await this.sendSlackNotification(webhookUrl, payload);
+
+        this.state.addAuditEntry({
+          action: 'slack_notify',
+          result: 'sent',
+          details: { channel: args.channel || 'default' },
+        });
+
+        return { success: true, message: 'Notification sent' };
+      }
+
+      case 'slack_configure': {
+        const config = {
+          webhook_url: args.webhook_url,
+          default_channel: args.default_channel || 'general',
+          notify_on: {
+            pr_created: true,
+            pr_merged: true,
+            pr_dedup_hit: false,
+            oomkill_detected: true,
+            cert_expiring: true,
+            ...args.notify_on,
+          },
+        };
+
+        this.state.setCache('slack_config', config);
+
+        this.state.addAuditEntry({
+          action: 'slack_configure',
+          result: 'configured',
+          details: { channel: config.default_channel, events: Object.keys(config.notify_on).filter((k) => (config.notify_on as any)[k]) },
+        });
+
+        return { success: true, config };
+      }
+
+      // ===== Operational Metrics =====
+      case 'ops_metrics': {
+        const period = args.period || '7d';
+        const now = new Date();
+        let since: Date;
+
+        switch (period) {
+          case '24h': since = new Date(now.getTime() - 24 * 60 * 60 * 1000); break;
+          case '7d': since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); break;
+          case '30d': since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); break;
+          default: since = new Date(0); break;
+        }
+
+        const sinceIso = since.toISOString();
+        const audit = this.state.getRecentAudit(10000).filter((e) => e.ts >= sinceIso);
+
+        // Alert frequency
+        const alertEntries = audit.filter((e) => e.action === 'pr_dedup_create' || e.action === 'pr_dedup_check');
+        const alertsPerDay = alertEntries.length / Math.max(1, (now.getTime() - since.getTime()) / (24 * 60 * 60 * 1000));
+
+        // Dedup hit rate
+        const dedupChecks = audit.filter((e) => e.action === 'pr_dedup_create');
+        const dedupHits = dedupChecks.filter((e) => e.result === 'dedup_hit');
+        const dedupHitRate = dedupChecks.length > 0 ? dedupHits.length / dedupChecks.length : 0;
+
+        // Auto-merge success (look for fabric_git_merge_pull_request entries)
+        const mergeAttempts = audit.filter((e) => e.action === 'fabric_git_merge_pull_request');
+        const mergeSuccesses = mergeAttempts.filter((e) => e.result === 'success');
+        const mergeSuccessRate = mergeAttempts.length > 0 ? mergeSuccesses.length / mergeAttempts.length : 0;
+
+        // Mean time to remediation (from oomkill_detect to oomkill_remediate)
+        const remediations = audit.filter((e) => e.action === 'oomkill_remediate' && e.result === 'pr_created');
+        const detections = audit.filter((e) => e.action === 'oomkill_detect');
+
+        // OOMKill events
+        const oomEvents = audit.filter((e) => e.action === 'oomkill_detect');
+        const oomTotal = oomEvents.reduce((sum, e) => sum + (e.details?.oomPodsFound || 0), 0);
+
+        // Cert events
+        const certChecks = audit.filter((e) => e.action === 'cert_check');
+        const certRenewals = audit.filter((e) => e.action === 'cert_renew');
+
+        // Security metrics from existing system
+        const securityMetrics = this.state.getMetrics({
+          start: sinceIso,
+          end: now.toISOString(),
+        });
+
+        return {
+          period,
+          alerts: {
+            total: alertEntries.length,
+            perDay: Math.round(alertsPerDay * 10) / 10,
+          },
+          dedup: {
+            checks: dedupChecks.length,
+            hits: dedupHits.length,
+            hitRate: Math.round(dedupHitRate * 100) + '%',
+          },
+          autoMerge: {
+            attempts: mergeAttempts.length,
+            successes: mergeSuccesses.length,
+            successRate: Math.round(mergeSuccessRate * 100) + '%',
+          },
+          oomkill: {
+            detections: oomEvents.length,
+            totalPods: oomTotal,
+            remediations: remediations.length,
+          },
+          certificates: {
+            checks: certChecks.length,
+            renewals: certRenewals.length,
+          },
+          security: {
+            totalCves: securityMetrics.totalCves,
+            fixedCves: securityMetrics.fixedCves,
+            fixRate: Math.round(securityMetrics.fixRate * 100) + '%',
+            avgMttrHours: Math.round(securityMetrics.avgMttr),
+          },
+        };
+      }
+
       // File operation tools
       case 'repo_commit': {
         if (!args.files || args.files.length === 0) {
@@ -2153,6 +2894,21 @@ ${result.codeScanningAlerts.map((a) => `| ${a.rule.id} | ${a.rule.severity} | ${
 
       default:
         throw new Error(`Unknown tool: ${name}`);
+    }
+  }
+
+  private async sendSlackNotification(webhookUrl: string, payload: Record<string, any>): Promise<void> {
+    try {
+      const res = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        console.warn(`[git-steer] Slack notification failed: ${res.status} ${res.statusText}`);
+      }
+    } catch (e: any) {
+      console.warn(`[git-steer] Slack notification error: ${e.message}`);
     }
   }
 

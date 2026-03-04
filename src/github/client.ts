@@ -810,6 +810,36 @@ export class GitHubClient {
     });
   }
 
+  async listPullRequests(
+    owner: string,
+    repo: string,
+    options?: { state?: 'open' | 'closed' | 'all'; per_page?: number }
+  ): Promise<Array<{
+    number: number;
+    title: string;
+    state: string;
+    htmlUrl: string;
+    createdAt: string;
+    labels: string[];
+  }>> {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/pulls', {
+      owner,
+      repo,
+      state: options?.state || 'open',
+      per_page: options?.per_page || 100,
+    });
+
+    return data.map((pr: any) => ({
+      number: pr.number,
+      title: pr.title,
+      state: pr.state,
+      htmlUrl: pr.html_url,
+      createdAt: pr.created_at,
+      labels: pr.labels.map((l: any) => (typeof l === 'string' ? l : l.name)),
+    }));
+  }
+
   async createPullRequest(
     owner: string,
     repo: string,
