@@ -20,7 +20,7 @@ Nothing lives locally — no cloned repos, no config files, no build artifacts. 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        YOUR PC or MAC                                 │
+│                        YOUR PC or MAC                           │
 │                                                                 │
 │   Keychain:                                                     │
 │     - GitHub App private key                                    │
