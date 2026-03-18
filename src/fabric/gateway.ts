@@ -31,7 +31,12 @@ export async function initGateway(opts: {
   };
 
   try {
-    // Set env vars for CVE app's createAdaptersFromEnv()
+    // Save original env values so we can restore after createApp()
+    const origToken = process.env.GITHUB_TOKEN;
+    const origStateRepo = process.env.STATE_REPO;
+    const origManagedRepos = process.env.MANAGED_REPOS;
+
+    // Temporarily set env vars for CVE app's createAdaptersFromEnv()
     process.env.GITHUB_TOKEN = opts.githubToken;
     process.env.STATE_REPO = opts.stateRepo;
     process.env.MANAGED_REPOS = opts.managedRepos.join(',');
@@ -41,6 +46,12 @@ export async function initGateway(opts: {
     // Dynamically import + register CVE app
     const cveModule = await import('@git-fabric/cve');
     const cveApp = await cveModule.createApp();
+
+    // Clean up — restore original env values so tokens don't linger in process.env
+    if (origToken === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = origToken;
+    if (origStateRepo === undefined) delete process.env.STATE_REPO; else process.env.STATE_REPO = origStateRepo;
+    if (origManagedRepos === undefined) delete process.env.MANAGED_REPOS; else process.env.MANAGED_REPOS = origManagedRepos;
+
     registry.register(cveApp);
 
     const router = createRouter(registry);

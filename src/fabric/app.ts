@@ -2,8 +2,9 @@
  * git-steer FabricApp
  *
  * Exports a FabricApp that wraps git-steer's GitHub tools for the
- * @git-fabric/gateway. Uses a PAT token (GITHUB_TOKEN env var) so it
- * works in-cluster without macOS Keychain / GitHub App credentials.
+ * @git-fabric/gateway. Accepts a pre-configured Octokit instance
+ * (e.g. the throttled client from GitHubClient.getOctokit()) so all
+ * GitHub API traffic flows through a single rate-limited client.
  *
  * Tools exposed (17):
  *   repo_list, repo_create, repo_archive, repo_settings
@@ -36,13 +37,8 @@ interface FabricApp {
   }>;
 }
 
-function createOctokit(token: string): Octokit {
-  return new Octokit({ auth: token });
-}
-
-export function createApp(tokenOverride?: string): FabricApp {
-  const token = tokenOverride ?? process.env.GITHUB_TOKEN ?? process.env.GIT_STEER_TOKEN ?? '';
-  const octokit = createOctokit(token);
+export function createApp(opts: { octokit: Octokit }): FabricApp {
+  const octokit = opts.octokit;
 
   const tools: FabricTool[] = [
     // ── Repositories ──────────────────────────────────────────────────────────
