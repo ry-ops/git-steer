@@ -18,12 +18,7 @@ export async function listRepos(
   org?: string,
 ): Promise<{ owner: string; name: string; fullName: string; private: boolean; defaultBranch: string; url: string; pushedAt?: string }[]> {
   // Delegate via octokit token — direct REST call
-  const headers = {
-    Authorization: `token ${github.token}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'git-steer/fabric-git',
-  };
+  const headers = github.headers();
   const url = org
     ? `https://api.github.com/orgs/${encodeURIComponent(org)}/repos?per_page=100&sort=pushed`
     : `https://api.github.com/user/repos?per_page=100&sort=pushed`;
@@ -60,12 +55,7 @@ export async function listFiles(
   path = '',
   ref?: string,
 ): Promise<{ path: string; type: string; size?: number; sha: string }[]> {
-  const headers = {
-    Authorization: `token ${github.token}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'git-steer/fabric-git',
-  };
+  const headers = github.headers();
   const q = ref ? `?ref=${encodeURIComponent(ref)}` : '';
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}${q}`;
   const res = await fetch(url, { headers });
@@ -105,12 +95,7 @@ export async function listCommits(
   branch?: string,
   limit = 20,
 ): Promise<{ sha: string; shortSha: string; message: string; author: string; date: string; url: string }[]> {
-  const headers = {
-    Authorization: `token ${github.token}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'git-steer/fabric-git',
-  };
+  const headers = github.headers();
   const q = new URLSearchParams({ per_page: String(limit) });
   if (branch) q.set('sha', branch);
   const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits?${q}`, { headers });
@@ -132,12 +117,7 @@ export async function getCommit(
   repo: string,
   sha: string,
 ): Promise<{ sha: string; shortSha: string; message: string; author: string; date: string; additions: number; deletions: number; files: { filename: string; status: string; additions: number; deletions: number }[] }> {
-  const headers = {
-    Authorization: `token ${github.token}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'git-steer/fabric-git',
-  };
+  const headers = github.headers();
   const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits/${sha}`, { headers });
   if (!res.ok) throw new Error(`getCommit: ${res.status}`);
   const c = await res.json() as any;
@@ -165,12 +145,7 @@ export async function compareCommits(
   base: string,
   head: string,
 ): Promise<{ status: string; aheadBy: number; behindBy: number; commits: { sha: string; message: string }[]; files: { filename: string; status: string }[] }> {
-  const headers = {
-    Authorization: `token ${github.token}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'git-steer/fabric-git',
-  };
+  const headers = github.headers();
   const res = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
     { headers },
@@ -193,12 +168,7 @@ export async function listBranches(
   owner: string,
   repo: string,
 ): Promise<{ name: string; sha: string; protected: boolean }[]> {
-  const headers = {
-    Authorization: `token ${github.token}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'git-steer/fabric-git',
-  };
+  const headers = github.headers();
   const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/branches?per_page=100`, { headers });
   if (!res.ok) throw new Error(`listBranches: ${res.status}`);
   const data = await res.json() as any[];
@@ -222,12 +192,7 @@ export async function deleteBranch(
   repo: string,
   branch: string,
 ): Promise<{ owner: string; repo: string; branch: string; deleted: true }> {
-  const headers = {
-    Authorization: `token ${github.token}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'git-steer/fabric-git',
-  };
+  const headers = github.headers();
   const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, { method: 'DELETE', headers });
   if (!res.ok && res.status !== 422) throw new Error(`deleteBranch: ${res.status}`);
   return { owner, repo, branch, deleted: true };
@@ -241,12 +206,7 @@ export async function listPullRequests(
   repo: string,
   state: 'open' | 'closed' | 'all' = 'open',
 ): Promise<{ number: number; title: string; state: string; author: string; head: string; base: string; url: string; draft: boolean }[]> {
-  const headers = {
-    Authorization: `token ${github.token}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'git-steer/fabric-git',
-  };
+  const headers = github.headers();
   const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls?state=${state}&per_page=50`, { headers });
   if (!res.ok) throw new Error(`listPullRequests: ${res.status}`);
   const data = await res.json() as any[];
@@ -268,12 +228,7 @@ export async function getPullRequest(
   repo: string,
   number: number,
 ): Promise<{ number: number; title: string; state: string; body: string; author: string; head: string; base: string; url: string; draft: boolean; labels: string[]; additions: number; deletions: number; changedFiles: number }> {
-  const headers = {
-    Authorization: `token ${github.token}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'git-steer/fabric-git',
-  };
+  const headers = github.headers();
   const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${number}`, { headers });
   if (!res.ok) throw new Error(`getPullRequest: ${res.status}`);
   const pr = await res.json() as any;
@@ -315,12 +270,7 @@ export async function mergePullRequest(
   method: 'merge' | 'squash' | 'rebase' = 'squash',
   commitTitle?: string,
 ): Promise<{ merged: boolean; sha?: string; message: string }> {
-  const headers = {
-    Authorization: `token ${github.token}`,
-    Accept: 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'git-steer/fabric-git',
-  };
+  const headers = github.headers();
   const body: Record<string, string> = { merge_method: method };
   if (commitTitle) body.commit_title = commitTitle;
   const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${number}/merge`, {

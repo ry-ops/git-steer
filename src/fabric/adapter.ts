@@ -1,10 +1,10 @@
 /**
  * FabricGitHubAdapter — minimal interface used by the git.ts connector.
- * Provides the token and key GitHub operations needed by fabric/git.ts.
+ * Provides auth headers and key GitHub operations needed by fabric/git.ts.
  */
 export interface FabricGitHubAdapter {
-  /** Raw PAT or installation token for Authorization headers. */
-  token: string;
+  /** Returns pre-built Authorization headers. Raw token is never exposed. */
+  headers(): Record<string, string>;
 
   getFileContent(owner: string, repo: string, path: string): Promise<string | null>;
 

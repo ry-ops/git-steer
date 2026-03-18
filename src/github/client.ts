@@ -33,9 +33,9 @@ const ThrottledOctokit = Octokit.plugin(throttling, retry).defaults({
     onRateLimit(retryAfter: number, options: Record<string, unknown>, _octokit: unknown, retryCount: number): boolean {
       throttleStats.retryCount += 1;
       throttleStats.backoffMs += retryAfter * 1000;
-      console.warn(
+      process.stderr.write(
         `[git-steer] Primary rate limit hit for ${options.method} ${options.url}. ` +
-        `Retry-After: ${retryAfter}s (attempt ${retryCount + 1}/4)`
+        `Retry-After: ${retryAfter}s (attempt ${retryCount + 1}/4)\n`
       );
       return retryCount < 4;
     },
@@ -43,9 +43,9 @@ const ThrottledOctokit = Octokit.plugin(throttling, retry).defaults({
       throttleStats.isSecondaryLimitHit = true;
       throttleStats.retryCount += 1;
       throttleStats.backoffMs += retryAfter * 1000;
-      console.warn(
+      process.stderr.write(
         `[git-steer] Secondary rate limit hit for ${options.method} ${options.url}. ` +
-        `Backing off ${retryAfter}s and retrying.`
+        `Backing off ${retryAfter}s and retrying.\n`
       );
       return true;
     },
@@ -141,6 +141,15 @@ export class GitHubClient {
     throttleStats.retryCount = 0;
     throttleStats.backoffMs = 0;
     return snapshot;
+  }
+
+  /**
+   * Return the internal throttled Octokit instance.
+   * Allows callers (e.g. fabric/app.ts) to reuse the same rate-limited client
+   * instead of creating a raw, unthrottled Octokit.
+   */
+  getOctokit(): Octokit {
+    return this.ensureAuth();
   }
 
   private ensureAuth(): Octokit {
