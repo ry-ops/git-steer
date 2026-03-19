@@ -143,8 +143,8 @@ export class GitSteer {
     const quality = this.state.getQualityResults();
     const html = generateDashboardHtml({ metrics, rfcs, quality });
 
-    const owner = 'ry-ops';
-    const stateRepo = 'git-steer-state';
+    const owner = this.state.getOwnerName();
+    const stateRepo = this.state.getRepoName();
 
     const commitResult = await this.github.commitFiles(owner, stateRepo, {
       branch: 'gh-pages',
@@ -197,10 +197,10 @@ export class GitSteer {
    * Graceful shutdown - persist state before exit
    */
   async shutdown(): Promise<void> {
-    console.log('\nShutting down...');
+    process.stderr.write('\n[git-steer] Shutting down...\n');
     
     if (this.state?.isDirty()) {
-      console.log('Saving state to GitHub...');
+      process.stderr.write('[git-steer] Saving state to GitHub...\n');
       await this.state.save();
     }
 
