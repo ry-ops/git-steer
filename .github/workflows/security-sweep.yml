@@ -156,7 +156,7 @@ jobs:
                 npm install --package-lock-only 2>/dev/null || true
               fi
 
-              npm audit fix --force 2>/dev/null || true
+              npm audit fix 2>/dev/null || true
 
               cd - > /dev/null
             fi
