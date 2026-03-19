@@ -39,8 +39,8 @@ jobs:
       - name: Parse target repo
         id: parse
         run: |
-          echo "owner=$(echo '${{ inputs.target_repo }}' | cut -d'/' -f1)" >> $GITHUB_OUTPUT
-          echo "repo=$(echo '${{ inputs.target_repo }}' | cut -d'/' -f2)" >> $GITHUB_OUTPUT
+          echo "owner=$(echo "${{ inputs.target_repo }}" | cut -d'/' -f1)" >> $GITHUB_OUTPUT
+          echo "repo=$(echo "${{ inputs.target_repo }}" | cut -d'/' -f2)" >> $GITHUB_OUTPUT
 
       - name: Generate token
         id: app-token
@@ -76,7 +76,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          ALERTS=$(gh api repos/${{ inputs.target_repo }}/dependabot/alerts \
+          ALERTS=$(gh api "repos/${{ inputs.target_repo }}/dependabot/alerts" \
             --jq '[.[] | select(.state == "open") | {
               package: .dependency.package.name,
               ecosystem: .dependency.package.ecosystem,
@@ -149,7 +149,7 @@ jobs:
               fi
 
               # Run npm audit fix
-              npm audit fix --force 2>/dev/null || true
+              npm audit fix 2>/dev/null || true
 
               cd - > /dev/null
             fi

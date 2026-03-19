@@ -73,7 +73,7 @@ jobs:
           echo "has_py=$HAS_PY" >> $GITHUB_OUTPUT
           echo "has_go=$HAS_GO" >> $GITHUB_OUTPUT
 
-          TOOLS='${{ inputs.tools }}'
+          TOOLS="${{ inputs.tools }}"
           echo "tools=$TOOLS" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
