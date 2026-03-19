@@ -120,6 +120,15 @@ export function getTools(): Tool[] {
   ];
 }
 
+const SLACK_WEBHOOK_ALLOWLIST = [
+  'https://hooks.slack.com/',
+  'https://hooks.slack-gov.com/',
+];
+
+function isAllowedWebhookUrl(url: string): boolean {
+  return SLACK_WEBHOOK_ALLOWLIST.some(prefix => url.startsWith(prefix));
+}
+
 export function handleCall(name: string, args: Record<string, any>, deps: ToolDeps): Promise<any> | null {
   switch (name) {
     case 'slack_notify': return handleSlackNotify(args, deps);
@@ -134,6 +143,13 @@ async function handleSlackNotify(args: Record<string, any>, deps: ToolDeps): Pro
   const webhookUrl = args.webhook_url || deps.state.getCache('slack_config')?.webhook_url;
   if (!webhookUrl) {
     throw new Error('No Slack webhook URL configured. Use slack_configure first or pass webhook_url.');
+  }
+
+  if (!isAllowedWebhookUrl(webhookUrl)) {
+    throw new Error(
+      `Webhook URL rejected: must start with one of ${SLACK_WEBHOOK_ALLOWLIST.join(', ')}. ` +
+      `Received: ${webhookUrl.slice(0, 40)}...`
+    );
   }
 
   const payload: Record<string, any> = { text: args.message };
@@ -151,6 +167,13 @@ async function handleSlackNotify(args: Record<string, any>, deps: ToolDeps): Pro
 }
 
 async function handleSlackConfigure(args: Record<string, any>, deps: ToolDeps): Promise<any> {
+  if (!isAllowedWebhookUrl(args.webhook_url)) {
+    throw new Error(
+      `Webhook URL rejected: must start with one of ${SLACK_WEBHOOK_ALLOWLIST.join(', ')}. ` +
+      `Received: ${args.webhook_url.slice(0, 40)}...`
+    );
+  }
+
   const config = {
     webhook_url: args.webhook_url,
     default_channel: args.default_channel || 'general',

@@ -147,6 +147,13 @@ export class StateManager {
   }
 
   /**
+   * Get the state repo name (without owner prefix).
+   */
+  getRepoName(): string {
+    return this.repo;
+  }
+
+  /**
    * Get owner, throwing if not loaded
    */
   private getOwner(): string {
@@ -203,7 +210,28 @@ export class StateManager {
   }
 
   /**
-   * Save all dirty state to GitHub
+   * Save all dirty state to GitHub.
+   *
+   * **Consistency model:**
+   *
+   * 1. Files are written sequentially via the GitHub Contents API, not
+   *    atomically. There is no transaction boundary across files.
+   *
+   * 2. If the process crashes mid-save, state becomes inconsistent.
+   *    For example, `state/audit.jsonl` may be updated while
+   *    `state/rfcs.jsonl` still contains stale data.
+   *
+   * 3. Each file write uses SHA-based conflict detection (the `sha`
+   *    parameter in the Contents API). This prevents overwriting
+   *    concurrent changes to the *same* file, but does not prevent
+   *    logical conflicts *across* files (e.g., an RFC referencing an
+   *    audit entry that was never persisted).
+   *
+   * 4. Two concurrent sessions (e.g., the MCP server and the heartbeat
+   *    GitHub Actions workflow) may both call `save()`. Because conflict
+   *    detection is per-file, each session's writes succeed independently
+   *    -- last-write-wins on a per-file basis. No cross-file ordering
+   *    guarantee exists between sessions.
    */
   async save(): Promise<void> {
     if (!this.data || !this.owner) {
@@ -259,6 +287,13 @@ export class StateManager {
 
   getStateRepo(): string {
     return this.owner ? `${this.owner}/${this.repo}` : this.repo;
+  }
+
+  /**
+   * Get the resolved owner (GitHub login). Throws if state not loaded.
+   */
+  getOwnerName(): string {
+    return this.getOwner();
   }
 
   getPolicies(): Record<string, Policy> {
