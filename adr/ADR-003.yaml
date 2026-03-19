@@ -1,0 +1,253 @@
+# ══════════════════════════════════════════════════════════════
+# ADR-003 — Operational Strategy
+# git-steer's role, duties, and state management model
+# ══════════════════════════════════════════════════════════════
+
+metadata:
+  id: ADR-003
+  title: "Operational Strategy"
+  status: ACCEPTED
+  date: "2026-03-19"
+  author: "Ryan // ry-ops.dev"
+  supersedes: null
+  superseded_by: null
+  affects:
+    - ry-ops/git-steer
+    - ry-ops/git-steer-state
+
+context: |
+  git-steer manages a fleet of GitHub repositories. Its duties span
+  five operational domains: repository settings and branch protection,
+  security scanning and vulnerability remediation, operational
+  monitoring and metrics, dashboard generation, and scheduled
+  heartbeat sweeps. State is persisted as JSONL files (append-only
+  logs for audit, jobs, RFCs, quality results) and YAML files
+  (configuration for managed repos, policies, schedules) in the
+  git-steer-state repository.
+
+  The TAEM shakedown surfaced questions about the state model's
+  consistency guarantees, the RFC lifecycle for CVE remediation,
+  and the integration points with external systems. This ADR
+  documents the operational strategy as the authoritative reference.
+
+decision: |
+  git-steer operates as the GitHub fleet management layer with
+  five duty domains:
+
+  1. Fleet management — repo creation, settings, archival, deletion;
+     branch listing, protection, stale branch reaping; PR creation,
+     deduplication, merge workflows.
+
+  2. Security scanning — CVE detection via GitHub Advisory Database
+     and @git-fabric/cve; automated fix PRs with severity-based
+     policy (CRITICAL = confirmed PR, HIGH = draft PR); RFC lifecycle
+     tracking from detection through fix to release; security alert
+     dismissal with reason codes.
+
+  3. Operations — rate limit monitoring with throttle telemetry;
+     ETag caching for conditional requests; sweep cursor tracking
+     for incremental fleet scans; audit logging with rate limit
+     metadata per entry.
+
+  4. Dashboard — self-contained HTML dashboard with SVG charts
+     deployed to GitHub Pages via the gh-pages branch of
+     git-steer-state; metrics, RFC status, and quality results
+     visualized.
+
+  5. Heartbeat — GitHub Actions workflows for scheduled security
+     sweeps and monitoring; workflow status tracking and trigger
+     capabilities via actions tools.
+
+  State writes are sequential via the GitHub Contents API.
+  There is no transaction boundary across files.
+
+constraints:
+  - id: C-003-001
+    type: HARD
+    scope: state-model
+    rule: >
+      Audit entries must include rate limit telemetry fields:
+      rate_remaining, rate_reset, is_secondary_limit_hit,
+      retry_count, backoff_ms. These fields enable post-hoc
+      analysis of API consumption patterns.
+    check: |
+      AuditEntry.interface.has_fields([
+        'rate_remaining', 'rate_reset',
+        'is_secondary_limit_hit', 'retry_count', 'backoff_ms'
+      ])
+    violation: NO-GO
+    adr: ADR-003
+
+  - id: C-003-002
+    type: HARD
+    scope: state-model
+    rule: >
+      State files use JSONL format for append-only data (audit.jsonl,
+      jobs.jsonl, rfcs.jsonl, quality.jsonl), YAML for configuration
+      (managed-repos.yaml, policies.yaml, schedules.yaml), and JSON
+      for cache (cache.json). File formats must not be changed without
+      a new ADR.
+    check: |
+      StateManager.save() writes:
+        'state/audit.jsonl' as JSONL
+        && 'state/jobs.jsonl' as JSONL
+        && 'state/rfcs.jsonl' as JSONL
+        && 'state/quality.jsonl' as JSONL
+        && 'state/cache.json' as JSON
+        && 'config/managed-repos.yaml' as YAML
+        && 'config/policies.yaml' as YAML
+        && 'config/schedules.yaml' as YAML
+    violation: NO-GO
+    adr: ADR-003
+
+  - id: C-003-003
+    type: HARD
+    scope: rfc-lifecycle
+    rule: >
+      RFC entries must track the full vulnerability remediation
+      lifecycle: detection (open), triage (in_progress), fix (fixed),
+      closure (closed). Each RFC records the associated issue, PR,
+      release, fix timestamp, and MTTR in hours.
+    check: |
+      RfcEntry.status in ['open', 'in_progress', 'fixed', 'closed']
+      && RfcEntry.has_fields([
+        'issueNumber', 'issueUrl', 'severity', 'vulnerabilities',
+        'prNumber', 'prUrl', 'fixedAt', 'mttr'
+      ])
+    violation: NO-GO
+    adr: ADR-003
+
+  - id: C-003-004
+    type: HARD
+    scope: cve-policy
+    rule: >
+      CVE triage must follow severity-based PR policy: CRITICAL
+      severity opens a confirmed (non-draft) PR. HIGH severity
+      opens a draft PR. Both policies are enforced by the
+      fabric_cve_triage tool.
+    check: |
+      fabric_cve_triage.description.includes('CRITICAL = confirmed PR')
+      && fabric_cve_triage.description.includes('HIGH = draft PR')
+    violation: NO-GO
+    adr: ADR-003
+
+  - id: C-003-005
+    type: SOFT
+    scope: state-consistency
+    rule: >
+      State writes are sequential via the GitHub Contents API, not
+      atomic. If the process crashes mid-save, state files may be
+      inconsistent (e.g., audit.jsonl updated but rfcs.jsonl not).
+      Callers must tolerate partial-write scenarios. The dirty flag
+      is only cleared after all files are written successfully.
+    check: |
+      StateManager.save() sets dirty=false only after all
+      saveJsonLines/saveYaml/saveJson calls complete
+    violation: WARN
+    adr: ADR-003
+
+  - id: C-003-006
+    type: SOFT
+    scope: operations
+    rule: >
+      ETag caching should be used for GitHub API responses where
+      supported. Conditional requests reduce rate limit consumption.
+      The ETag cache is stored in state/cache.json.
+    check: |
+      GitHubClient imports etagCache
+      && etagCache is used in API request paths
+    violation: WARN
+    adr: ADR-003
+
+  - id: C-003-007
+    type: SOFT
+    scope: operations
+    rule: >
+      Sweep operations should use cursor-based incremental scanning.
+      The sweep cursor is stored in state/cache.json under the
+      _sweepCursor key. Completed sweeps record per-repo timestamps
+      under _lastSwept.
+    check: |
+      StateManager.has_methods(['getSweepCursor', 'setSweepCursor',
+        'clearSweepCursor', 'setLastSwept'])
+    violation: WARN
+    adr: ADR-003
+
+  - id: C-003-008
+    type: SOFT
+    scope: dashboard
+    rule: >
+      The dashboard should be deployed to GitHub Pages via the
+      gh-pages branch of the state repository. It must be a
+      self-contained HTML file with inline SVG charts — no external
+      dependencies.
+    check: |
+      refreshDashboard() commits to branch='gh-pages'
+      && generateDashboardHtml() returns standalone HTML
+    violation: WARN
+    adr: ADR-003
+
+  - id: C-003-009
+    type: ADVISORY
+    scope: integration
+    rule: >
+      git-steer integrates with four external systems:
+      (1) Fabric gateway for CVE scanning via @git-fabric/cve,
+      (2) Slack for notifications via webhook,
+      (3) kubectl for Kubernetes operations (conditional),
+      (4) CodeRabbit (cr) for code review (conditional).
+      Each integration is optional and fails gracefully.
+    adr: ADR-003
+
+  - id: C-003-010
+    type: ADVISORY
+    scope: concurrency
+    rule: >
+      Two concurrent sessions (MCP server and GitHub Actions
+      heartbeat) may both call save(). Because conflict detection
+      is per-file via the GitHub Contents API, each session's writes
+      succeed independently — last writer wins. This is acceptable
+      given the low write frequency and append-only nature of most
+      state files.
+    adr: ADR-003
+
+rationale: |
+  The five duty domains reflect git-steer's evolution from a simple
+  repo settings manager to a full fleet operations tool. Each domain
+  maps to one or more tool modules, keeping the codebase organized
+  and the tool surface discoverable.
+
+  The sequential (non-atomic) state model is a deliberate tradeoff.
+  A transactional state store would require infrastructure beyond
+  GitHub. Since state writes happen on shutdown or explicit sync,
+  and the data volume is small (typically < 1MB total), the crash
+  window is narrow and the blast radius is limited. The dirty flag
+  pattern prevents unnecessary writes.
+
+  The RFC lifecycle enables MTTR tracking — the time from CVE
+  detection to fix release. This metric drives continuous improvement
+  in vulnerability response. The JSONL format makes it easy to
+  append entries without reading/parsing the entire file (though
+  the current implementation does load the full file).
+
+  Severity-based PR policy (CRITICAL = confirmed, HIGH = draft)
+  reflects operational reality: critical vulnerabilities need
+  immediate action, while high-severity ones benefit from review
+  before merge.
+
+consequences:
+  positive:
+    - Full vulnerability lifecycle tracking with MTTR metrics
+    - Incremental sweeps avoid redundant scanning of recently-checked repos
+    - Dashboard provides at-a-glance fleet health without external tools
+    - Audit log with rate limit telemetry enables API consumption analysis
+    - All integrations are optional — core functionality is self-contained
+  risks:
+    - risk: "Sequential state writes can leave inconsistent state on crash"
+      mitigation: "Narrow crash window, low write frequency, dirty flag prevents unnecessary saves"
+    - risk: "Last-writer-wins on concurrent saves can lose data"
+      mitigation: "Low write frequency, append-only JSONL reduces conflict surface, heartbeat and MCP server write at different intervals"
+    - risk: "JSONL files grow unbounded"
+      mitigation: "fabric_cve_compact tool prunes resolved CVE entries; manual audit log rotation possible via repo_commit"
+
+superseded_by: null

@@ -1,0 +1,212 @@
+# ══════════════════════════════════════════════════════════════
+# ADR-002 — Security Model
+# git-steer security posture per TAEM shakedown findings
+# ══════════════════════════════════════════════════════════════
+
+metadata:
+  id: ADR-002
+  title: "Security Model"
+  status: ACCEPTED
+  date: "2026-03-19"
+  author: "Ryan // ry-ops.dev"
+  supersedes: null
+  superseded_by: null
+  affects:
+    - ry-ops/git-steer
+    - ry-ops/git-steer-state
+
+context: |
+  The TAEM SECINSP shakedown (SEC-010) identified that git-steer
+  exposes ~50 MCP tools — including repo_delete, branch_reap, and
+  cert_renew — to an LLM with zero permission tiers. Several tools
+  can cause irreversible damage (history scrubbing, repository deletion,
+  certificate renewal). Additionally, the Fabric gateway temporarily
+  sets process.env variables during CVE app initialization, creating
+  a window where tokens are visible in the process environment.
+
+  This ADR codifies the security controls that were implemented in
+  response to the TAEM findings and establishes them as mandatory
+  constraints.
+
+decision: |
+  git-steer implements defense-in-depth through multiple layers:
+  (1) destructive tool confirmation via CONFIRM_<TOOL_NAME> tokens,
+  (2) dry-run defaults on high-impact sweep tools,
+  (3) token isolation via the FabricGitHubAdapter.headers() pattern,
+  (4) environment cleanup after gateway initialization,
+  (5) Slack webhook URL allowlisting,
+  (6) single throttled Octokit instance for all API traffic, and
+  (7) conditional tool registration to avoid exposing shell-execution
+  tools (kubectl, cr) when binaries are absent.
+
+constraints:
+  - id: C-002-001
+    type: HARD
+    scope: destructive-ops
+    rule: >
+      All tools in the DESTRUCTIVE_TOOLS set (repo_delete, repo_archive,
+      repo_scrub_history, branch_reap, cert_renew, security_dismiss)
+      must require a confirm parameter whose value exactly matches
+      CONFIRM_<TOOL_NAME_UPPERCASE>. Invocation without the correct
+      confirmation token must be rejected before any side effects.
+    check: |
+      DESTRUCTIVE_TOOLS.every(tool =>
+        server.callTool(tool, {}).error.includes('CONFIRM_')
+      )
+    violation: NO-GO
+    adr: ADR-002
+
+  - id: C-002-002
+    type: HARD
+    scope: destructive-ops
+    rule: >
+      All tools in the DRY_RUN_DEFAULT_TOOLS set (security_sweep,
+      security_fix_pr, branch_reap, oomkill_remediate) must default
+      dry_run to true when the caller does not explicitly set it.
+    check: |
+      DRY_RUN_DEFAULT_TOOLS.every(tool =>
+        tool.inputSchema.properties.dry_run.default === true
+        || server.callTool(tool, {}).output.includes('dry_run')
+      )
+    violation: NO-GO
+    adr: ADR-002
+
+  - id: C-002-003
+    type: HARD
+    scope: token-isolation
+    rule: >
+      The FabricGitHubAdapter must expose authentication only via
+      the headers() method, which returns pre-built Authorization
+      headers. The raw token string must never be exposed as a
+      public property or return value.
+    check: |
+      FabricGitHubAdapter.interface.publicMethods()
+        .filter(m => m.returnType.includes('token'))
+        .count() == 0
+      && FabricGitHubAdapter.headers().keys() == ['Authorization']
+    violation: NO-GO
+    adr: ADR-002
+
+  - id: C-002-004
+    type: HARD
+    scope: env-cleanup
+    rule: >
+      The initGateway() function must save, set, and then restore
+      or delete process.env values (GITHUB_TOKEN, STATE_REPO,
+      MANAGED_REPOS) after CVE app initialization. Tokens must not
+      persist in process.env beyond the createApp() call.
+    check: |
+      initGateway.source.includes('delete process.env.GITHUB_TOKEN')
+      || initGateway.source.includes("process.env.GITHUB_TOKEN = origToken")
+    violation: NO-GO
+    adr: ADR-002
+
+  - id: C-002-005
+    type: HARD
+    scope: slack-webhook
+    rule: >
+      Slack webhook URLs must be validated against the allowlist
+      before any HTTP request is made. Only URLs starting with
+      https://hooks.slack.com/ or https://hooks.slack-gov.com/
+      are permitted.
+    check: |
+      SLACK_WEBHOOK_ALLOWLIST == [
+        'https://hooks.slack.com/',
+        'https://hooks.slack-gov.com/'
+      ] && isAllowedWebhookUrl() is called before fetch()
+    violation: NO-GO
+    adr: ADR-002
+
+  - id: C-002-006
+    type: HARD
+    scope: rate-limiting
+    rule: >
+      All GitHub API traffic must flow through a single ThrottledOctokit
+      instance with retry and throttling plugins. The onRateLimit
+      callback must retry up to 4 times. The onSecondaryRateLimit
+      callback must always back off and retry.
+    check: |
+      ThrottledOctokit.plugins.includes(throttling)
+      && ThrottledOctokit.plugins.includes(retry)
+      && onRateLimit.retryCount < 4
+      && onSecondaryRateLimit.returns(true)
+    violation: NO-GO
+    adr: ADR-002
+
+  - id: C-002-007
+    type: HARD
+    scope: ci-hardening
+    rule: >
+      CI workflows must not use --force on npm audit fix. The
+      npm audit fix command must be unforced to avoid breaking
+      changes from major version bumps in automated fix PRs.
+    check: |
+      workflows.search('npm audit fix --force').count() == 0
+      && workflows.search('npm audit fix').count() >= 1
+    violation: NO-GO
+    adr: ADR-002
+
+  - id: C-002-008
+    type: SOFT
+    scope: tool-registration
+    rule: >
+      Tools that invoke shell commands (kubectl for k8s tools,
+      cr for code_review) must only be registered when the
+      respective binary is detected at startup. This prevents
+      exposing shell execution paths in environments where those
+      binaries are untrusted or absent.
+    check: |
+      !HAS_KUBECTL => KUBECTL_TOOLS not in registeredTools
+      && !HAS_CR => CR_TOOLS not in registeredTools
+    violation: WARN
+    adr: ADR-002
+
+  - id: C-002-009
+    type: ADVISORY
+    scope: credential-storage
+    rule: >
+      In CLI mode, GitHub App credentials (appId, privateKey,
+      installationId) should be stored in macOS Keychain, not in
+      environment variables or configuration files. In MCP server
+      mode, tokens are accepted via GITHUB_TOKEN or GIT_STEER_TOKEN
+      env vars as is standard for server processes.
+    adr: ADR-002
+
+rationale: |
+  The TAEM SECINSP finding SEC-010 highlighted that an LLM has no
+  inherent judgment about destructive operations. The CONFIRM_ token
+  pattern forces the calling agent to explicitly acknowledge the
+  destructive nature of an operation before it proceeds. This is
+  analogous to typing a resource name to confirm deletion in cloud
+  consoles.
+
+  Dry-run defaults ensure that sweep operations — which touch many
+  repos in a single call — produce a report before taking action.
+  This addresses the blast radius concern: a misconfigured sweep
+  with dry_run=false could affect the entire managed fleet.
+
+  The environment cleanup pattern in initGateway() was specifically
+  added because @git-fabric/cve uses createAdaptersFromEnv(), which
+  reads tokens from process.env. Without cleanup, the token would
+  remain in the process environment for the lifetime of the server,
+  visible to any code that inspects process.env.
+
+  Slack webhook allowlisting prevents SSRF through the slack_notify
+  tool. Without it, an attacker could use the tool to POST arbitrary
+  payloads to internal URLs.
+
+consequences:
+  positive:
+    - Destructive operations require explicit, tool-specific confirmation
+    - Sweep tools are safe by default — must opt into live execution
+    - Tokens are never exposed as raw strings in public interfaces
+    - Environment variables cleaned up after gateway initialization
+    - Slack webhook SSRF prevented by URL allowlist
+    - Rate limiting prevents GitHub API abuse
+  risks:
+    - risk: "CONFIRM_ tokens are static strings, not cryptographic challenges"
+      mitigation: "Acceptable for MCP tool invocation — the LLM must generate the exact string, which requires understanding the tool name"
+    - risk: "Environment cleanup has a race window during createApp()"
+      mitigation: "Window is milliseconds; process.env is only visible to same-process code; no concurrent env readers expected"
+
+superseded_by: null

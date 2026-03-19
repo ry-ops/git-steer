@@ -1,0 +1,165 @@
+# ══════════════════════════════════════════════════════════════
+# ADR-001 — Operational Range and Architecture
+# git-steer MCP server scope and structural decisions
+# ══════════════════════════════════════════════════════════════
+
+metadata:
+  id: ADR-001
+  title: "Operational Range and Architecture"
+  status: ACCEPTED
+  date: "2026-03-19"
+  author: "Ryan // ry-ops.dev"
+  supersedes: null
+  superseded_by: null
+  affects:
+    - ry-ops/git-steer
+    - ry-ops/git-steer-state
+
+context: |
+  git-steer is an MCP server for GitHub repository fleet management.
+  It exposes ~50 tools across 10 domain modules for repo settings,
+  branch protection, PR workflows, security scanning, Kubernetes
+  operations, and operational dashboards. The TAEM shakedown revealed
+  the breadth of this surface area and the need to document exactly
+  what git-steer does and does not own.
+
+  Key architectural choices — zero-clone GitHub operations, GitHub-as-state-store,
+  macOS Keychain for credentials, Fabric gateway for CVE scanning —
+  were made incrementally. This ADR captures them as the authoritative
+  reference for what git-steer is and how it fits together.
+
+decision: |
+  git-steer operates as a single MCP server exposing GitHub fleet
+  management capabilities. All repository operations use the GitHub API
+  directly — no local git clones are ever created. State lives in a
+  dedicated GitHub repository (git-steer-state) using JSONL for
+  append-only logs and YAML for configuration. The Fabric gateway
+  provides CVE scanning via @git-fabric/cve. Two transport modes
+  (stdio and HTTP/SSE) are supported. Tool registration is conditional
+  on binary availability for kubectl and CodeRabbit (cr) tools.
+
+constraints:
+  - id: C-001-001
+    type: HARD
+    scope: architecture
+    rule: >
+      All GitHub repository operations must use the GitHub API (Octokit).
+      No local git clone, checkout, or filesystem-based repo operations
+      are permitted. git-steer is a zero-clone architecture.
+    check: |
+      codebase.search('execSync.*git clone')
+        .concat(codebase.search('execSync.*git checkout'))
+        .count() == 0
+    violation: NO-GO
+    adr: ADR-001
+
+  - id: C-001-002
+    type: HARD
+    scope: architecture
+    rule: >
+      All persistent state must be stored in the git-steer-state
+      GitHub repository. No local files, databases, or external
+      storage services are used for state.
+    check: |
+      StateManager.save() writes only to GitHub Contents API
+      && StateManager.load() reads only from GitHub Contents API
+    violation: NO-GO
+    adr: ADR-001
+
+  - id: C-001-003
+    type: HARD
+    scope: transport
+    rule: >
+      The MCP server must support both stdio and HTTP/SSE transports.
+      Transport mode is selected at startup via ServerOptions.transport.
+    check: |
+      MCPServer.start() handles transport in ['stdio', 'http']
+    violation: NO-GO
+    adr: ADR-001
+
+  - id: C-001-004
+    type: HARD
+    scope: tool-registration
+    rule: >
+      kubectl-dependent tools (oomkill_detect, oomkill_remediate,
+      cert_check, cert_renew) must only be registered when the kubectl
+      binary is available on the host. CodeRabbit tools (code_review)
+      must only be registered when the cr binary is available.
+    check: |
+      KUBECTL_TOOLS.every(t =>
+        !HAS_KUBECTL ? !registeredTools.has(t) : true
+      ) && CR_TOOLS.every(t =>
+        !HAS_CR ? !registeredTools.has(t) : true
+      )
+    violation: NO-GO
+    adr: ADR-001
+
+  - id: C-001-005
+    type: SOFT
+    scope: architecture
+    rule: >
+      Tool modules are organized by domain under src/mcp/tools/.
+      There are 10 modules: repos, branches, prs, security, actions,
+      ops, k8s, misc, plus fabric CVE and fabric git tool sets
+      defined in server.ts. Each domain module exports getTools()
+      and handleCall() functions.
+    check: |
+      TOOL_MODULES.length >= 8
+      && FABRIC_CVE_TOOLS.length >= 6
+      && FABRIC_GIT_TOOLS.length >= 14
+    violation: WARN
+    adr: ADR-001
+
+  - id: C-001-006
+    type: SOFT
+    scope: integration
+    rule: >
+      The Fabric gateway initializes gracefully. If @git-fabric/cve
+      or @git-fabric/gateway fails to load, git-steer continues
+      operating in degraded mode with CVE tools omitted. The gateway
+      must never crash the server.
+    check: |
+      initGateway() catches all errors
+      && returns degraded GatewayHandle { available: false }
+    violation: WARN
+    adr: ADR-001
+
+  - id: C-001-007
+    type: ADVISORY
+    scope: credentials
+    rule: >
+      In CLI mode, GitHub App credentials (appId, privateKey,
+      installationId) are read from macOS Keychain via KeychainService.
+      In MCP server mode, GITHUB_TOKEN or GIT_STEER_TOKEN environment
+      variables are preferred, falling back to installation token
+      generation from App credentials.
+    adr: ADR-001
+
+rationale: |
+  Zero-clone architecture eliminates an entire class of security and
+  complexity issues: no temp directories to clean up, no risk of
+  leaking credentials in .git/config, no filesystem race conditions.
+  GitHub-as-state-store means the state repo is version-controlled,
+  auditable, and accessible to GitHub Actions heartbeat workflows
+  without additional infrastructure.
+
+  Conditional tool registration prevents confusing "tool not found"
+  errors at invocation time — tools simply do not appear in the
+  ListTools response if their dependencies are missing.
+
+  Graceful gateway degradation means git-steer's core ~40 tools
+  remain functional even if the Fabric ecosystem has a problem.
+
+consequences:
+  positive:
+    - Zero local state — any machine with credentials can run git-steer
+    - State is auditable via git history on git-steer-state
+    - Graceful degradation preserves core functionality
+    - Conditional registration avoids runtime failures
+  risks:
+    - risk: "GitHub API rate limits constrain throughput during large fleet operations"
+      mitigation: "Throttled Octokit with retry/backoff, ETag caching, rate limit monitoring via ops_metrics tool"
+    - risk: "State writes are sequential, not atomic — crash mid-save produces inconsistency"
+      mitigation: "Documented in ADR-003; low probability given small state size and infrequent writes"
+
+superseded_by: null
