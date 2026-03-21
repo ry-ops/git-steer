@@ -4,22 +4,43 @@ import Card from '../components/Card';
 import Badge from '../components/Badge';
 import Button from '../components/Button';
 import { api } from '../lib/api';
-import type { StatusResponse, QueueItem } from '../lib/api';
+import type { StatusResponse, QueueItem, RecentScan } from '../lib/api';
+
+function TrendBars({ data }: { data: number[] }) {
+  const max = Math.max(...data, 1);
+  return (
+    <div className="flex items-end gap-0.5 h-8">
+      {data.map((v, i) => (
+        <div
+          key={i}
+          className="w-1.5 bg-accent/60 rounded-t"
+          style={{ height: `${(v / max) * 100}%` }}
+        />
+      ))}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [recentScans, setRecentScans] = useState<RecentScan[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
       try {
-        const [s, q] = await Promise.all([api.status(), api.cve.queue().catch(() => ({ queue: [] }))]);
+        const [s, q, scans] = await Promise.all([
+          api.status(),
+          api.cve.queue().catch(() => ({ queue: [] })),
+          api.scans.recent(10).catch(() => []),
+        ]);
         setStatus(s);
         // Handle both array and { queue: [...] } response shapes
         setQueue(Array.isArray(q) ? q : Array.isArray(q?.queue) ? q.queue : []);
+        setRecentScans(Array.isArray(scans) ? scans : []);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load dashboard');
       } finally {
@@ -85,8 +106,8 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Recent Scan Queue */}
-      <section>
+      {/* Recent Scans */}
+      <section className="mb-10">
         <div className="flex items-center justify-between mb-6">
           <h2 className="font-display font-bold text-xl text-contrast">Recent Scans</h2>
           <Link
@@ -97,7 +118,7 @@ export default function Dashboard() {
           </Link>
         </div>
 
-        {queue.length === 0 && !loading && (
+        {recentScans.length === 0 && queue.length === 0 && !loading && (
           <Card>
             <p className="text-muted text-center py-4">
               No recent scans. Add a repository to get started.
@@ -106,35 +127,89 @@ export default function Dashboard() {
         )}
 
         <div className="space-y-3">
-          {queue.map((item, i) => (
+          {recentScans.map((scan) => (
             <Card
-              key={`${item.owner}/${item.repo}-${i}`}
-              onClick={() => navigate(`/repos/${item.owner}/${item.repo}`)}
+              key={scan.id}
+              onClick={() => navigate(`/repos/${scan.owner}/${scan.repo}`)}
               className="flex flex-col sm:flex-row sm:items-center gap-3"
             >
               <div className="flex-1 min-w-0">
-                <p className="font-mono text-sm font-medium text-contrast truncate">
-                  {item.owner}/{item.repo}
-                </p>
-                <p className="text-muted text-xs mt-0.5">
-                  Queued {formatTime(item.queued_at)}
+                <div className="flex items-center gap-2">
+                  <StatusDot status={scan.status} />
+                  <p className="font-mono text-sm font-medium text-contrast truncate">
+                    {scan.owner}/{scan.repo}
+                  </p>
+                </div>
+                <p className="text-muted text-xs mt-0.5 ml-5">
+                  {formatTime(scan.scanned_at)}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                <Badge severity={statusToSeverity(item.status)} />
-                <span className="text-xs text-muted uppercase tracking-wide">
-                  {item.status}
-                </span>
+
+              {/* Severity badges */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {scan.counts.critical > 0 && <Badge severity="CRITICAL" count={scan.counts.critical} />}
+                {scan.counts.high > 0 && <Badge severity="HIGH" count={scan.counts.high} />}
+                {scan.counts.medium > 0 && <Badge severity="MEDIUM" count={scan.counts.medium} />}
+                {scan.counts.low > 0 && <Badge severity="LOW" count={scan.counts.low} />}
+                {scan.counts.critical === 0 && scan.counts.high === 0 && scan.counts.medium === 0 && scan.counts.low === 0 && (
+                  <span className="text-xs text-safe font-semibold uppercase tracking-wide">Clean</span>
+                )}
               </div>
+
+              <span className="text-xs text-muted uppercase tracking-wide whitespace-nowrap">
+                {scan.status}
+              </span>
             </Card>
           ))}
         </div>
       </section>
+
+      {/* Scan Queue (legacy fallback) */}
+      {queue.length > 0 && (
+        <section>
+          <h2 className="font-display font-bold text-xl text-contrast mb-6">Scan Queue</h2>
+          <div className="space-y-3">
+            {queue.map((item, i) => (
+              <Card
+                key={`${item.owner}/${item.repo}-${i}`}
+                onClick={() => navigate(`/repos/${item.owner}/${item.repo}`)}
+                className="flex flex-col sm:flex-row sm:items-center gap-3"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="font-mono text-sm font-medium text-contrast truncate">
+                    {item.owner}/{item.repo}
+                  </p>
+                  <p className="text-muted text-xs mt-0.5">
+                    Queued {formatTime(item.queued_at)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge severity={statusToSeverity(item.status)} />
+                  <span className="text-xs text-muted uppercase tracking-wide">
+                    {item.status}
+                  </span>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
 
 // ---- Helpers ----
+
+function StatusDot({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    scanning: 'bg-warning animate-pulse',
+    complete: 'bg-blue-500',
+    verified: 'bg-safe',
+    failed: 'bg-critical',
+  };
+  const cls = styles[status] ?? 'bg-muted';
+  return <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${cls}`} />;
+}
 
 function StatCard({
   label,
@@ -196,3 +271,5 @@ function statusToSeverity(status: string): 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW
       return 'HIGH';
   }
 }
+
+export { TrendBars };

@@ -30,6 +30,8 @@
     "test": "vitest"
   },
   "dependencies": {
+    "@fastify/cors": "^11.0.0",
+    "@fastify/static": "^9.0.0",
     "@git-fabric/cve": "github:git-fabric/cve",
     "@git-fabric/gateway": "github:git-fabric/gateway",
     "@modelcontextprotocol/sdk": "^1.26.0",
@@ -37,11 +39,13 @@
     "@octokit/plugin-throttling": "^10.0.0",
     "chalk": "^5.3.0",
     "commander": "^14.0.3",
+    "fastify": "^5.3.0",
     "keytar": "^7.9.0",
     "octokit": "^4.0.0",
     "open": "^11.0.0",
     "ora": "^8.0.0",
     "p-limit": "^3.1.0",
+    "redis": "^5.11.0",
     "yaml": "^2.3.0"
   },
   "devDependencies": {

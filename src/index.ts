@@ -12,6 +12,8 @@ import { GitHubClient } from './github/client.js';
 import { initGateway } from './fabric/gateway.js';
 import type { GatewayHandle } from './fabric/gateway.js';
 import { generateDashboardHtml } from './dashboard/templates.js';
+import { startWebServer } from './web/server.js';
+import type { FastifyInstance } from 'fastify';
 
 export interface GitSteerConfig {
   keychain: KeychainService;
@@ -23,12 +25,17 @@ export interface ServerOptions {
   port?: number;
 }
 
+export interface WebOptions {
+  port?: number;
+}
+
 export class GitSteer {
   private keychain: KeychainService;
   private github: GitHubClient | null = null;
   private state: StateManager | null = null;
   private mcp: MCPServer | null = null;
   private gateway: GatewayHandle | null = null;
+  private web: FastifyInstance | null = null;
   private stateRepo: string;
 
   constructor(config: GitSteerConfig) {
@@ -194,6 +201,36 @@ export class GitSteer {
   }
 
   /**
+   * Start the Fastify web server (REST API layer).
+   * Can run alongside or instead of the MCP server.
+   */
+  async startWeb(options: WebOptions = {}): Promise<void> {
+    if (!this.github || !this.state) {
+      throw new Error('Not initialized. Call syncState() first.');
+    }
+
+    if (!this.gateway) {
+      await this.initFabricGateway();
+    }
+
+    this.web = await startWebServer({
+      github: this.github,
+      state: this.state,
+      gateway: this.gateway ?? undefined,
+      port: options.port,
+    });
+
+    // Save state on shutdown
+    process.on('SIGINT', async () => {
+      await this.shutdown();
+    });
+
+    process.on('SIGTERM', async () => {
+      await this.shutdown();
+    });
+  }
+
+  /**
    * Graceful shutdown - persist state before exit
    */
   async shutdown(): Promise<void> {
@@ -206,6 +243,10 @@ export class GitSteer {
 
     if (this.mcp) {
       await this.mcp.stop();
+    }
+
+    if (this.web) {
+      await this.web.close();
     }
 
     process.exit(0);

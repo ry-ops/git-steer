@@ -124,6 +124,27 @@ constraints:
     violation: WARN
     adr: ADR-001
 
+  - id: C-001-008
+    type: HARD
+    scope: deployment
+    rule: >
+      Production runs exclusively on k3s (Proxmox) in the git-steer
+      namespace. Docker images (ghcr.io/ry-ops/git-steer-web) are built by
+      GitHub Actions CI/CD (.github/workflows/deploy-web.yml) on push to
+      main, pushed to ghcr.io, and deployed to k3s via kubectl. The build
+      uses Dockerfile.web (not the default Dockerfile). Images are NEVER
+      built locally on developer machines. The Mac is for writing code only.
+      Ingress is via Traefik IngressRoute at https://git-steer.ry-ops.dev
+      with cert-manager TLS.
+    check: |
+      deployment.image.registry == 'ghcr.io' AND
+      deployment.builder == 'github_actions' AND
+      deployment.namespace == 'git-steer' AND
+      deployment.dockerfile == 'Dockerfile.web' AND
+      ingress.host == 'git-steer.ry-ops.dev'
+    violation: NO-GO
+    adr: ADR-001
+
   - id: C-001-007
     type: ADVISORY
     scope: credentials

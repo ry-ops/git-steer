@@ -16,6 +16,8 @@ import { StateManager } from '../state/manager.js';
 import type { GatewayHandle } from '../fabric/gateway.js';
 import { registerRepoRoutes } from './routes/repos.js';
 import { registerCveRoutes } from './routes/cve.js';
+import { registerVexRoutes } from './routes/vex.js';
+import { registerSbomRoutes } from './routes/sbom.js';
 import { registerStatusRoutes } from './routes/status.js';
 import { createRequire } from 'module';
 
@@ -43,6 +45,8 @@ export async function startWebServer(config: WebServerConfig): Promise<FastifyIn
   // Register route modules
   await registerRepoRoutes(app, config);
   await registerCveRoutes(app, config);
+  await registerVexRoutes(app, config);
+  await registerSbomRoutes(app, config);
   await registerStatusRoutes(app, config);
 
   // Serve static frontend if web-dist/ exists (Docker build)
@@ -64,10 +68,14 @@ export async function startWebServer(config: WebServerConfig): Promise<FastifyIn
   await app.listen({ port, host: '0.0.0.0' });
 
   console.log(`[git-steer] Web server listening on http://0.0.0.0:${port}`);
-  console.log(`[git-steer]   Repos   : http://localhost:${port}/api/repos`);
-  console.log(`[git-steer]   CVE     : http://localhost:${port}/api/cve/queue`);
-  console.log(`[git-steer]   Status  : http://localhost:${port}/api/status`);
-  console.log(`[git-steer]   Health  : http://localhost:${port}/health`);
+  console.log(`[git-steer]   Repos    : http://localhost:${port}/api/repos`);
+  console.log(`[git-steer]   CVE      : http://localhost:${port}/api/cve/queue`);
+  console.log(`[git-steer]   Scans    : http://localhost:${port}/api/scans/recent`);
+  console.log(`[git-steer]   VEX      : http://localhost:${port}/api/vex/:owner/:repo`);
+  console.log(`[git-steer]   SBOM     : http://localhost:${port}/api/sbom/:owner/:repo`);
+  console.log(`[git-steer]   Trends   : http://localhost:${port}/api/trends/:owner/:repo`);
+  console.log(`[git-steer]   Status   : http://localhost:${port}/api/status`);
+  console.log(`[git-steer]   Health   : http://localhost:${port}/health`);
 
   return app;
 }

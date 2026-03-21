@@ -85,6 +85,42 @@ program
   });
 
 program
+  .command('web')
+  .description('Start git-steer Fastify web server (REST API)')
+  .option('--port <port>', 'Web server port', '4300')
+  .action(async (options) => {
+    const spinner = ora('Starting git-steer web server...').start();
+
+    try {
+      const keychain = new KeychainService();
+
+      const appId = await keychain.get('git-steer-app-id');
+      if (!appId) {
+        spinner.fail('git-steer not initialized');
+        console.log(chalk.yellow('\nRun `git-steer init` to set up.\n'));
+        process.exit(1);
+      }
+
+      const steer = new GitSteer({ keychain });
+
+      spinner.text = 'Syncing state from GitHub...';
+      await steer.syncState();
+
+      spinner.text = 'Starting web server...';
+      await steer.startWeb({ port: parseInt(options.port) });
+
+      spinner.succeed('git-steer web server running');
+      console.log(chalk.green(`\nWeb server listening on port ${options.port}`));
+      console.log(chalk.dim('Press Ctrl+C to stop\n'));
+    } catch (error) {
+      spinner.fail('Failed to start web server');
+      console.error(chalk.red('Failed to start git-steer web server.'));
+      if (process.env.DEBUG) console.error(String(error.message || 'Unknown error').replace(/ghp_\w+|gho_\w+|ghs_\w+|github_pat_\w+/g, '[REDACTED]'));
+      process.exit(1);
+    }
+  });
+
+program
   .command('status')
   .description('Show git-steer status and health')
   .action(async () => {
