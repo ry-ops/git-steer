@@ -26,13 +26,19 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install dependencies (includes private git-fabric deps)
+      - name: Configure git for private deps
         run: |
-          # Rewrite ALL git SSH URLs to HTTPS with PAT token
-          git config --global url."https://${GIT_FABRIC_PAT}@github.com/".insteadOf "ssh://git@github.com/"
-          git config --global url."https://${GIT_FABRIC_PAT}@github.com/".insteadOf "git+ssh://git@github.com/"
-          git config --global url."https://${GIT_FABRIC_PAT}@github.com/".insteadOf "git@github.com:"
-          npm ci
+          # Set up SSH key-less access to git-fabric org via HTTPS + PAT
+          git config --global url."https://x-access-token:${GIT_FABRIC_PAT}@github.com/".insteadOf "git@github.com:"
+          git config --global url."https://x-access-token:${GIT_FABRIC_PAT}@github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://x-access-token:${GIT_FABRIC_PAT}@github.com/".insteadOf "git+ssh://git@github.com/"
+          # Verify rewrite works
+          git ls-remote https://x-access-token:${GIT_FABRIC_PAT}@github.com/git-fabric/gateway.git HEAD > /dev/null 2>&1 && echo "✓ git-fabric access OK" || echo "✗ git-fabric access FAILED"
+        env:
+          GIT_FABRIC_PAT: ${{ secrets.GIT_FABRIC_PAT }}
+
+      - name: Install dependencies
+        run: npm ci
         env:
           GIT_FABRIC_PAT: ${{ secrets.GIT_FABRIC_PAT }}
 
