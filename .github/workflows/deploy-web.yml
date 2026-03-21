@@ -26,13 +26,13 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install dependencies (includes private git deps)
+      - name: Install dependencies (includes private git-fabric deps)
         run: |
-          git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "ssh://git@github.com/"
-          git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "git+ssh://git@github.com/"
+          git config --global url."https://${GIT_FABRIC_PAT}@github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://${GIT_FABRIC_PAT}@github.com/".insteadOf "git+ssh://git@github.com/"
           npm ci
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_FABRIC_PAT: ${{ secrets.GIT_FABRIC_PAT }}
 
       - name: Prepare .dockerignore for CI
         run: |
