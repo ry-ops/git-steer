@@ -79,9 +79,9 @@ jobs:
             ${{ env.IMAGE }}:latest
 
       - name: Connect to Tailscale
-        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
-        with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTHKEY }} --hostname=github-ci-gitsteer --accept-routes
 
       - name: Deploy to k3s
         run: |
