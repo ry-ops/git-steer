@@ -1,22 +1,29 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/Card';
-import Badge from '../components/Badge';
 import Button from '../components/Button';
 import { api } from '../lib/api';
-import type { Repo } from '../lib/api';
+
+interface RepoItem {
+  owner: string;
+  name: string;
+  fullName: string;
+  private: boolean;
+  archived: boolean;
+  language: string | null;
+  pushedAt: string | null;
+  managed: boolean;
+}
 
 export default function RepoList() {
   const navigate = useNavigate();
-  const [repos, setRepos] = useState<Repo[]>([]);
+  const [repos, setRepos] = useState<RepoItem[]>([]);
+  const [orgs, setOrgs] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // Add repo form
-  const [showForm, setShowForm] = useState(false);
-  const [owner, setOwner] = useState('');
-  const [repo, setRepo] = useState('');
-  const [adding, setAdding] = useState(false);
+  const [filter, setFilter] = useState('');
+  const [orgFilter, setOrgFilter] = useState<string | null>(null);
+  const [scanning, setScanning] = useState<string | null>(null);
 
   useEffect(() => {
     loadRepos();
@@ -25,7 +32,9 @@ export default function RepoList() {
   async function loadRepos() {
     try {
       const data = await api.repos.list();
-      setRepos(Array.isArray(data) ? data : Array.isArray(data?.repos) ? data.repos : []);
+      const repoList = Array.isArray(data) ? data : Array.isArray(data?.repos) ? data.repos : [];
+      setRepos(repoList);
+      setOrgs(data?.orgs ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load repos');
     } finally {
@@ -33,31 +42,24 @@ export default function RepoList() {
     }
   }
 
-  async function handleAdd(e: React.FormEvent) {
-    e.preventDefault();
-    if (!owner.trim() || !repo.trim()) return;
-    setAdding(true);
+  async function handleScan(owner: string, name: string) {
+    setScanning(`${owner}/${name}`);
     try {
-      await api.repos.add({ owner: owner.trim(), repo: repo.trim() });
-      setOwner('');
-      setRepo('');
-      setShowForm(false);
-      await loadRepos();
+      await api.cve.scan(owner, name);
+      navigate(`/repos/${owner}/${name}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add repo');
+      setError(err instanceof Error ? err.message : 'Scan failed');
     } finally {
-      setAdding(false);
+      setScanning(null);
     }
   }
 
-  async function handleScan(owner: string, repo: string) {
-    try {
-      await api.cve.scan(owner, repo);
-      navigate(`/repos/${owner}/${repo}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start scan');
-    }
-  }
+  const filtered = repos.filter(r => {
+    if (r.archived) return false;
+    if (orgFilter && r.owner !== orgFilter) return false;
+    if (filter && !r.fullName.toLowerCase().includes(filter.toLowerCase())) return false;
+    return true;
+  });
 
   return (
     <div className="animate-fade-in">
@@ -65,51 +67,41 @@ export default function RepoList() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
         <div>
           <h1 className="font-display font-bold text-3xl text-contrast">Repositories</h1>
-          <p className="text-muted mt-1">Tracked repos and their vulnerability status</p>
+          <p className="text-muted mt-1">{repos.length} repos across {orgs.length + 1} orgs</p>
         </div>
-        <Button onClick={() => setShowForm(!showForm)}>
-          {showForm ? 'Cancel' : 'Add Repo'}
-        </Button>
       </div>
 
-      {/* Add Repo Form */}
-      {showForm && (
-        <Card className="mb-8">
-          <form onSubmit={handleAdd} className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1">
-              <label htmlFor="owner" className="block text-xs uppercase tracking-wider text-muted font-semibold mb-1">
-                Owner
-              </label>
-              <input
-                id="owner"
-                type="text"
-                placeholder="e.g. git-fabric"
-                value={owner}
-                onChange={(e) => setOwner(e.target.value)}
-                className="w-full px-4 py-2 rounded-lg border-2 border-border bg-base font-mono text-sm text-contrast placeholder:text-muted/50 focus:outline-none focus:border-accent transition-colors"
-              />
-            </div>
-            <div className="flex-1">
-              <label htmlFor="repo" className="block text-xs uppercase tracking-wider text-muted font-semibold mb-1">
-                Repository
-              </label>
-              <input
-                id="repo"
-                type="text"
-                placeholder="e.g. sdk"
-                value={repo}
-                onChange={(e) => setRepo(e.target.value)}
-                className="w-full px-4 py-2 rounded-lg border-2 border-border bg-base font-mono text-sm text-contrast placeholder:text-muted/50 focus:outline-none focus:border-accent transition-colors"
-              />
-            </div>
-            <div className="flex items-end">
-              <Button type="submit" disabled={adding}>
-                {adding ? 'Adding...' : 'Add'}
-              </Button>
-            </div>
-          </form>
-        </Card>
-      )}
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-6">
+        <input
+          type="text"
+          placeholder="Filter repos..."
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="flex-1 px-4 py-2 rounded-full border-2 border-border bg-base font-mono text-sm text-contrast placeholder:text-muted/50 focus:outline-none focus:border-accent transition-colors"
+        />
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setOrgFilter(null)}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold uppercase tracking-wide transition-colors ${
+              !orgFilter ? 'bg-accent text-white' : 'bg-card text-muted hover:text-contrast'
+            }`}
+          >
+            All
+          </button>
+          {orgs.map(org => (
+            <button
+              key={org}
+              onClick={() => setOrgFilter(orgFilter === org ? null : org)}
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold uppercase tracking-wide transition-colors ${
+                orgFilter === org ? 'bg-accent text-white' : 'bg-card text-muted hover:text-contrast'
+              }`}
+            >
+              {org}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* Error */}
       {error && (
@@ -127,53 +119,48 @@ export default function RepoList() {
       )}
 
       {/* Repo Grid */}
-      {!loading && repos.length === 0 && (
+      {!loading && filtered.length === 0 && (
         <Card>
           <p className="text-muted text-center py-8">
-            No repositories tracked yet. Add one to get started.
+            {filter ? 'No repos match your filter.' : 'No repositories found.'}
           </p>
         </Card>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {repos.map((r) => (
+        {filtered.map((r) => (
           <Card
-            key={`${r.owner}/${r.repo}`}
-            onClick={() => navigate(`/repos/${r.owner}/${r.repo}`)}
+            key={r.fullName}
+            onClick={() => navigate(`/repos/${r.owner}/${r.name}`)}
           >
-            <div className="flex items-start justify-between mb-4">
+            <div className="flex items-start justify-between mb-3">
               <div className="min-w-0 flex-1">
                 <h3 className="font-mono text-sm font-semibold text-contrast truncate">
-                  {r.owner}/{r.repo}
+                  {r.fullName}
                 </h3>
-                <p className="text-muted text-xs mt-1">
-                  {r.last_scan ? `Scanned ${formatRelative(r.last_scan)}` : 'Never scanned'}
-                </p>
+                <div className="flex items-center gap-2 mt-1">
+                  {r.language && (
+                    <span className="text-xs text-muted">{r.language}</span>
+                  )}
+                  {r.private && (
+                    <span className="text-xs text-muted bg-card px-1.5 py-0.5 rounded">private</span>
+                  )}
+                  {r.pushedAt && (
+                    <span className="text-xs text-muted">{formatRelative(r.pushedAt)}</span>
+                  )}
+                </div>
               </div>
             </div>
-
-            {/* Severity Counts */}
-            {r.cve_counts && (
-              <div className="flex flex-wrap gap-2 mb-4">
-                {r.cve_counts.critical > 0 && <Badge severity="CRITICAL" count={r.cve_counts.critical} />}
-                {r.cve_counts.high > 0 && <Badge severity="HIGH" count={r.cve_counts.high} />}
-                {r.cve_counts.medium > 0 && <Badge severity="MEDIUM" count={r.cve_counts.medium} />}
-                {r.cve_counts.low > 0 && <Badge severity="LOW" count={r.cve_counts.low} />}
-                {totalCves(r.cve_counts) === 0 && (
-                  <span className="text-safe text-xs font-semibold uppercase tracking-wide">All clear</span>
-                )}
-              </div>
-            )}
 
             <Button
               variant="secondary"
               className="w-full text-xs"
               onClick={(e) => {
                 e.stopPropagation();
-                handleScan(r.owner, r.repo);
+                handleScan(r.owner, r.name);
               }}
             >
-              Scan Now
+              {scanning === r.fullName ? 'Scanning...' : 'Scan for CVEs'}
             </Button>
           </Card>
         ))}
@@ -194,8 +181,4 @@ function formatRelative(iso: string): string {
   } catch {
     return iso;
   }
-}
-
-function totalCves(counts: { critical: number; high: number; medium: number; low: number }): number {
-  return counts.critical + counts.high + counts.medium + counts.low;
 }
