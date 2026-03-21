@@ -1,0 +1,164 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-base: #ddd8be;
+  --color-contrast: #233747;
+  --color-safe: #2d7d46;
+  --color-critical: #c94a3f;
+  --color-warning: #e8943a;
+  --color-accent: #f47a58;
+  --color-card: #ece8d4;
+  --color-border: #c4b896;
+  --color-muted: #8b7355;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: var(--color-base);
+  color: var(--color-contrast);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Sora', sans-serif;
+  letter-spacing: -0.02em;
+}
+
+code, .font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Ornate dashed card */
+.card-ornate {
+  border: 2px dashed var(--color-border);
+  border-radius: 12px;
+  padding: 2rem;
+  position: relative;
+  background: var(--color-card);
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.card-ornate:hover {
+  border-color: var(--color-accent);
+  box-shadow: 0 4px 24px rgba(35, 55, 71, 0.08);
+}
+
+/* Pill button */
+.btn-primary {
+  background: var(--color-accent);
+  color: white;
+  border: none;
+  border-radius: 9999px;
+  padding: 0.75rem 2rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-family: 'Inter', sans-serif;
+}
+
+.btn-primary:hover {
+  background: var(--color-contrast);
+}
+
+.btn-primary:active {
+  transform: scale(0.97);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--color-contrast);
+  border: 2px solid var(--color-border);
+  border-radius: 9999px;
+  padding: 0.65rem 1.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-family: 'Inter', sans-serif;
+}
+
+.btn-secondary:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+/* Severity badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.badge-critical {
+  background: #c94a3f20;
+  color: var(--color-critical);
+  border: 1px solid var(--color-critical);
+}
+
+.badge-high {
+  background: #e8943a20;
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning);
+}
+
+.badge-medium {
+  background: #e8943a15;
+  color: #b07a2e;
+  border: 1px solid #d4a84a;
+}
+
+.badge-low {
+  background: #2d7d4620;
+  color: var(--color-safe);
+  border: 1px solid var(--color-safe);
+}
+
+/* Utility: fade-in animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-base);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+}
