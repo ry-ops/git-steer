@@ -79,7 +79,7 @@ jobs:
             ${{ env.IMAGE }}:latest
 
       - name: Connect to Tailscale
-        uses: tailscale/github-action@05c58255396c88c609919d571a8b117099c69020 # v2
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
 
