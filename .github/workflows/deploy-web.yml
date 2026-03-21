@@ -81,7 +81,8 @@ jobs:
       - name: Deploy to k3s
         run: |
           mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+          echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
           kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
             ${{ env.CONTAINER_NAME }}=${{ env.IMAGE }}:${{ steps.vars.outputs.sha_short }} \
             -n ${{ env.NAMESPACE }}
