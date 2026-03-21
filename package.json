@@ -32,8 +32,8 @@
   "dependencies": {
     "@fastify/cors": "^11.0.0",
     "@fastify/static": "^9.0.0",
-    "@git-fabric/cve": "github:git-fabric/cve",
-    "@git-fabric/gateway": "github:git-fabric/gateway",
+    "@git-fabric/cve": "https://github.com/git-fabric/cve.git",
+    "@git-fabric/gateway": "https://github.com/git-fabric/gateway.git",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@octokit/plugin-retry": "^7.2.1",
     "@octokit/plugin-throttling": "^10.0.0",
