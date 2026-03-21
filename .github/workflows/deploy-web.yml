@@ -78,6 +78,11 @@ jobs:
             ${{ env.IMAGE }}:${{ steps.vars.outputs.sha_short }}
             ${{ env.IMAGE }}:latest
 
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@05c58255396c88c609919d571a8b117099c69020 # v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
       - name: Deploy to k3s
         run: |
           mkdir -p ~/.kube
