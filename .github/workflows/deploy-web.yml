@@ -3,6 +3,7 @@ name: Build & Deploy Web
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 env:
   IMAGE: ghcr.io/ry-ops/git-steer-web
