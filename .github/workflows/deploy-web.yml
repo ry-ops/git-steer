@@ -30,24 +30,11 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan github.com >> ~/.ssh/known_hosts
-          echo "${{ secrets.GIT_FABRIC_PAT }}" > /tmp/.git-token
-          # Use GIT_ASKPASS to inject the PAT as password for any git HTTPS auth
-          cat > /tmp/git-askpass.sh << 'SCRIPT'
-          #!/bin/sh
-          echo "$GIT_FABRIC_PAT"
-          SCRIPT
-          chmod +x /tmp/git-askpass.sh
-          # Configure git to use HTTPS instead of SSH
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
-          git config --global url."https://github.com/".insteadOf "git+ssh://git@github.com/"
+          echo "${{ secrets.GIT_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
 
       - name: Install dependencies
         run: npm ci
-        env:
-          GIT_ASKPASS: /tmp/git-askpass.sh
-          GIT_FABRIC_PAT: ${{ secrets.GIT_FABRIC_PAT }}
-          GIT_TERMINAL_PROMPT: '0'
 
       - name: Prepare .dockerignore for CI
         run: |
