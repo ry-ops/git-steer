@@ -24,7 +24,33 @@ export default function ScanResults() {
     if (!owner || !repo) return;
     try {
       const data = await api.cve.results(owner, repo);
-      setResult(data);
+      // Transform API response to match UI expected shape
+      const alerts = data?.alerts ?? [];
+      const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+      const cves = alerts.map((a: any) => {
+        const sev = (a.severity ?? 'medium').toUpperCase() as 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+        if (sev === 'CRITICAL') counts.critical++;
+        else if (sev === 'HIGH') counts.high++;
+        else if (sev === 'MEDIUM') counts.medium++;
+        else counts.low++;
+        return {
+          id: a.cve ?? a.ghsaId ?? `ALERT-${a.alertNumber}`,
+          severity: sev,
+          package_name: a.package ?? 'unknown',
+          installed_version: a.currentVersion ?? '',
+          fixed_version: a.fixVersion ?? null,
+          description: a.description ?? a.summary ?? '',
+          nvd_url: a.cve ? `https://nvd.nist.gov/vuln/detail/${a.cve}` : null,
+          url: a.url ?? null,
+          dismissed: a.state === 'dismissed',
+        };
+      });
+      setResult({
+        repo: data.repo ?? `${owner}/${repo}`,
+        scanned_at: new Date().toISOString(),
+        cves,
+        counts,
+      } as any);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load scan results');
     } finally {
