@@ -25,7 +25,7 @@ export default function RepoList() {
   async function loadRepos() {
     try {
       const data = await api.repos.list();
-      setRepos(data);
+      setRepos(Array.isArray(data) ? data : Array.isArray(data?.repos) ? data.repos : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load repos');
     } finally {
