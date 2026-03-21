@@ -26,21 +26,28 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Configure git for private deps
+      - name: Configure SSH for private git-fabric deps
         run: |
-          # Set up SSH key-less access to git-fabric org via HTTPS + PAT
-          git config --global url."https://x-access-token:${GIT_FABRIC_PAT}@github.com/".insteadOf "git@github.com:"
-          git config --global url."https://x-access-token:${GIT_FABRIC_PAT}@github.com/".insteadOf "ssh://git@github.com/"
-          git config --global url."https://x-access-token:${GIT_FABRIC_PAT}@github.com/".insteadOf "git+ssh://git@github.com/"
-          # Verify rewrite works
-          git ls-remote https://x-access-token:${GIT_FABRIC_PAT}@github.com/git-fabric/gateway.git HEAD > /dev/null 2>&1 && echo "✓ git-fabric access OK" || echo "✗ git-fabric access FAILED"
-        env:
-          GIT_FABRIC_PAT: ${{ secrets.GIT_FABRIC_PAT }}
+          mkdir -p ~/.ssh
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          echo "${{ secrets.GIT_FABRIC_PAT }}" > /tmp/.git-token
+          # Use GIT_ASKPASS to inject the PAT as password for any git HTTPS auth
+          cat > /tmp/git-askpass.sh << 'SCRIPT'
+          #!/bin/sh
+          echo "$GIT_FABRIC_PAT"
+          SCRIPT
+          chmod +x /tmp/git-askpass.sh
+          # Configure git to use HTTPS instead of SSH
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git+ssh://git@github.com/"
 
       - name: Install dependencies
         run: npm ci
         env:
+          GIT_ASKPASS: /tmp/git-askpass.sh
           GIT_FABRIC_PAT: ${{ secrets.GIT_FABRIC_PAT }}
+          GIT_TERMINAL_PROMPT: '0'
 
       - name: Prepare .dockerignore for CI
         run: |
