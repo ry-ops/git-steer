@@ -17,6 +17,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      sha_short: ${{ steps.vars.outputs.sha_short }}
 
     steps:
       - name: Checkout
@@ -78,18 +80,34 @@ jobs:
             ${{ env.IMAGE }}:${{ steps.vars.outputs.sha_short }}
             ${{ env.IMAGE }}:latest
 
-      - name: Connect to Tailscale
+  deploy:
+    name: Deploy to k3s
+    needs: build-and-deploy
+    runs-on: [self-hosted, k3s]
+    steps:
+      - name: Install kubectl
         run: |
-          curl -fsSL https://tailscale.com/install.sh | sh
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTHKEY }} --hostname=github-ci-gitsteer --accept-routes
+          if ! command -v kubectl &> /dev/null; then
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/
+          fi
 
-      - name: Deploy to k3s
+      - name: Configure kubectl
         run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG }}" > ~/.kube/config
-          chmod 600 ~/.kube/config
-          kubectl set image deployment/${{ env.DEPLOYMENT_NAME }} \
-            ${{ env.CONTAINER_NAME }}=${{ env.IMAGE }}:${{ steps.vars.outputs.sha_short }} \
-            -n ${{ env.NAMESPACE }}
-          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} \
-            -n ${{ env.NAMESPACE }} --timeout=120s
+          # Use the service account token mounted in the pod
+          KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          KUBE_CA=$(cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt)
+          KUBE_NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+          kubectl config set-cluster k3s --server=https://kubernetes.default.svc --certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          kubectl config set-credentials runner --token=$KUBE_TOKEN
+          kubectl config set-context default --cluster=k3s --user=runner --namespace=$KUBE_NS
+          kubectl config use-context default
+
+      - name: Deploy
+        run: |
+          kubectl set image deployment/git-steer-web \
+            web=ghcr.io/ry-ops/git-steer-web:${{ needs.build-and-deploy.outputs.sha_short }} \
+            -n git-steer
+          kubectl rollout status deployment/git-steer-web \
+            -n git-steer --timeout=120s
