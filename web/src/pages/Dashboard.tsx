@@ -16,9 +16,10 @@ export default function Dashboard() {
   useEffect(() => {
     async function load() {
       try {
-        const [s, q] = await Promise.all([api.status(), api.cve.queue()]);
+        const [s, q] = await Promise.all([api.status(), api.cve.queue().catch(() => ({ queue: [] }))]);
         setStatus(s);
-        setQueue(q);
+        // Handle both array and { queue: [...] } response shapes
+        setQueue(Array.isArray(q) ? q : Array.isArray(q?.queue) ? q.queue : []);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load dashboard');
       } finally {
@@ -77,10 +78,10 @@ export default function Dashboard() {
       {/* Stats Row */}
       {status && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
-          <StatCard label="Total Repos" value={status.total_repos} />
-          <StatCard label="Open CVEs" value={status.open_cves} highlight={status.open_cves > 0} />
-          <StatCard label="Fixed This Month" value={status.fixed_this_month} safe />
-          <StatCard label="Last Scan" value={formatTime(status.last_scan)} small />
+          <StatCard label="Total Repos" value={(status as any).repos?.managed ?? 0} />
+          <StatCard label="Rate Limit" value={(status as any).github?.rateLimit?.core?.remaining ?? '—'} />
+          <StatCard label="API Status" value={(status as any).github?.authenticated ? 'Connected' : 'Disconnected'} safe={(status as any).github?.authenticated} />
+          <StatCard label="Version" value={(status as any).version ?? '—'} small />
         </div>
       )}
 
