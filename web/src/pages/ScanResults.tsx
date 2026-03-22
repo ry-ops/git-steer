@@ -17,6 +17,7 @@ export default function ScanResults() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [fixing, setFixing] = useState<Set<string>>(new Set());
+  const [fixResults, setFixResults] = useState<Record<string, { prNumber: number; prUrl: string; merged: boolean; error?: string }>>({});
   const [vexOpen, setVexOpen] = useState<Set<string>>(new Set());
   const [vexMap, setVexMap] = useState<Record<string, VexEntry>>({});
 
@@ -106,11 +107,20 @@ export default function ScanResults() {
     setFixing((prev) => new Set(prev).add(cveId));
     try {
       const res = await api.cve.fix(cveId, owner, repo);
-      if (res.pr_url) {
-        window.open(res.pr_url, '_blank');
-      }
+      setFixResults((prev) => ({
+        ...prev,
+        [cveId]: {
+          prNumber: res.prNumber ?? res.pr_number ?? 0,
+          prUrl: res.prUrl ?? res.pr_url ?? '',
+          merged: res.merged ?? false,
+          error: res.error,
+        },
+      }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Fix failed');
+      setFixResults((prev) => ({
+        ...prev,
+        [cveId]: { prNumber: 0, prUrl: '', merged: false, error: err instanceof Error ? err.message : 'Fix failed' },
+      }));
     } finally {
       setFixing((prev) => {
         const next = new Set(prev);
@@ -210,15 +220,36 @@ export default function ScanResults() {
 
       {/* Fix All result summary */}
       {fixAllResult && (
-        <div className="mb-6 px-5 py-3 rounded-xl bg-card border-2 border-dashed border-border">
-          <p className="text-sm font-semibold text-contrast mb-1">Fix All Complete</p>
-          <div className="flex flex-wrap gap-3 text-xs">
+        <div className="mb-6 px-5 py-4 rounded-xl bg-card border-2 border-dashed border-border">
+          <p className="text-sm font-semibold text-contrast mb-3">Fix All Complete</p>
+          <div className="flex flex-wrap gap-3 text-xs mb-3">
             <span className="text-safe font-semibold">{fixAllResult.fixed} fixed</span>
-            <span className="text-muted font-semibold">{fixAllResult.no_fix} no fix available</span>
-            {fixAllResult.failed > 0 && (
-              <span className="text-critical font-semibold">{fixAllResult.failed} failed</span>
-            )}
+            {fixAllResult.no_fix > 0 && <span className="text-muted font-semibold">{fixAllResult.no_fix} no fix available</span>}
+            {fixAllResult.failed > 0 && <span className="text-critical font-semibold">{fixAllResult.failed} failed</span>}
           </div>
+          {fixAllResult.prs && fixAllResult.prs.length > 0 && (
+            <div className="space-y-1.5">
+              {fixAllResult.prs.map((pr: any, i: number) => (
+                <div key={i} className="flex items-center gap-2 text-xs">
+                  {pr.merged ? (
+                    <span className="text-safe">✓</span>
+                  ) : pr.error ? (
+                    <span className="text-critical">✗</span>
+                  ) : (
+                    <span className="text-warning">○</span>
+                  )}
+                  <span className="font-mono text-contrast">{pr.package}</span>
+                  <span className="text-muted">{pr.severity}</span>
+                  {pr.prUrl && (
+                    <a href={pr.prUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:text-contrast">
+                      PR #{pr.prNumber} →
+                    </a>
+                  )}
+                  {pr.error && <span className="text-critical">{pr.error}</span>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -313,6 +344,7 @@ export default function ScanResults() {
             key={cve.id}
             cve={cve}
             vex={vexMap[cve.id]}
+            fixResult={fixResults[cve.id]}
             isExpanded={expanded.has(cve.id)}
             isFixing={fixing.has(cve.id)}
             isVexOpen={vexOpen.has(cve.id)}
@@ -330,6 +362,7 @@ export default function ScanResults() {
 function CveRow({
   cve,
   vex,
+  fixResult,
   isExpanded,
   isFixing,
   isVexOpen,
@@ -340,6 +373,7 @@ function CveRow({
 }: {
   cve: CveEntry;
   vex?: VexEntry;
+  fixResult?: { prNumber: number; prUrl: string; merged: boolean; error?: string };
   isExpanded: boolean;
   isFixing: boolean;
   isVexOpen: boolean;
@@ -426,6 +460,33 @@ function CveRow({
         </svg>
       </div>
 
+      {/* Fix result feedback */}
+      {fixResult && (
+        <div className="mt-2 pt-2 border-t border-dashed border-border" onClick={(e) => e.stopPropagation()}>
+          {fixResult.error ? (
+            <p className="text-xs text-critical font-mono">{fixResult.error}</p>
+          ) : fixResult.merged ? (
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-safe/15 text-safe text-xs font-semibold">
+                ✓ PR #{fixResult.prNumber} merged
+              </span>
+              <a href={fixResult.prUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:text-contrast">
+                View PR →
+              </a>
+            </div>
+          ) : fixResult.prNumber > 0 ? (
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-warning/15 text-warning text-xs font-semibold">
+                PR #{fixResult.prNumber} created
+              </span>
+              <a href={fixResult.prUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:text-contrast">
+                View PR →
+              </a>
+            </div>
+          ) : null}
+        </div>
+      )}
+
       {/* VEX inline form */}
       {isVexOpen && (
         <VexForm
@@ -438,7 +499,7 @@ function CveRow({
       {/* Expanded detail */}
       {isExpanded && (
         <div className="mt-4 pt-4 border-t-2 border-dashed border-border">
-          <p className="text-sm text-contrast leading-relaxed mb-3">{cve.description}</p>
+          <CveDescription text={cve.description} />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
             <div>
               <span className="text-muted uppercase tracking-wider font-semibold">Package</span>
@@ -570,6 +631,53 @@ function VexForm({
           Cancel
         </Button>
       </div>
+    </div>
+  );
+}
+
+function CveDescription({ text }: { text: string }) {
+  if (!text) return null;
+
+  // Split on --- separators and **Section** headers
+  const sections = text.split(/(?=---\s|\*\*[A-Z])/);
+
+  return (
+    <div className="space-y-4">
+      {sections.map((section, i) => {
+        const trimmed = section.trim();
+        if (!trimmed || trimmed === '---') return null;
+
+        // Extract section header if present
+        const headerMatch = trimmed.match(/^\*\*([^*]+)\*\*\s*(.*)/s);
+        const header = headerMatch?.[1];
+        const body = headerMatch ? headerMatch[2].trim() : trimmed.replace(/^---\s*/, '');
+
+        // Check for code blocks
+        const parts = body.split(/(```[\s\S]*?```)/);
+
+        return (
+          <div key={i}>
+            {header && (
+              <h4 className="text-xs uppercase tracking-wider font-semibold text-muted mb-2">
+                {header}
+              </h4>
+            )}
+            {parts.map((part, j) => {
+              if (part.startsWith('```')) {
+                const code = part.replace(/^```\w*\n?/, '').replace(/\n?```$/, '');
+                return (
+                  <pre key={j} className="bg-contrast/5 border border-border rounded-lg p-3 overflow-x-auto mb-2">
+                    <code className="text-xs font-mono text-contrast whitespace-pre">{code}</code>
+                  </pre>
+                );
+              }
+              const descText = part.trim();
+              if (!descText) return null;
+              return <p key={j} className="text-sm text-contrast leading-relaxed">{descText}</p>;
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 }
