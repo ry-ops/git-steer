@@ -128,6 +128,33 @@ export class TokenGitHubClient {
     });
     const sha = refData.object.sha;
 
+    // Delete existing branch if it exists (stale from previous attempt)
+    try {
+      await this.octokit.rest.git.deleteRef({
+        owner,
+        repo,
+        ref: `heads/${branchName}`,
+      });
+      console.log(`[git-steer] Deleted stale branch ${branchName}`);
+    } catch {
+      // Branch doesn't exist — that's fine
+    }
+
+    // Also close any open PR from the stale branch
+    try {
+      const { data: prs } = await this.octokit.rest.pulls.list({
+        owner, repo, head: `${owner}:${branchName}`, state: 'open',
+      });
+      for (const pr of prs) {
+        await this.octokit.rest.pulls.update({
+          owner, repo, pull_number: pr.number, state: 'closed',
+        });
+        console.log(`[git-steer] Closed stale PR #${pr.number} from ${branchName}`);
+      }
+    } catch {
+      // No stale PRs — fine
+    }
+
     // Create the new branch
     await this.octokit.rest.git.createRef({
       owner,

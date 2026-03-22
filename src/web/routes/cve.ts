@@ -75,6 +75,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Translate raw GitHub API errors into human-readable messages */
+function humanizeError(err: any): string {
+  const msg = err?.message ?? String(err);
+  if (msg.includes('Reference already exists')) return 'A previous fix attempt left a stale branch. Retrying with cleanup.';
+  if (msg.includes('Merge conflict')) return 'The fix has a merge conflict with the default branch. Manual resolution needed.';
+  if (msg.includes('Required status check')) return 'PR can\'t be merged — required CI checks haven\'t passed yet.';
+  if (msg.includes('rate limit')) return 'GitHub API rate limit reached. Try again in a few minutes.';
+  if (msg.includes('not found') || msg.includes('Not Found')) return 'Repository or resource not found. Check permissions.';
+  if (msg.includes('403')) return 'Permission denied. The GitHub token may not have write access to this repo.';
+  if (msg.includes('Package') && msg.includes('not found')) return 'Package not found in package.json. The vulnerability may be in a transitive dependency.';
+  return msg;
+}
+
 function emptyScanRecord(repo: string): ScanRecord {
   return {
     scan_id: crypto.randomUUID(),
@@ -180,7 +193,7 @@ async function fixAndMerge(
       prNumber: 0,
       prUrl: '',
       merged: false,
-      error: err.message ?? String(err),
+      error: humanizeError(err),
     };
   }
 }
