@@ -39,7 +39,7 @@
     "@octokit/plugin-throttling": "^10.0.0",
     "chalk": "^5.3.0",
     "commander": "^14.0.3",
-    "fastify": "^5.3.0",
+    "fastify": "^5.8.5",
     "keytar": "^7.9.0",
     "octokit": "^4.0.0",
     "open": "^11.0.0",
