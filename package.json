@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",
-    "@fastify/static": "^9.0.0",
+    "@fastify/static": "^9.1.1",
     "@git-fabric/cve": "https://github.com/git-fabric/cve.git",
     "@git-fabric/gateway": "https://github.com/git-fabric/gateway.git",
     "@modelcontextprotocol/sdk": "^1.26.0",
