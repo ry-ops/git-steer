@@ -399,3 +399,4 @@ PREOF
             '{id: $id, status: $status, repo: $repo, severity: $severity, fixed: ($fixed | tonumber), merged: $merged, verify: $verify, remaining_alerts: $remaining, pr_url: $pr_url, timestamp: $timestamp}')
 
           echo "Job result: $ENTRY"
+
