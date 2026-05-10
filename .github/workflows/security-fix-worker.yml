@@ -51,27 +51,7 @@ jobs:
           owner: ${{ steps.parse.outputs.owner }}
           repositories: ${{ steps.parse.outputs.repo }}
 
-      - name: Checkout target repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          repository: ${{ inputs.target_repo }}
-          token: ${{ steps.app-token.outputs.token }}
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '20'
-
-      - name: Setup Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: '3.12'
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
-
-      - name: Get Dependabot alerts
+      - name: Get Dependabot alerts and detect ecosystems
         id: alerts
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -86,16 +66,7 @@ jobs:
               cve: .security_advisory.cve_id,
               summary: .security_advisory.summary
             }]')
-          echo "alerts<<EOF" >> $GITHUB_OUTPUT
-          echo "$ALERTS" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "count=$(echo "$ALERTS" | jq length)" >> $GITHUB_OUTPUT
 
-      - name: Filter by severity
-        id: filter
-        env:
-          ALERTS_JSON: ${{ steps.alerts.outputs.alerts }}
-        run: |
           SEVERITY="${{ inputs.severity }}"
           case $SEVERITY in
             critical) PATTERN='critical' ;;
@@ -104,51 +75,93 @@ jobs:
             low)      PATTERN='critical|high|medium|low' ;;
             all)      PATTERN='.*' ;;
           esac
-          FILTERED=$(echo "$ALERTS_JSON" | jq --arg pat "$PATTERN" '[.[] | select(.severity | test($pat))]')
-          FIXABLE=$(echo "$FILTERED" | jq '[.[] | select(.fix_version != null)]')
+
+          FIXABLE=$(echo "$ALERTS" | jq --arg pat "$PATTERN" \
+            '[.[] | select((.severity | test($pat)) and .fix_version != null)]')
+
           echo "filtered<<EOF" >> $GITHUB_OUTPUT
           echo "$FIXABLE" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          COUNT=$(echo "$FIXABLE" | jq length)
-          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "count=$(echo "$FIXABLE" | jq length)" >> $GITHUB_OUTPUT
+          echo "has_npm=$(echo "$FIXABLE" | jq '[.[] | select(.ecosystem == "npm")] | length > 0')" >> $GITHUB_OUTPUT
+          echo "has_pip=$(echo "$FIXABLE" | jq '[.[] | select(.ecosystem == "pip")] | length > 0')" >> $GITHUB_OUTPUT
 
       - name: Exit if nothing to fix
-        if: steps.filter.outputs.count == '0'
+        if: steps.alerts.outputs.count == '0'
         run: echo "No fixable vulnerabilities at ${{ inputs.severity }}+ severity." && exit 0
 
-      - name: Fix npm dependencies
-        if: steps.filter.outputs.count != '0'
-        env:
-          FILTERED_JSON: ${{ steps.filter.outputs.filtered }}
-        run: |
-          find . -name "package.json" -not -path "*/node_modules/*" | while read pkg; do
-            DIR=$(dirname "$pkg")
-            MANIFEST_ALERTS=$(echo "$FILTERED_JSON" | jq --arg m "$pkg" '[.[] | select(.manifest == $m or .ecosystem == "npm")]')
-            if [ "$(echo "$MANIFEST_ALERTS" | jq length)" -gt 0 ]; then
-              cd "$DIR" && rm -f package-lock.json
-              npm install --package-lock-only 2>/dev/null || true
-              npm audit fix 2>/dev/null || true
-              cd - > /dev/null
-            fi
-          done
+      - name: Checkout target repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ inputs.target_repo }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 1
 
-      - name: Fix Python dependencies
-        if: steps.filter.outputs.count != '0'
+      - name: Setup Node.js
+        if: steps.alerts.outputs.has_npm == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python and uv
+        if: steps.alerts.outputs.has_pip == 'true'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        if: steps.alerts.outputs.has_pip == 'true'
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
+
+      - name: Fix dependencies
+        if: steps.alerts.outputs.count != '0'
         env:
-          FILTERED_JSON: ${{ steps.filter.outputs.filtered }}
+          FILTERED_JSON: ${{ steps.alerts.outputs.filtered }}
+          HAS_NPM: ${{ steps.alerts.outputs.has_npm }}
+          HAS_PIP: ${{ steps.alerts.outputs.has_pip }}
         run: |
-          find . -name "requirements*.txt" -type f | while read req; do
-            PY_ALERTS=$(echo "$FILTERED_JSON" | jq '[.[] | select(.ecosystem == "pip")]')
-            if [ "$(echo "$PY_ALERTS" | jq length)" -gt 0 ]; then
-              echo "$PY_ALERTS" | jq -r '.[] | "\(.package) \(.fix_version)"' | while read PKG VER; do
-                [ -n "$VER" ] && [ "$VER" != "null" ] && sed -i "s/^${PKG}[=<>!~].*/${PKG}>=${VER}/I" "$req" 2>/dev/null || true
+          # Fix npm in background
+          if [ "$HAS_NPM" = "true" ]; then
+            (
+              find . -name "package.json" -not -path "*/node_modules/*" | while read pkg; do
+                DIR=$(dirname "$pkg")
+                MANIFEST_ALERTS=$(echo "$FILTERED_JSON" | jq --arg m "$pkg" '[.[] | select(.manifest == $m or .ecosystem == "npm")]')
+                if [ "$(echo "$MANIFEST_ALERTS" | jq length)" -gt 0 ]; then
+                  cd "$DIR"
+                  rm -f package-lock.json
+                  npm audit fix --package-lock-only 2>/dev/null || true
+                  cd - > /dev/null
+                fi
               done
-            fi
-          done
-          find . -name "pyproject.toml" -type f | while read toml; do
-            DIR=$(dirname "$toml")
-            [ -f "$DIR/uv.lock" ] && cd "$DIR" && rm -f uv.lock && uv lock 2>/dev/null || true && cd - > /dev/null
-          done
+            ) &
+            NPM_PID=$!
+          fi
+
+          # Fix Python in background
+          if [ "$HAS_PIP" = "true" ]; then
+            (
+              find . -name "requirements*.txt" -type f | while read req; do
+                PY_ALERTS=$(echo "$FILTERED_JSON" | jq '[.[] | select(.ecosystem == "pip")]')
+                if [ "$(echo "$PY_ALERTS" | jq length)" -gt 0 ]; then
+                  echo "$PY_ALERTS" | jq -r '.[] | "\(.package) \(.fix_version)"' | while read PKG VER; do
+                    [ -n "$VER" ] && [ "$VER" != "null" ] && \
+                      sed -i "s/^${PKG}[=<>!~].*/${PKG}>=${VER}/I" "$req" 2>/dev/null || true
+                  done
+                fi
+              done
+              find . -name "pyproject.toml" -type f | while read toml; do
+                DIR=$(dirname "$toml")
+                if [ -f "$DIR/uv.lock" ]; then
+                  cd "$DIR" && rm -f uv.lock && uv lock 2>/dev/null || true && cd - > /dev/null
+                fi
+              done
+            ) &
+            PIP_PID=$!
+          fi
+
+          # Wait for both
+          [ -n "${NPM_PID:-}" ] && wait "$NPM_PID"
+          [ -n "${PIP_PID:-}" ] && wait "$PIP_PID"
 
       - name: Check for changes
         id: changes
@@ -164,7 +177,7 @@ jobs:
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
         id: commit
         env:
-          FILTERED_JSON: ${{ steps.filter.outputs.filtered }}
+          FILTERED_JSON: ${{ steps.alerts.outputs.filtered }}
         run: |
           BRANCH="security/fix-${{ inputs.severity }}-$(date +%Y%m%d-%H%M%S)"
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
@@ -173,74 +186,69 @@ jobs:
           git checkout -b "$BRANCH"
           PACKAGES=$(echo "$FILTERED_JSON" | jq -r '[.[].package] | unique | join(", ")')
           git add -A
-          git commit -m "fix(security): patch ${{ steps.filter.outputs.count }} vulns ($PACKAGES)"
+          git commit -m "fix(security): patch ${{ steps.alerts.outputs.count }} vulns ($PACKAGES)"
           git push -u origin "$BRANCH"
 
-      - name: Ensure labels
+      - name: Write PR body script
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          REPO="${{ inputs.target_repo }}"
-          gh label create "security"     --color "d73a4a" --repo "$REPO" 2>/dev/null || true
-          gh label create "dependencies" --color "0075ca" --repo "$REPO" 2>/dev/null || true
-          gh label create "automated"    --color "bfd4f2" --repo "$REPO" 2>/dev/null || true
-          SEVERITY="${{ inputs.severity }}"
-          case $SEVERITY in critical) C="b60205";; high) C="ff9800";; medium) C="fbca04";; *) C="0e8a16";; esac
-          gh label create "severity:$SEVERITY" --color "$C" --repo "$REPO" 2>/dev/null || true
-
-      - name: Build PR body
-        if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
-        id: body
-        run: |
-          python3 - << 'PYEOF'
-          import json, os, sys
-
-          alerts = json.loads(os.environ.get("ALERTS", "[]"))
-          count = len(alerts)
-          severity = "${{ inputs.severity }}"
-
+          cat > /tmp/build_pr_body.py << 'SCRIPT'
+          import json, os
+          alerts = json.loads(os.environ["FILTERED_JSON"])
           rows = "\n".join(
               f"| {a.get('cve') or 'N/A'} | {a['package']} | {a['severity'].upper()} | {a.get('fix_version') or 'N/A'} |"
               for a in alerts
           )
           by_sev = {s: sum(1 for a in alerts if a["severity"] == s) for s in ["critical","high","medium","low"]}
-
-          body = f"""## Security Fix
-
-          This PR addresses **{count}** security vulnerabilities.
-
-          ### Vulnerabilities Fixed
-
-          | CVE | Package | Severity | Fix Version |
-          |-----|---------|----------|-------------|
-          {rows}
-
-          ### Summary
-          Critical: {by_sev['critical']}  High: {by_sev['high']}  Medium: {by_sev['medium']}  Low: {by_sev['low']}
-
-          ---
-          Generated by [git-steer](https://github.com/ry-ops/git-steer)"""
-
-          with open("/tmp/pr_body.md", "w") as f:
-              f.write(body)
-          print("PR body written.")
-          PYEOF
-        env:
-          ALERTS: ${{ steps.filter.outputs.filtered }}
+          body = (
+              "## Security Fix\n\n"
+              f"This PR addresses **{len(alerts)}** security vulnerabilities.\n\n"
+              "### Vulnerabilities Fixed\n\n"
+              "| CVE | Package | Severity | Fix Version |\n"
+              "|-----|---------|----------|-------------|\n"
+              f"{rows}\n\n"
+              "### Summary\n"
+              f"- Critical: {by_sev['critical']}  High: {by_sev['high']}  Medium: {by_sev['medium']}  Low: {by_sev['low']}\n\n"
+              "---\n"
+              "Generated by [git-steer](https://github.com/ry-ops/git-steer)"
+          )
+          open("/tmp/pr_body.md", "w").write(body)
+          SCRIPT
 
       - name: Create Pull Request
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
         id: pr
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          FILTERED_JSON: ${{ steps.alerts.outputs.filtered }}
         run: |
+          REPO="${{ inputs.target_repo }}"
+          SEVERITY="${{ inputs.severity }}"
+          COUNT="${{ steps.alerts.outputs.count }}"
+
+          # Ensure labels (fire-and-forget, parallel with PR body)
+          (
+            gh label create "security"     --color "d73a4a" --repo "$REPO" 2>/dev/null || true
+            gh label create "dependencies" --color "0075ca" --repo "$REPO" 2>/dev/null || true
+            gh label create "automated"    --color "bfd4f2" --repo "$REPO" 2>/dev/null || true
+            case $SEVERITY in critical) C="b60205";; high) C="ff9800";; medium) C="fbca04";; *) C="0e8a16";; esac
+            gh label create "severity:$SEVERITY" --color "$C" --repo "$REPO" 2>/dev/null || true
+          ) &
+          LABELS_PID=$!
+
+          # Build PR body in parallel
+          python3 /tmp/build_pr_body.py &
+          BODY_PID=$!
+
+          wait "$LABELS_PID"
+          wait "$BODY_PID"
+
           PR_URL=$(gh pr create \
-            --title "fix(security): Patch ${{ steps.filter.outputs.count }} ${{ inputs.severity }}+ vulnerabilities" \
+            --title "fix(security): Patch $COUNT $SEVERITY+ vulnerabilities" \
             --body-file /tmp/pr_body.md \
             --head "${{ steps.commit.outputs.branch }}" \
-            --label "security,dependencies,automated,severity:${{ inputs.severity }}" \
-            --repo "${{ inputs.target_repo }}")
+            --label "security,dependencies,automated,severity:$SEVERITY" \
+            --repo "$REPO")
           echo "url=$PR_URL" >> $GITHUB_OUTPUT
           echo "number=$(echo "$PR_URL" | grep -oE '[0-9]+$')" >> $GITHUB_OUTPUT
 
@@ -255,7 +263,7 @@ jobs:
           MERGE_RESP=$(gh api "repos/$REPO/pulls/$PR_NUM/merge" \
             -X PUT \
             -f merge_method=squash \
-            -f commit_title="fix(security): Patch ${{ steps.filter.outputs.count }} ${{ inputs.severity }}+ vulnerabilities" \
+            -f commit_title="fix(security): Patch ${{ steps.alerts.outputs.count }} ${{ inputs.severity }}+ vulnerabilities" \
             -f commit_message="Auto-merged by git-steer." 2>&1)
           echo "$MERGE_RESP"
           MERGED=$(echo "$MERGE_RESP" | jq -r '.merged // false' 2>/dev/null)
@@ -273,10 +281,14 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          echo "Waiting 30s for Dependabot..."
-          sleep 30
-          REMAINING=$(gh api "repos/${{ inputs.target_repo }}/dependabot/alerts" \
-            --jq '[.[] | select(.state == "open")] | length' 2>/dev/null || echo "unknown")
+          REPO="${{ inputs.target_repo }}"
+          for i in $(seq 1 12); do
+            REMAINING=$(gh api "repos/$REPO/dependabot/alerts" \
+              --jq '[.[] | select(.state == "open")] | length' 2>/dev/null || echo "unknown")
+            echo "Poll $i: $REMAINING open alerts"
+            if [ "$REMAINING" = "0" ] || [ "$REMAINING" = "unknown" ]; then break; fi
+            sleep 5
+          done
           echo "remaining_alerts=$REMAINING" >> $GITHUB_OUTPUT
           if [ "$REMAINING" = "0" ]; then
             echo "result=all_clear" >> $GITHUB_OUTPUT
@@ -289,9 +301,9 @@ jobs:
       - name: Dry run summary
         if: inputs.dry_run == true
         env:
-          FILTERED_JSON: ${{ steps.filter.outputs.filtered }}
+          FILTERED_JSON: ${{ steps.alerts.outputs.filtered }}
         run: |
-          echo "Dry run - would fix ${{ steps.filter.outputs.count }} vulnerabilities:"
+          echo "Dry run - would fix ${{ steps.alerts.outputs.count }} vulnerabilities:"
           echo "$FILTERED_JSON" | jq -r '.[] | "  \(.package) (\(.severity)): \(.cve // "N/A")"'
           git diff --stat || echo "No file changes."
 
@@ -305,7 +317,7 @@ jobs:
             --arg status "${{ job.status }}" \
             --arg repo "${{ inputs.target_repo }}" \
             --arg severity "${{ inputs.severity }}" \
-            --arg fixed "${{ steps.filter.outputs.count || '0' }}" \
+            --arg fixed "${{ steps.alerts.outputs.count || '0' }}" \
             --arg merged "${{ steps.wait-merge.outputs.merged || 'na' }}" \
             --arg verify "${{ steps.verify.outputs.result || 'na' }}" \
             --arg remaining "${{ steps.verify.outputs.remaining_alerts || 'na' }}" \
