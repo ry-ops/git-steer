@@ -89,7 +89,7 @@ jobs:
           echo "alerts<<EOF" >> $GITHUB_OUTPUT
           echo "$ALERTS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          echo "count=$(echo "$ALERTS" | jq 'length')" >> $GITHUB_OUTPUT
+          echo "count=$(echo "$ALERTS" | jq length)" >> $GITHUB_OUTPUT
 
       - name: Filter by severity
         id: filter
@@ -107,7 +107,8 @@ jobs:
           echo "filtered<<EOF" >> $GITHUB_OUTPUT
           echo "$FIXABLE" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          echo "count=$(echo "$FIXABLE" | jq 'length')" >> $GITHUB_OUTPUT
+          COUNT=$(echo "$FIXABLE" | jq length)
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
 
       - name: Exit if nothing to fix
         if: steps.filter.outputs.count == '0'
@@ -119,7 +120,7 @@ jobs:
           find . -name "package.json" -not -path "*/node_modules/*" | while read pkg; do
             DIR=$(dirname "$pkg")
             MANIFEST_ALERTS=$(echo '${{ steps.filter.outputs.filtered }}' | jq --arg m "$pkg" '[.[] | select(.manifest == $m or .ecosystem == "npm")]')
-            if [ "$(echo "$MANIFEST_ALERTS" | jq 'length')" -gt 0 ]; then
+            if [ "$(echo "$MANIFEST_ALERTS" | jq length)" -gt 0 ]; then
               cd "$DIR" && rm -f package-lock.json
               npm install --package-lock-only 2>/dev/null || true
               npm audit fix 2>/dev/null || true
@@ -132,7 +133,7 @@ jobs:
         run: |
           find . -name "requirements*.txt" -type f | while read req; do
             PY_ALERTS=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.ecosystem == "pip")]')
-            if [ "$(echo "$PY_ALERTS" | jq 'length')" -gt 0 ]; then
+            if [ "$(echo "$PY_ALERTS" | jq length)" -gt 0 ]; then
               echo "$PY_ALERTS" | jq -r '.[] | "\(.package) \(.fix_version)"' | while read PKG VER; do
                 [ -n "$VER" ] && [ "$VER" != "null" ] && sed -i "s/^${PKG}[=<>!~].*/${PKG}>=${VER}/I" "$req" 2>/dev/null || true
               done
