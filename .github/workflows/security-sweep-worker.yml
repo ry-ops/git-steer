@@ -109,6 +109,8 @@ jobs:
 
       - name: Filter by severity
         id: filter
+        env:
+          ALERTS_JSON: ${{ steps.alerts.outputs.alerts }}
         run: |
           SEVERITY="${{ inputs.severity }}"
           case $SEVERITY in
@@ -118,12 +120,13 @@ jobs:
             low)      PATTERN='critical|high|medium|low' ;;
             all)      PATTERN='.*' ;;
           esac
-          FILTERED=$(echo '${{ steps.alerts.outputs.alerts }}' | jq --arg pat "$PATTERN" '[.[] | select(.severity | test($pat))]')
+          FILTERED=$(echo "$ALERTS_JSON" | jq --arg pat "$PATTERN" '[.[] | select(.severity | test($pat))]')
           FIXABLE=$(echo "$FILTERED" | jq '[.[] | select(.fix_version != null)]')
           echo "filtered<<EOF" >> $GITHUB_OUTPUT
           echo "$FIXABLE" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          echo "count=$(echo "$FIXABLE" | jq length)" >> $GITHUB_OUTPUT
+          COUNT=$(echo "$FIXABLE" | jq length)
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
 
       - name: Fix npm dependencies
         if: steps.filter.outputs.count != '0' && contains(steps.ecosystem.outputs.detected, 'npm')
