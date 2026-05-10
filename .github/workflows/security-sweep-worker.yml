@@ -283,18 +283,7 @@ jobs:
           gh api "repos/$REPO/issues/${{ matrix.target.issueNumber }}/comments" \
             -f body="Fix PR created: ${{ steps.pr.outputs.url }} — awaiting auto-merge and verification."
 
-      - name: Enable auto-merge
-        if: steps.pr.outputs.number != '' && inputs.dry_run == false
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          gh pr merge "${{ steps.pr.outputs.number }}" \
-            --auto --squash \
-            --repo "${{ matrix.target.owner }}/${{ matrix.target.repo }}" \
-            --subject "fix(security): Patch ${{ steps.filter.outputs.count }} ${{ inputs.severity }}+ vulnerabilities" \
-            --body "Auto-merged by git-steer."
-
-      - name: Wait for PR to merge
+      - name: Merge Pull Request
         if: steps.pr.outputs.number != '' && inputs.dry_run == false
         id: wait-merge
         env:
@@ -302,16 +291,20 @@ jobs:
         run: |
           PR_NUM="${{ steps.pr.outputs.number }}"
           REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
-          for i in $(seq 1 24); do
-            PR_JSON=$(gh pr view "$PR_NUM" --repo "$REPO" --json state,mergedAt)
-            STATE=$(echo "$PR_JSON" | jq -r '.state')
-            MERGED_AT=$(echo "$PR_JSON" | jq -r '.mergedAt')
-            echo "Poll $i state=$STATE mergedAt=$MERGED_AT"
-            if [ "$MERGED_AT" != "null" ] && [ -n "$MERGED_AT" ]; then echo "merged=true" >> $GITHUB_OUTPUT; break; fi
-            if [ "$STATE" = "CLOSED" ]; then echo "merged=false" >> $GITHUB_OUTPUT; break; fi
-            sleep 15
-          done
-          grep -q "merged=" $GITHUB_OUTPUT || echo "merged=pending" >> $GITHUB_OUTPUT
+          MERGE_RESP=$(gh api "repos/$REPO/pulls/$PR_NUM/merge" \
+            -X PUT \
+            -f merge_method=squash \
+            -f commit_title="fix(security): Patch ${{ steps.filter.outputs.count }} ${{ inputs.severity }}+ vulnerabilities" \
+            -f commit_message="Auto-merged by git-steer." 2>&1)
+          echo "$MERGE_RESP"
+          MERGED=$(echo "$MERGE_RESP" | jq -r '.merged // false' 2>/dev/null)
+          if [ "$MERGED" = "true" ]; then
+            echo "merged=true" >> $GITHUB_OUTPUT
+            echo "PR #$PR_NUM merged."
+          else
+            echo "merged=false" >> $GITHUB_OUTPUT
+            echo "Merge failed: $MERGE_RESP"
+          fi
 
       - name: Verify fixes applied
         if: steps.wait-merge.outputs.merged == 'true'
