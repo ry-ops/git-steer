@@ -412,6 +412,35 @@ export class StateManager {
     return this.data?.state.cache['_lastSwept']?.[fullName] ?? null;
   }
 
+  // ========== VEX Operations ==========
+
+  setVexStatus(entry: {
+    id: string;
+    owner: string;
+    repo: string;
+    cveId: string;
+    status: string;
+    justification: string | null;
+    detail: string | null;
+    setAt: string;
+    setBy: string;
+  }): void {
+    if (!this.data) return;
+    const map: Record<string, typeof entry> = this.data.state.cache['_vex'] ?? {};
+    map[entry.id] = entry;
+    this.data.state.cache['_vex'] = map;
+    this.dirty = true;
+  }
+
+  getVexStatus(owner: string, repo: string, cveId: string): any | null {
+    const id = `${owner}/${repo}::${cveId}`;
+    return this.data?.state.cache['_vex']?.[id] ?? null;
+  }
+
+  getAllVex(): Record<string, any> {
+    return this.data?.state.cache['_vex'] ?? {};
+  }
+
   // ========== RFC Operations ==========
 
   getRfcs(filter?: { repo?: string; status?: RfcEntry['status'] }): RfcEntry[] {

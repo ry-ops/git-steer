@@ -1345,16 +1345,16 @@ export class GitHubClient {
   /**
    * Hot path 1 — Owner resolution.
    *
-   * Replaces the `listRepos()` call in StateManager.load() that paginates
-   * GET /installation/repositories just to find the viewer's login.
-   * One GraphQL round-trip instead of 1-N paginated REST pages.
+   * Returns the login of the account that installed the GitHub App.
+   * Uses GET /app/installations/{id} which works correctly for App auth
+   * (unlike `viewer { login }` which returns the bot identity, not the org).
    */
   async getViewerLogin(): Promise<string> {
     const octokit = this.ensureAuth();
-    const result = await octokit.graphql<{ viewer: { login: string } }>(
-      `query { viewer { login } }`
-    );
-    return result.viewer.login;
+    const { data } = await octokit.request('GET /app/installations/{installation_id}', {
+      installation_id: this.installationId,
+    });
+    return (data.account as any)?.login ?? '';
   }
 
   /**
@@ -1505,5 +1505,90 @@ export class GitHubClient {
     }
 
     return result;
+  }
+
+  // ========== SBOM / Dependency Graph ==========
+
+  async getSbom(owner: string, repo: string): Promise<Record<string, any>> {
+    const octokit = this.ensureAuth();
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/dependency-graph/sbom', {
+      owner,
+      repo,
+    });
+    return (data as any).sbom ?? data;
+  }
+
+  // ========== Repository Security Settings ==========
+
+  /**
+   * Returns the security feature enablement state for a repo.
+   * Used by policy_eval to check Dependabot, secret scanning, code scanning, etc.
+   */
+  async getRepoSecuritySettings(owner: string, repo: string): Promise<{
+    vulnerabilityAlerts: boolean;
+    automatedSecurityFixes: boolean;
+    secretScanning: boolean;
+    secretScanningPushProtection: boolean;
+    advancedSecurity: boolean;
+  }> {
+    const octokit = this.ensureAuth();
+
+    const [vulnAlerts, { data: repoData }] = await Promise.all([
+      this.checkVulnerabilityAlertsEnabled(owner, repo).catch(() => false),
+      octokit.request('GET /repos/{owner}/{repo}', { owner, repo }),
+    ]);
+
+    const ss = (repoData as any).security_and_analysis;
+    return {
+      vulnerabilityAlerts: vulnAlerts,
+      automatedSecurityFixes: false, // no direct read endpoint; enable-only API
+      secretScanning: ss?.secret_scanning?.status === 'enabled',
+      secretScanningPushProtection: ss?.secret_scanning_push_protection?.status === 'enabled',
+      advancedSecurity: ss?.advanced_security?.status === 'enabled',
+    };
+  }
+
+  // ========== Attestations ==========
+
+  async listAttestations(owner: string, repo: string, subjectDigest?: string): Promise<Array<{
+    id: number;
+    bundleType: string;
+    predicateType: string;
+    subject: string;
+    createdAt: string;
+    url: string;
+  }>> {
+    const octokit = this.ensureAuth();
+
+    if (subjectDigest) {
+      const { data } = await octokit.request(
+        'GET /repos/{owner}/{repo}/attestations/{subject_digest}',
+        { owner, repo, subject_digest: subjectDigest }
+      );
+      return ((data as any).attestations ?? []).map((a: any) => ({
+        id: a.id ?? 0,
+        bundleType: a.bundle?.mediaType ?? 'unknown',
+        predicateType: a.bundle?.dsseEnvelope?.payload
+          ? (() => { try { return JSON.parse(Buffer.from(a.bundle.dsseEnvelope.payload, 'base64').toString()).predicateType ?? 'unknown'; } catch { return 'unknown'; } })()
+          : 'unknown',
+        subject: subjectDigest,
+        createdAt: a.created_at ?? '',
+        url: a.html_url ?? '',
+      }));
+    }
+
+    // List all attestations for the repo via the subjects endpoint
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/attestations',
+      { owner, repo, per_page: 30 }
+    );
+    return ((data as any).attestations ?? []).map((a: any) => ({
+      id: a.id ?? 0,
+      bundleType: a.bundle?.mediaType ?? 'unknown',
+      predicateType: 'unknown',
+      subject: '',
+      createdAt: a.created_at ?? '',
+      url: a.html_url ?? '',
+    }));
   }
 }

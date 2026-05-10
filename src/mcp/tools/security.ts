@@ -109,6 +109,73 @@ export function getTools(): Tool[] {
       },
     },
     {
+      name: 'sbom_generate',
+      description: 'Generate an SPDX Software Bill of Materials (SBOM) for a repository using GitHub\'s dependency graph',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: { type: 'string' },
+          repo: { type: 'string' },
+        },
+        required: ['owner', 'repo'],
+      },
+    },
+    {
+      name: 'vex_set',
+      description: 'Set VEX (Vulnerability Exploitability eXchange) status on a CVE finding. Persisted to state repo as vex-status.jsonl.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: { type: 'string' },
+          repo: { type: 'string' },
+          cveId: { type: 'string', description: 'CVE or GHSA identifier, e.g. CVE-2024-1234 or GHSA-xxxx-xxxx-xxxx' },
+          status: {
+            type: 'string',
+            enum: ['not_affected', 'affected', 'fixed', 'under_investigation'],
+          },
+          justification: {
+            type: 'string',
+            enum: ['component_not_present', 'vulnerable_code_not_present', 'vulnerable_code_not_in_execute_path', 'vulnerable_code_cannot_be_controlled_by_adversary', 'inline_mitigations_already_exist'],
+            description: 'Required when status is not_affected',
+          },
+          detail: { type: 'string', description: 'Optional free-text rationale' },
+        },
+        required: ['owner', 'repo', 'cveId', 'status'],
+      },
+    },
+    {
+      name: 'policy_eval',
+      description: 'Evaluate managed repos against security policies (Dependabot, secret scanning, branch protection, advanced security). Reports pass/fail per control.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: { type: 'string', description: 'Limit to a single owner' },
+          repo: { type: 'string', description: 'Limit to a single repo (requires owner)' },
+          controls: {
+            type: 'array',
+            items: {
+              type: 'string',
+              enum: ['vulnerability_alerts', 'secret_scanning', 'secret_scanning_push_protection', 'advanced_security', 'branch_protection'],
+            },
+            description: 'Controls to evaluate. Omit to check all.',
+          },
+        },
+      },
+    },
+    {
+      name: 'attestation_list',
+      description: 'List GitHub Artifact Attestations for a repository',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: { type: 'string' },
+          repo: { type: 'string' },
+          subjectDigest: { type: 'string', description: 'Optional sha256:... digest to filter to a specific artifact' },
+        },
+        required: ['owner', 'repo'],
+      },
+    },
+    {
       name: 'security_sweep',
       description: 'Autonomous security sweep: scans repos for CVEs, creates RFC issues with ITIL-formatted change records, and dispatches a GitHub Actions workflow to fix vulnerabilities and create PRs — all in one call. Supports chunked execution: set chunkSize to process a subset per call and call again with resume:true to continue.',
       inputSchema: {
@@ -163,6 +230,10 @@ export function handleCall(name: string, args: Record<string, any>, deps: ToolDe
     case 'security_fix_pr': return handleSecurityFixPr(args, deps);
     case 'security_enforce': return handleSecurityEnforce(args, deps);
     case 'security_sweep': return handleSecuritySweep(args, deps);
+    case 'sbom_generate': return handleSbomGenerate(args, deps);
+    case 'vex_set': return handleVexSet(args, deps);
+    case 'policy_eval': return handlePolicyEval(args, deps);
+    case 'attestation_list': return handleAttestationList(args, deps);
     default: return null;
   }
 }
@@ -380,6 +451,132 @@ async function handleSecurityEnforce(args: Record<string, any>, deps: ToolDeps):
   return {
     enforced: results.length,
     results,
+  };
+}
+
+async function handleSbomGenerate(args: Record<string, any>, deps: ToolDeps): Promise<any> {
+  const sbom = await deps.github.getSbom(args.owner, args.repo);
+  return {
+    repo: `${args.owner}/${args.repo}`,
+    sbom,
+  };
+}
+
+async function handleVexSet(args: Record<string, any>, deps: ToolDeps): Promise<any> {
+  const entry = {
+    id: `${args.owner}/${args.repo}::${args.cveId}`,
+    owner: args.owner,
+    repo: args.repo,
+    cveId: args.cveId,
+    status: args.status,
+    justification: args.justification ?? null,
+    detail: args.detail ?? null,
+    setAt: new Date().toISOString(),
+    setBy: 'git-steer',
+  };
+
+  deps.state.setVexStatus(entry);
+  deps.state.addAuditEntry({
+    action: 'vex_set',
+    repo: `${args.owner}/${args.repo}`,
+    result: 'success',
+    details: { cveId: args.cveId, status: args.status },
+  });
+
+  return { success: true, entry };
+}
+
+async function handlePolicyEval(args: Record<string, any>, deps: ToolDeps): Promise<any> {
+  const ALL_CONTROLS = ['vulnerability_alerts', 'secret_scanning', 'secret_scanning_push_protection', 'advanced_security', 'branch_protection'];
+  const controls: string[] = args.controls && args.controls.length > 0 ? args.controls : ALL_CONTROLS;
+
+  let targetRepos: Array<{ owner: string; name: string; fullName: string }>;
+
+  if (args.owner && args.repo) {
+    targetRepos = [{ owner: args.owner, name: args.repo, fullName: `${args.owner}/${args.repo}` }];
+  } else {
+    const managed = deps.state.getManagedRepos().filter((r) => r.name !== '*');
+    if (managed.length === 0) {
+      const fetched = await deps.github.listRepos();
+      targetRepos = fetched.map((r) => ({ owner: r.owner, name: r.name, fullName: r.fullName }));
+    } else {
+      targetRepos = managed.map((r) => ({ owner: r.owner, name: r.name, fullName: `${r.owner}/${r.name}` }));
+    }
+  }
+
+  const results: Array<{
+    repo: string;
+    pass: string[];
+    fail: string[];
+    controls: Record<string, boolean>;
+  }> = [];
+
+  await Promise.all(
+    targetRepos.map((repo) =>
+      deps.readLimit(async () => {
+        try {
+          const security = await deps.github.getRepoSecuritySettings(repo.owner, repo.name);
+
+          const controlMap: Record<string, boolean> = {};
+
+          if (controls.includes('vulnerability_alerts')) {
+            controlMap.vulnerability_alerts = security.vulnerabilityAlerts;
+          }
+          if (controls.includes('secret_scanning')) {
+            controlMap.secret_scanning = security.secretScanning;
+          }
+          if (controls.includes('secret_scanning_push_protection')) {
+            controlMap.secret_scanning_push_protection = security.secretScanningPushProtection;
+          }
+          if (controls.includes('advanced_security')) {
+            controlMap.advanced_security = security.advancedSecurity;
+          }
+          if (controls.includes('branch_protection')) {
+            // Check if the default branch is protected
+            try {
+              const branches = await deps.github.listBranchesGraphQL(repo.owner, repo.name);
+              const defaultBranchProtected = branches.some((b) => b.protected);
+              controlMap.branch_protection = defaultBranchProtected;
+            } catch {
+              controlMap.branch_protection = false;
+            }
+          }
+
+          const pass = Object.entries(controlMap).filter(([, v]) => v).map(([k]) => k);
+          const fail = Object.entries(controlMap).filter(([, v]) => !v).map(([k]) => k);
+
+          results.push({ repo: repo.fullName, pass, fail, controls: controlMap });
+        } catch {
+          results.push({
+            repo: repo.fullName,
+            pass: [],
+            fail: controls,
+            controls: Object.fromEntries(controls.map((c) => [c, false])),
+          });
+        }
+      })
+    )
+  );
+
+  const compliant = results.filter((r) => r.fail.length === 0).length;
+  const nonCompliant = results.filter((r) => r.fail.length > 0).length;
+
+  return {
+    summary: {
+      reposEvaluated: results.length,
+      compliant,
+      nonCompliant,
+    },
+    results,
+  };
+}
+
+async function handleAttestationList(args: Record<string, any>, deps: ToolDeps): Promise<any> {
+  const attestations = await deps.github.listAttestations(args.owner, args.repo, args.subjectDigest);
+  return {
+    repo: `${args.owner}/${args.repo}`,
+    count: attestations.length,
+    attestations,
   };
 }
 
