@@ -85,6 +85,7 @@ jobs:
           echo "count=$(echo "$FIXABLE" | jq length)" >> $GITHUB_OUTPUT
           echo "has_npm=$(echo "$FIXABLE" | jq '[.[] | select(.ecosystem == "npm")] | length > 0')" >> $GITHUB_OUTPUT
           echo "has_pip=$(echo "$FIXABLE" | jq '[.[] | select(.ecosystem == "pip")] | length > 0')" >> $GITHUB_OUTPUT
+          echo "has_gomod=$(echo "$FIXABLE" | jq '[.[] | select(.ecosystem == "gomod")] | length > 0')" >> $GITHUB_OUTPUT
 
       - name: Exit if nothing to fix
         if: steps.alerts.outputs.count == '0'
@@ -113,12 +114,19 @@ jobs:
         if: steps.alerts.outputs.has_pip == 'true'
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a # v4
 
+      - name: Setup Go
+        if: steps.alerts.outputs.has_gomod == 'true'
+        uses: actions/setup-go@d60b41a563a30931787d3c1ce860e36e640dc9b3 # v5
+        with:
+          go-version: 'stable'
+
       - name: Fix dependencies
         if: steps.alerts.outputs.count != '0'
         env:
           FILTERED_JSON: ${{ steps.alerts.outputs.filtered }}
           HAS_NPM: ${{ steps.alerts.outputs.has_npm }}
           HAS_PIP: ${{ steps.alerts.outputs.has_pip }}
+          HAS_GOMOD: ${{ steps.alerts.outputs.has_gomod }}
         run: |
           # Fix npm in background
           if [ "$HAS_NPM" = "true" ]; then
@@ -159,9 +167,28 @@ jobs:
             PIP_PID=$!
           fi
 
-          # Wait for both
+          # Fix Go modules in background
+          if [ "$HAS_GOMOD" = "true" ]; then
+            (
+              GO_ALERTS=$(echo "$FILTERED_JSON" | jq '[.[] | select(.ecosystem == "gomod")]')
+              find . -name "go.mod" -not -path "*/vendor/*" | while read gomod; do
+                DIR=$(dirname "$gomod")
+                cd "$DIR"
+                echo "$GO_ALERTS" | jq -r '.[] | "\(.package)@\(.fix_version)"' | while read PKG_VER; do
+                  [ -n "$PKG_VER" ] && [ "$PKG_VER" != "@" ] && \
+                    go get "$PKG_VER" 2>/dev/null || true
+                done
+                go mod tidy 2>/dev/null || true
+                cd - > /dev/null
+              done
+            ) &
+            GOMOD_PID=$!
+          fi
+
+          # Wait for all
           [ -n "${NPM_PID:-}" ] && wait "$NPM_PID"
           [ -n "${PIP_PID:-}" ] && wait "$PIP_PID"
+          [ -n "${GOMOD_PID:-}" ] && wait "$GOMOD_PID"
 
       - name: Check for changes
         id: changes
