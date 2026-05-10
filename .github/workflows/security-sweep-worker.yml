@@ -130,10 +130,12 @@ jobs:
 
       - name: Fix npm dependencies
         if: steps.filter.outputs.count != '0' && contains(steps.ecosystem.outputs.detected, 'npm')
+        env:
+          FILTERED_JSON: ${{ steps.filter.outputs.filtered }}
         run: |
           find . -name "package.json" -not -path "*/node_modules/*" | while read pkg; do
             DIR=$(dirname "$pkg")
-            MANIFEST_ALERTS=$(echo '${{ steps.filter.outputs.filtered }}' | jq --arg m "$pkg" '[.[] | select(.manifest == $m or .ecosystem == "npm")]')
+            MANIFEST_ALERTS=$(echo "$FILTERED_JSON" | jq --arg m "$pkg" '[.[] | select(.manifest == $m or .ecosystem == "npm")]')
             if [ "$(echo "$MANIFEST_ALERTS" | jq length)" -gt 0 ]; then
               cd "$DIR" && rm -f package-lock.json
               npm install --package-lock-only 2>/dev/null || true
@@ -144,9 +146,11 @@ jobs:
 
       - name: Fix Python dependencies
         if: steps.filter.outputs.count != '0' && contains(steps.ecosystem.outputs.detected, 'pip')
+        env:
+          FILTERED_JSON: ${{ steps.filter.outputs.filtered }}
         run: |
           find . -name "requirements*.txt" -type f | while read req; do
-            PY_ALERTS=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.ecosystem == "pip")]')
+            PY_ALERTS=$(echo "$FILTERED_JSON" | jq '[.[] | select(.ecosystem == "pip")]')
             if [ "$(echo "$PY_ALERTS" | jq length)" -gt 0 ]; then
               echo "$PY_ALERTS" | jq -r '.[] | "\(.package) \(.fix_version)"' | while read PKG VER; do
                 [ -n "$VER" ] && [ "$VER" != "null" ] && sed -i "s/^${PKG}[=<>!~].*/${PKG}>=${VER}/" "$req" 2>/dev/null || true
@@ -160,8 +164,10 @@ jobs:
 
       - name: Fix Go dependencies
         if: steps.filter.outputs.count != '0' && contains(steps.ecosystem.outputs.detected, 'go')
+        env:
+          FILTERED_JSON: ${{ steps.filter.outputs.filtered }}
         run: |
-          GO_ALERTS=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.ecosystem == "gomod" or .ecosystem == "go")]')
+          GO_ALERTS=$(echo "$FILTERED_JSON" | jq '[.[] | select(.ecosystem == "gomod" or .ecosystem == "go")]')
           if [ "$(echo "$GO_ALERTS" | jq length)" -gt 0 ]; then
             echo "$GO_ALERTS" | jq -r '.[] | "\(.package)@v\(.fix_version)"' | while read MOD; do
               [[ "$MOD" != *"null"* ]] && go get "$MOD" 2>/dev/null || true
@@ -182,13 +188,15 @@ jobs:
       - name: Create branch and commit
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
         id: commit
+        env:
+          FILTERED_JSON: ${{ steps.filter.outputs.filtered }}
         run: |
           BRANCH="security/sweep-$(date +%Y%m%d-%H%M%S)"
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           git config user.name "git-steer[bot]"
           git config user.email "git-steer[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          PACKAGES=$(echo '${{ steps.filter.outputs.filtered }}' | jq -r '[.[].package] | unique | join(", ")')
+          PACKAGES=$(echo "$FILTERED_JSON" | jq -r '[.[].package] | unique | join(", ")')
           git add -A
           git commit -m "fix(security): patch ${{ steps.filter.outputs.count }} vulns ($PACKAGES)"
           git push -u origin "$BRANCH"
