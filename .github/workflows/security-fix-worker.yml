@@ -111,9 +111,7 @@ jobs:
 
       - name: Exit if nothing to fix
         if: steps.filter.outputs.count == '0'
-        run: |
-          echo "No fixable vulnerabilities at ${{ inputs.severity }}+ severity."
-          exit 0
+        run: echo "No fixable vulnerabilities at ${{ inputs.severity }}+ severity." && exit 0
 
       - name: Fix npm dependencies
         if: steps.filter.outputs.count != '0'
@@ -122,8 +120,7 @@ jobs:
             DIR=$(dirname "$pkg")
             MANIFEST_ALERTS=$(echo '${{ steps.filter.outputs.filtered }}' | jq --arg m "$pkg" '[.[] | select(.manifest == $m or .ecosystem == "npm")]')
             if [ "$(echo "$MANIFEST_ALERTS" | jq 'length')" -gt 0 ]; then
-              cd "$DIR"
-              rm -f package-lock.json
+              cd "$DIR" && rm -f package-lock.json
               npm install --package-lock-only 2>/dev/null || true
               npm audit fix 2>/dev/null || true
               cd - > /dev/null
@@ -137,16 +134,13 @@ jobs:
             PY_ALERTS=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.ecosystem == "pip")]')
             if [ "$(echo "$PY_ALERTS" | jq 'length')" -gt 0 ]; then
               echo "$PY_ALERTS" | jq -r '.[] | "\(.package) \(.fix_version)"' | while read PKG VER; do
-                [ -n "$VER" ] && [ "$VER" != "null" ] && \
-                  sed -i "s/^${PKG}[=<>!~].*/${PKG}>=${VER}/I" "$req" 2>/dev/null || true
+                [ -n "$VER" ] && [ "$VER" != "null" ] && sed -i "s/^${PKG}[=<>!~].*/${PKG}>=${VER}/I" "$req" 2>/dev/null || true
               done
             fi
           done
           find . -name "pyproject.toml" -type f | while read toml; do
             DIR=$(dirname "$toml")
-            if [ -f "$DIR/uv.lock" ]; then
-              cd "$DIR" && rm -f uv.lock && uv lock 2>/dev/null || true && cd - > /dev/null
-            fi
+            [ -f "$DIR/uv.lock" ] && cd "$DIR" && rm -f uv.lock && uv lock 2>/dev/null || true && cd - > /dev/null
           done
 
       - name: Check for changes
@@ -169,12 +163,8 @@ jobs:
           git config user.email "git-steer[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           PACKAGES=$(echo '${{ steps.filter.outputs.filtered }}' | jq -r '[.[].package] | unique | join(", ")')
-          CVES=$(echo '${{ steps.filter.outputs.filtered }}' | jq -r '[.[].cve // empty] | unique | join(", ")')
           git add -A
-          git commit -m "fix(security): patch ${{ steps.filter.outputs.count }} vulnerabilities
-
-Updates: $PACKAGES
-CVEs: $CVES"
+          git commit -m "fix(security): patch ${{ steps.filter.outputs.count }} vulns ($PACKAGES)"
           git push -u origin "$BRANCH"
 
       - name: Ensure labels
@@ -183,12 +173,52 @@ CVEs: $CVES"
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           REPO="${{ inputs.target_repo }}"
-          gh label create "security"     --color "d73a4a" --description "Security vulnerability" --repo "$REPO" 2>/dev/null || true
-          gh label create "dependencies" --color "0075ca" --description "Dependency updates"      --repo "$REPO" 2>/dev/null || true
-          gh label create "automated"    --color "bfd4f2" --description "Created by automation"   --repo "$REPO" 2>/dev/null || true
+          gh label create "security"     --color "d73a4a" --repo "$REPO" 2>/dev/null || true
+          gh label create "dependencies" --color "0075ca" --repo "$REPO" 2>/dev/null || true
+          gh label create "automated"    --color "bfd4f2" --repo "$REPO" 2>/dev/null || true
           SEVERITY="${{ inputs.severity }}"
-          case $SEVERITY in critical) COLOR="b60205" ;; high) COLOR="ff9800" ;; medium) COLOR="fbca04" ;; *) COLOR="0e8a16" ;; esac
-          gh label create "severity:$SEVERITY" --color "$COLOR" --description "$SEVERITY severity" --repo "$REPO" 2>/dev/null || true
+          case $SEVERITY in critical) C="b60205";; high) C="ff9800";; medium) C="fbca04";; *) C="0e8a16";; esac
+          gh label create "severity:$SEVERITY" --color "$C" --repo "$REPO" 2>/dev/null || true
+
+      - name: Build PR body
+        if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
+        id: body
+        run: |
+          python3 - << 'PYEOF'
+          import json, os, sys
+
+          alerts = json.loads(os.environ.get("ALERTS", "[]"))
+          count = len(alerts)
+          severity = "${{ inputs.severity }}"
+
+          rows = "\n".join(
+              f"| {a.get('cve') or 'N/A'} | {a['package']} | {a['severity'].upper()} | {a.get('fix_version') or 'N/A'} |"
+              for a in alerts
+          )
+          by_sev = {s: sum(1 for a in alerts if a["severity"] == s) for s in ["critical","high","medium","low"]}
+
+          body = f"""## Security Fix
+
+          This PR addresses **{count}** security vulnerabilities.
+
+          ### Vulnerabilities Fixed
+
+          | CVE | Package | Severity | Fix Version |
+          |-----|---------|----------|-------------|
+          {rows}
+
+          ### Summary
+          Critical: {by_sev['critical']}  High: {by_sev['high']}  Medium: {by_sev['medium']}  Low: {by_sev['low']}
+
+          ---
+          Generated by [git-steer](https://github.com/ry-ops/git-steer)"""
+
+          with open("/tmp/pr_body.md", "w") as f:
+              f.write(body)
+          print("PR body written.")
+          PYEOF
+        env:
+          ALERTS: ${{ steps.filter.outputs.filtered }}
 
       - name: Create Pull Request
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
@@ -196,45 +226,17 @@ CVEs: $CVES"
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          COUNT=${{ steps.filter.outputs.count }}
-          ROWS=$(echo '${{ steps.filter.outputs.filtered }}' | jq -r '.[] | "| \(.cve // "N/A") | \(.package) | \(.severity | ascii_upcase) | \(.fix_version // "N/A") |"')
-          CRIT=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity=="critical")] | length')
-          HIGH=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity=="high")] | length')
-          MED=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity=="medium")] | length')
-          LOW=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity=="low")] | length')
-
-          BODY="## Security Fix
-
-This PR addresses **${COUNT}** security vulnerabilities.
-
-### Vulnerabilities Fixed
-
-| CVE | Package | Severity | Fix Version |
-|-----|---------|----------|-------------|
-${ROWS}
-
-### Summary
-- **Critical:** ${CRIT}
-- **High:** ${HIGH}
-- **Medium:** ${MED}
-- **Low:** ${LOW}
-
----
-Generated by [git-steer](https://github.com/ry-ops/git-steer)"
-
           PR_URL=$(gh pr create \
-            --title "fix(security): Patch ${COUNT} ${{ inputs.severity }}+ vulnerabilities" \
-            --body "$BODY" \
+            --title "fix(security): Patch ${{ steps.filter.outputs.count }} ${{ inputs.severity }}+ vulnerabilities" \
+            --body-file /tmp/pr_body.md \
             --head "${{ steps.commit.outputs.branch }}" \
             --label "security,dependencies,automated,severity:${{ inputs.severity }}" \
             --repo "${{ inputs.target_repo }}")
-
-          PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$')
           echo "url=$PR_URL" >> $GITHUB_OUTPUT
-          echo "number=$PR_NUM" >> $GITHUB_OUTPUT
+          echo "number=$(echo "$PR_URL" | grep -oE '[0-9]+$')" >> $GITHUB_OUTPUT
 
       - name: Enable auto-merge
-        if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false && steps.pr.outputs.number != ''
+        if: steps.pr.outputs.number != '' && inputs.dry_run == false
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -245,7 +247,7 @@ Generated by [git-steer](https://github.com/ry-ops/git-steer)"
             --body "Auto-merged by git-steer."
 
       - name: Wait for PR to merge
-        if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false && steps.pr.outputs.number != ''
+        if: steps.pr.outputs.number != '' && inputs.dry_run == false
         id: wait-merge
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -255,15 +257,9 @@ Generated by [git-steer](https://github.com/ry-ops/git-steer)"
           for i in $(seq 1 24); do
             MERGED=$(gh pr view "$PR_NUM" --repo "$REPO" --json merged -q '.merged')
             STATE=$(gh pr view "$PR_NUM" --repo "$REPO" --json state -q '.state')
-            echo "Poll $i — merged: $MERGED, state: $STATE"
-            if [ "$MERGED" = "true" ]; then
-              echo "merged=true" >> $GITHUB_OUTPUT
-              break
-            fi
-            if [ "$STATE" = "CLOSED" ]; then
-              echo "merged=false" >> $GITHUB_OUTPUT
-              break
-            fi
+            echo "Poll $i merged=$MERGED state=$STATE"
+            if [ "$MERGED" = "true" ]; then echo "merged=true" >> $GITHUB_OUTPUT; break; fi
+            if [ "$STATE" = "CLOSED" ]; then echo "merged=false" >> $GITHUB_OUTPUT; break; fi
             sleep 15
           done
           grep -q "merged=" $GITHUB_OUTPUT || echo "merged=pending" >> $GITHUB_OUTPUT
@@ -274,14 +270,14 @@ Generated by [git-steer](https://github.com/ry-ops/git-steer)"
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          echo "Waiting 30s for Dependabot to process merge..."
+          echo "Waiting 30s for Dependabot..."
           sleep 30
           REMAINING=$(gh api "repos/${{ inputs.target_repo }}/dependabot/alerts" \
             --jq '[.[] | select(.state == "open")] | length' 2>/dev/null || echo "unknown")
           echo "remaining_alerts=$REMAINING" >> $GITHUB_OUTPUT
           if [ "$REMAINING" = "0" ]; then
             echo "result=all_clear" >> $GITHUB_OUTPUT
-            echo "Verification passed — no open alerts remaining."
+            echo "Verification passed - no open alerts remaining."
           else
             echo "result=partial" >> $GITHUB_OUTPUT
             echo "Verification: $REMAINING alert(s) still open."
@@ -290,8 +286,8 @@ Generated by [git-steer](https://github.com/ry-ops/git-steer)"
       - name: Dry run summary
         if: inputs.dry_run == true
         run: |
-          echo "Dry run — would fix ${{ steps.filter.outputs.count }} vulnerabilities:"
-          echo '${{ steps.filter.outputs.filtered }}' | jq -r '.[] | "  - \(.package) (\(.severity)): \(.cve // "N/A")"'
+          echo "Dry run - would fix ${{ steps.filter.outputs.count }} vulnerabilities:"
+          echo '${{ steps.filter.outputs.filtered }}' | jq -r '.[] | "  \(.package) (\(.severity)): \(.cve // "N/A")"'
           git diff --stat || echo "No file changes."
 
       - name: Report to git-steer-state
@@ -305,9 +301,9 @@ Generated by [git-steer](https://github.com/ry-ops/git-steer)"
             --arg repo "${{ inputs.target_repo }}" \
             --arg severity "${{ inputs.severity }}" \
             --arg fixed "${{ steps.filter.outputs.count || '0' }}" \
-            --arg merged "${{ steps.wait-merge.outputs.merged || 'n/a' }}" \
-            --arg verify "${{ steps.verify.outputs.result || 'n/a' }}" \
-            --arg remaining "${{ steps.verify.outputs.remaining_alerts || 'n/a' }}" \
+            --arg merged "${{ steps.wait-merge.outputs.merged || 'na' }}" \
+            --arg verify "${{ steps.verify.outputs.result || 'na' }}" \
+            --arg remaining "${{ steps.verify.outputs.remaining_alerts || 'na' }}" \
             --arg pr_url "${{ steps.pr.outputs.url || '' }}" \
-            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{id:$id,status:$status,repo:$repo,severity:$severity,fixed:($fixed|tonumber),merged:$merged,verify:$verify,remaining_alerts:$remaining,pr_url:$pr_url,timestamp:$timestamp}'
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{id:$id,status:$status,repo:$repo,severity:$severity,fixed:($fixed|tonumber),merged:$merged,verify:$verify,remaining:$remaining,pr_url:$pr_url,ts:$ts}'
