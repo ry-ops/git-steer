@@ -86,98 +86,66 @@ jobs:
               cve: .security_advisory.cve_id,
               summary: .security_advisory.summary
             }]')
-
           echo "alerts<<EOF" >> $GITHUB_OUTPUT
           echo "$ALERTS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-
-          COUNT=$(echo "$ALERTS" | jq 'length')
-          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "count=$(echo "$ALERTS" | jq 'length')" >> $GITHUB_OUTPUT
 
       - name: Filter by severity
         id: filter
-        env:
-          ALERTS: ${{ steps.alerts.outputs.alerts }}
         run: |
           SEVERITY="${{ inputs.severity }}"
-
           case $SEVERITY in
             critical) PATTERN='critical' ;;
-            high) PATTERN='critical|high' ;;
-            medium) PATTERN='critical|high|medium' ;;
-            low) PATTERN='critical|high|medium|low' ;;
-            all) PATTERN='.*' ;;
+            high)     PATTERN='critical|high' ;;
+            medium)   PATTERN='critical|high|medium' ;;
+            low)      PATTERN='critical|high|medium|low' ;;
+            all)      PATTERN='.*' ;;
           esac
-
-          FILTERED=$(echo "$ALERTS" | jq --arg pat "$PATTERN" '[.[] | select(.severity | test($pat))]')
+          FILTERED=$(echo '${{ steps.alerts.outputs.alerts }}' | jq --arg pat "$PATTERN" '[.[] | select(.severity | test($pat))]')
           FIXABLE=$(echo "$FILTERED" | jq '[.[] | select(.fix_version != null)]')
-
           echo "filtered<<EOF" >> $GITHUB_OUTPUT
           echo "$FIXABLE" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+          echo "count=$(echo "$FIXABLE" | jq 'length')" >> $GITHUB_OUTPUT
 
-          COUNT=$(echo "$FIXABLE" | jq 'length')
-          echo "count=$COUNT" >> $GITHUB_OUTPUT
-
-      - name: Check if fixes needed
+      - name: Exit if nothing to fix
         if: steps.filter.outputs.count == '0'
         run: |
-          echo "No fixable vulnerabilities found at ${{ inputs.severity }}+ severity"
+          echo "No fixable vulnerabilities at ${{ inputs.severity }}+ severity."
           exit 0
 
       - name: Fix npm dependencies
         if: steps.filter.outputs.count != '0'
-        env:
-          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
           find . -name "package.json" -not -path "*/node_modules/*" | while read pkg; do
             DIR=$(dirname "$pkg")
-            echo "Processing $pkg..."
-
-            MANIFEST_ALERTS=$(echo "$ALERTS" | jq --arg m "$pkg" '[.[] | select(.manifest == $m or .ecosystem == "npm")]')
-
+            MANIFEST_ALERTS=$(echo '${{ steps.filter.outputs.filtered }}' | jq --arg m "$pkg" '[.[] | select(.manifest == $m or .ecosystem == "npm")]')
             if [ "$(echo "$MANIFEST_ALERTS" | jq 'length')" -gt 0 ]; then
               cd "$DIR"
-
-              if [ -f "package-lock.json" ]; then
-                rm package-lock.json
-                npm install --package-lock-only 2>/dev/null || true
-              fi
-
+              rm -f package-lock.json
+              npm install --package-lock-only 2>/dev/null || true
               npm audit fix 2>/dev/null || true
-
               cd - > /dev/null
             fi
           done
 
       - name: Fix Python dependencies
         if: steps.filter.outputs.count != '0'
-        env:
-          ALERTS: ${{ steps.filter.outputs.filtered }}
         run: |
           find . -name "requirements*.txt" -type f | while read req; do
-            echo "Processing $req..."
-
-            PY_ALERTS=$(echo "$ALERTS" | jq '[.[] | select(.ecosystem == "pip")]')
-
+            PY_ALERTS=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.ecosystem == "pip")]')
             if [ "$(echo "$PY_ALERTS" | jq 'length')" -gt 0 ]; then
               echo "$PY_ALERTS" | jq -r '.[] | "\(.package) \(.fix_version)"' | while read PKG VER; do
-                if [ -n "$VER" ] && [ "$VER" != "null" ]; then
+                [ -n "$VER" ] && [ "$VER" != "null" ] && \
                   sed -i "s/^${PKG}[=<>!~].*/${PKG}>=${VER}/I" "$req" 2>/dev/null || true
-                  sed -i "s/^${PKG}$/${PKG}>=${VER}/I" "$req" 2>/dev/null || true
-                fi
               done
             fi
           done
-
           find . -name "pyproject.toml" -type f | while read toml; do
             DIR=$(dirname "$toml")
             if [ -f "$DIR/uv.lock" ]; then
-              echo "Regenerating uv.lock in $DIR..."
-              cd "$DIR"
-              rm -f uv.lock
-              uv lock 2>/dev/null || true
-              cd - > /dev/null
+              cd "$DIR" && rm -f uv.lock && uv lock 2>/dev/null || true && cd - > /dev/null
             fi
           done
 
@@ -193,45 +161,33 @@ jobs:
 
       - name: Create branch and commit
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
+        id: commit
         run: |
           BRANCH="security/fix-${{ inputs.severity }}-$(date +%Y%m%d-%H%M%S)"
-          echo "branch=$BRANCH" >> $GITHUB_ENV
-
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           git config user.name "git-steer[bot]"
           git config user.email "git-steer[bot]@users.noreply.github.com"
-
           git checkout -b "$BRANCH"
-
           PACKAGES=$(echo '${{ steps.filter.outputs.filtered }}' | jq -r '[.[].package] | unique | join(", ")')
           CVES=$(echo '${{ steps.filter.outputs.filtered }}' | jq -r '[.[].cve // empty] | unique | join(", ")')
-
           git add -A
           git commit -m "fix(security): patch ${{ steps.filter.outputs.count }} vulnerabilities
 
-Updates packages: $PACKAGES
-CVEs: $CVES
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
-
+Updates: $PACKAGES
+CVEs: $CVES"
           git push -u origin "$BRANCH"
 
-      - name: Ensure labels exist
+      - name: Ensure labels
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          REPO="${{ steps.parse.outputs.owner }}/${{ steps.parse.outputs.repo }}"
-          gh label create "security" --color "d73a4a" --description "Security vulnerability" --repo "$REPO" 2>/dev/null || true
-          gh label create "dependencies" --color "0075ca" --description "Dependency updates" --repo "$REPO" 2>/dev/null || true
-          gh label create "automated" --color "bfd4f2" --description "Created by automation" --repo "$REPO" 2>/dev/null || true
-
+          REPO="${{ inputs.target_repo }}"
+          gh label create "security"     --color "d73a4a" --description "Security vulnerability" --repo "$REPO" 2>/dev/null || true
+          gh label create "dependencies" --color "0075ca" --description "Dependency updates"      --repo "$REPO" 2>/dev/null || true
+          gh label create "automated"    --color "bfd4f2" --description "Created by automation"   --repo "$REPO" 2>/dev/null || true
           SEVERITY="${{ inputs.severity }}"
-          case $SEVERITY in
-            critical) COLOR="b60205" ;;
-            high) COLOR="ff9800" ;;
-            medium) COLOR="fbca04" ;;
-            *) COLOR="0e8a16" ;;
-          esac
+          case $SEVERITY in critical) COLOR="b60205" ;; high) COLOR="ff9800" ;; medium) COLOR="fbca04" ;; *) COLOR="0e8a16" ;; esac
           gh label create "severity:$SEVERITY" --color "$COLOR" --description "$SEVERITY severity" --repo "$REPO" 2>/dev/null || true
 
       - name: Create Pull Request
@@ -241,38 +197,36 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           COUNT=${{ steps.filter.outputs.count }}
+          ROWS=$(echo '${{ steps.filter.outputs.filtered }}' | jq -r '.[] | "| \(.cve // "N/A") | \(.package) | \(.severity | ascii_upcase) | \(.fix_version // "N/A") |"')
+          CRIT=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity=="critical")] | length')
+          HIGH=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity=="high")] | length')
+          MED=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity=="medium")] | length')
+          LOW=$(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity=="low")] | length')
 
-          BODY=$(cat <<PREOF
-## Security Fix
+          BODY="## Security Fix
 
-This PR addresses **$COUNT** security vulnerabilities.
+This PR addresses **${COUNT}** security vulnerabilities.
 
 ### Vulnerabilities Fixed
 
 | CVE | Package | Severity | Fix Version |
 |-----|---------|----------|-------------|
-$(echo '${{ steps.filter.outputs.filtered }}' | jq -r '.[] | "| \(.cve // "N/A") | \(.package) | \(.severity | ascii_upcase) | \(.fix_version // "N/A") |"')
+${ROWS}
 
 ### Summary
-- **Critical:** $(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity == "critical")] | length')
-- **High:** $(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity == "high")] | length')
-- **Medium:** $(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity == "medium")] | length')
-- **Low:** $(echo '${{ steps.filter.outputs.filtered }}' | jq '[.[] | select(.severity == "low")] | length')
+- **Critical:** ${CRIT}
+- **High:** ${HIGH}
+- **Medium:** ${MED}
+- **Low:** ${LOW}
 
 ---
-
-Generated by [git-steer](https://github.com/ry-ops/git-steer) GitHub Actions worker
-PREOF
-          )
+Generated by [git-steer](https://github.com/ry-ops/git-steer)"
 
           PR_URL=$(gh pr create \
-            --title "fix(security): Patch $COUNT ${{ inputs.severity }}+ vulnerabilities" \
+            --title "fix(security): Patch ${COUNT} ${{ inputs.severity }}+ vulnerabilities" \
             --body "$BODY" \
-            --head "$branch" \
-            --label "security" \
-            --label "dependencies" \
-            --label "automated" \
-            --label "severity:${{ inputs.severity }}" \
+            --head "${{ steps.commit.outputs.branch }}" \
+            --label "security,dependencies,automated,severity:${{ inputs.severity }}" \
             --repo "${{ inputs.target_repo }}")
 
           PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$')
@@ -285,12 +239,10 @@ PREOF
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           gh pr merge "${{ steps.pr.outputs.number }}" \
-            --auto \
-            --squash \
+            --auto --squash \
             --repo "${{ inputs.target_repo }}" \
             --subject "fix(security): Patch ${{ steps.filter.outputs.count }} ${{ inputs.severity }}+ vulnerabilities" \
-            --body "Auto-merged by git-steer after security fix workflow."
-          echo "Auto-merge enabled on PR #${{ steps.pr.outputs.number }}"
+            --body "Auto-merged by git-steer."
 
       - name: Wait for PR to merge
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false && steps.pr.outputs.number != ''
@@ -300,35 +252,21 @@ PREOF
         run: |
           PR_NUM="${{ steps.pr.outputs.number }}"
           REPO="${{ inputs.target_repo }}"
-          echo "Waiting for PR #$PR_NUM to merge..."
-
           for i in $(seq 1 24); do
-            STATE=$(gh pr view "$PR_NUM" --repo "$REPO" --json state,merged -q '.state + ":" + (.merged | tostring)')
-            MERGED=$(echo "$STATE" | cut -d: -f2)
-            PR_STATE=$(echo "$STATE" | cut -d: -f1)
-
-            echo "Attempt $i — state: $PR_STATE, merged: $MERGED"
-
+            MERGED=$(gh pr view "$PR_NUM" --repo "$REPO" --json merged -q '.merged')
+            STATE=$(gh pr view "$PR_NUM" --repo "$REPO" --json state -q '.state')
+            echo "Poll $i — merged: $MERGED, state: $STATE"
             if [ "$MERGED" = "true" ]; then
               echo "merged=true" >> $GITHUB_OUTPUT
-              echo "PR #$PR_NUM merged successfully."
               break
             fi
-
-            if [ "$PR_STATE" = "CLOSED" ] && [ "$MERGED" != "true" ]; then
+            if [ "$STATE" = "CLOSED" ]; then
               echo "merged=false" >> $GITHUB_OUTPUT
-              echo "PR #$PR_NUM was closed without merging."
               break
             fi
-
             sleep 15
           done
-
-          # If we exhausted retries without merge, mark as pending
-          if [ -z "$(grep 'merged=' $GITHUB_OUTPUT)" ]; then
-            echo "merged=pending" >> $GITHUB_OUTPUT
-            echo "PR #$PR_NUM did not merge within timeout — may need manual checks to pass."
-          fi
+          grep -q "merged=" $GITHUB_OUTPUT || echo "merged=pending" >> $GITHUB_OUTPUT
 
       - name: Verify fixes applied
         if: steps.wait-merge.outputs.merged == 'true'
@@ -336,67 +274,40 @@ PREOF
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          REPO="${{ inputs.target_repo }}"
-          SEVERITY="${{ inputs.severity }}"
-
-          echo "Waiting 30s for Dependabot to process the merge..."
+          echo "Waiting 30s for Dependabot to process merge..."
           sleep 30
-
-          # Re-fetch open alerts after merge
-          REMAINING=$(gh api "repos/$REPO/dependabot/alerts" \
+          REMAINING=$(gh api "repos/${{ inputs.target_repo }}/dependabot/alerts" \
             --jq '[.[] | select(.state == "open")] | length' 2>/dev/null || echo "unknown")
-
-          FIXED_ALERTS=$(echo '${{ steps.filter.outputs.filtered }}' | jq -r '[.[].cve // .[].package] | join(", ")')
-
           echo "remaining_alerts=$REMAINING" >> $GITHUB_OUTPUT
-
           if [ "$REMAINING" = "0" ]; then
             echo "result=all_clear" >> $GITHUB_OUTPUT
-            echo "✅ Verification passed — no open Dependabot alerts remaining."
+            echo "Verification passed — no open alerts remaining."
           else
             echo "result=partial" >> $GITHUB_OUTPUT
-            echo "⚠️  Verification: $REMAINING alert(s) still open after merge."
+            echo "Verification: $REMAINING alert(s) still open."
           fi
-
-          echo "Fixed: $FIXED_ALERTS"
-          echo "Remaining open alerts: $REMAINING"
 
       - name: Dry run summary
         if: inputs.dry_run == true
         run: |
-          echo "## Dry Run Summary"
-          echo ""
-          echo "Would fix ${{ steps.filter.outputs.count }} vulnerabilities:"
-          echo '${{ steps.filter.outputs.filtered }}' | jq -r '.[] | "- \(.package) (\(.severity)): \(.cve // "N/A")"'
-          echo ""
-          echo "Changes that would be made:"
-          git diff --stat || echo "No file changes detected"
+          echo "Dry run — would fix ${{ steps.filter.outputs.count }} vulnerabilities:"
+          echo '${{ steps.filter.outputs.filtered }}' | jq -r '.[] | "  - \(.package) (\(.severity)): \(.cve // "N/A")"'
+          git diff --stat || echo "No file changes."
 
-      - name: Report status to git-steer-state
+      - name: Report to git-steer-state
         if: always() && inputs.job_id != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          STATUS="${{ job.status }}"
-          JOB_ID="${{ inputs.job_id }}"
-          FIXED_COUNT="${{ steps.filter.outputs.count }}"
-          FIXED_COUNT="${FIXED_COUNT:-0}"
-          MERGED="${{ steps.wait-merge.outputs.merged || 'n/a' }}"
-          VERIFY_RESULT="${{ steps.verify.outputs.result || 'n/a' }}"
-          REMAINING="${{ steps.verify.outputs.remaining_alerts || 'n/a' }}"
-
-          ENTRY=$(jq -n \
-            --arg id "$JOB_ID" \
-            --arg status "$STATUS" \
+          jq -n \
+            --arg id "${{ inputs.job_id }}" \
+            --arg status "${{ job.status }}" \
             --arg repo "${{ inputs.target_repo }}" \
             --arg severity "${{ inputs.severity }}" \
-            --arg fixed "$FIXED_COUNT" \
-            --arg merged "$MERGED" \
-            --arg verify "$VERIFY_RESULT" \
-            --arg remaining "$REMAINING" \
+            --arg fixed "${{ steps.filter.outputs.count || '0' }}" \
+            --arg merged "${{ steps.wait-merge.outputs.merged || 'n/a' }}" \
+            --arg verify "${{ steps.verify.outputs.result || 'n/a' }}" \
+            --arg remaining "${{ steps.verify.outputs.remaining_alerts || 'n/a' }}" \
             --arg pr_url "${{ steps.pr.outputs.url || '' }}" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{id: $id, status: $status, repo: $repo, severity: $severity, fixed: ($fixed | tonumber), merged: $merged, verify: $verify, remaining_alerts: $remaining, pr_url: $pr_url, timestamp: $timestamp}')
-
-          echo "Job result: $ENTRY"
-
+            '{id:$id,status:$status,repo:$repo,severity:$severity,fixed:($fixed|tonumber),merged:$merged,verify:$verify,remaining_alerts:$remaining,pr_url:$pr_url,timestamp:$timestamp}'
