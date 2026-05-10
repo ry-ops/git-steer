@@ -264,10 +264,11 @@ jobs:
           PR_NUM="${{ steps.pr.outputs.number }}"
           REPO="${{ inputs.target_repo }}"
           for i in $(seq 1 24); do
-            MERGED=$(gh pr view "$PR_NUM" --repo "$REPO" --json merged -q '.merged')
-            STATE=$(gh pr view "$PR_NUM" --repo "$REPO" --json state -q '.state')
-            echo "Poll $i merged=$MERGED state=$STATE"
-            if [ "$MERGED" = "true" ]; then echo "merged=true" >> $GITHUB_OUTPUT; break; fi
+            PR_JSON=$(gh pr view "$PR_NUM" --repo "$REPO" --json state,mergedAt)
+            STATE=$(echo "$PR_JSON" | jq -r '.state')
+            MERGED_AT=$(echo "$PR_JSON" | jq -r '.mergedAt')
+            echo "Poll $i state=$STATE mergedAt=$MERGED_AT"
+            if [ "$MERGED_AT" != "null" ] && [ -n "$MERGED_AT" ]; then echo "merged=true" >> $GITHUB_OUTPUT; break; fi
             if [ "$STATE" = "CLOSED" ]; then echo "merged=false" >> $GITHUB_OUTPUT; break; fi
             sleep 15
           done
