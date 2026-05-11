@@ -116,7 +116,7 @@ jobs:
 
       - name: Setup Go
         if: steps.alerts.outputs.has_gomod == 'true'
-        uses: actions/setup-go@d60b41a563a30931787d3c1ce860e36e640dc9b3 # v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: 'stable'
 
