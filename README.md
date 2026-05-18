@@ -1,5 +1,5 @@
 # git-steer
-
+<img src="git-steer.png" width="100%">
 <img src="git-steer-banner.svg" width="100%">
 
 **Self-hosting GitHub autonomy engine.** A skid steer for your repos.
