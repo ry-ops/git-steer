@@ -1,0 +1,67 @@
+name: Dependabot auto-merge
+
+# Event-driven autonomy engine (deployed to every managed repo by
+# scripts/rollout-autonomy.mjs). When Dependabot opens a security/version PR,
+# git-steer approves it and enables GitHub-native auto-merge, which lands the PR
+# once required checks pass — WITHOUT bypassing branch protection. The approving
+# review comes from the git-steer App (a different identity than the PR author),
+# so the "require approval" rule is satisfied, not skipped.
+#
+# Uses pull_request_target (not pull_request) on purpose: Dependabot-triggered
+# pull_request runs cannot read Actions/org secrets, so the App private key
+# would be unavailable. pull_request_target runs in the base-repo context with
+# secrets. SAFETY: this workflow never checks out or executes PR head code — it
+# only calls the API to review/merge — so pull_request_target is not exploitable
+# here.
+
+on: pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    # Only act on Dependabot PRs. git-steer[bot] gap-fill PRs handle their own
+    # merge in the security-fix/sweep workers.
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    steps:
+      - name: Mint git-steer App token
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.GIT_STEER_APP_ID }}
+          private-key: ${{ secrets.GIT_STEER_APP_PRIVATE_KEY }}
+
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+
+      # Patch & minor: fully autonomous — approve + native auto-merge.
+      - name: Approve and enable auto-merge (patch/minor)
+        if: ${{ steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor' }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
+          echo "Approved and queued for auto-merge: $PR_URL"
+
+      # Major: breaking-change risk — do NOT auto-merge. Surface for a human.
+      # (To make majors autonomous too, add the semver-major case above.)
+      - name: Flag major bumps for human review
+        if: ${{ steps.meta.outputs.update-type == 'version-update:semver-major' }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create "needs-human-merge" --color d93f0b \
+            --description "Major bump or blocked auto-merge" --repo "$REPO" 2>/dev/null || true
+          gh pr edit "$PR_URL" --add-label "needs-human-merge"
+          gh pr comment "$PR_URL" --body "Major version bump (${{ steps.meta.outputs.dependency-names }} → ${{ steps.meta.outputs.new-version }}) — not auto-merging. Needs a human."
+          echo "Flagged major bump for review: $PR_URL"
