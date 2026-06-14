@@ -128,6 +128,10 @@ jobs:
           HAS_PIP: ${{ steps.alerts.outputs.has_pip }}
           HAS_GOMOD: ${{ steps.alerts.outputs.has_gomod }}
         run: |
+          # Fixes are best-effort: a non-zero from a background fix subshell
+          # must NOT fail the step (the default `bash -e` + `wait $PID` would).
+          # The "Check for changes" step + the ADR-005 gate are the real gates.
+          set +e
           # Fix npm in background
           if [ "$HAS_NPM" = "true" ]; then
             (
