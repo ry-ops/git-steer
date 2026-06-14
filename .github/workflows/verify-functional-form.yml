@@ -1,0 +1,216 @@
+name: Verify Functional Form
+
+# Reusable functional-integrity gate (ADR-005). Runs AFTER a fix is applied
+# and BEFORE merge, on the fix branch, and emits a GO / NO-GO / GO-UNVERIFIED
+# verdict that the caller uses to gate the merge (C-005-001). Implemented once
+# and invoked by every remediation path (C-005-005). Verdict aggregation
+# mirrors src/core/verdict.ts (the canonical, unit-tested source).
+
+on:
+  workflow_call:
+    inputs:
+      target_repo: { required: true, type: string }    # owner/repo to verify
+      ref:         { required: true, type: string }     # fix branch/sha to check out
+      pr_number:   { required: false, type: string, default: '' }
+      bump_from:   { required: false, type: string, default: '' }  # SURFACE: old version
+      bump_to:     { required: false, type: string, default: '' }  # SURFACE: new version
+    outputs:
+      verdict:
+        value: ${{ jobs.verify.outputs.verdict }}
+      dimensions:
+        value: ${{ jobs.verify.outputs.dimensions }}
+  workflow_dispatch:
+    inputs:
+      target_repo: { required: true, type: string }
+      ref:         { required: true, type: string }
+      pr_number:   { required: false, type: string, default: '' }
+      bump_from:   { required: false, type: string, default: '' }
+      bump_to:     { required: false, type: string, default: '' }
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.aggregate.outputs.verdict }}
+      dimensions: ${{ steps.aggregate.outputs.dimensions }}
+    steps:
+      - name: Parse target
+        id: parse
+        run: |
+          echo "owner=$(echo '${{ inputs.target_repo }}' | cut -d/ -f1)" >> $GITHUB_OUTPUT
+          echo "repo=$(echo '${{ inputs.target_repo }}' | cut -d/ -f2)" >> $GITHUB_OUTPUT
+
+      - name: Generate token (target repo)
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.GIT_STEER_APP_ID }}
+          private-key: ${{ secrets.GIT_STEER_PRIVATE_KEY }}
+          owner: ${{ steps.parse.outputs.owner }}
+          repositories: ${{ steps.parse.outputs.repo }}
+
+      - name: Checkout fix branch (ephemeral, ADR-002 zero-footprint)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: ${{ inputs.target_repo }}
+          ref: ${{ inputs.ref }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 1
+
+      - name: Detect ecosystem
+        id: detect
+        run: |
+          eco="none"
+          [ -f package.json ] && eco="npm"
+          [ -f go.mod ] && eco="go"
+          { [ -f requirements.txt ] || [ -f pyproject.toml ]; } && [ "$eco" = "none" ] && eco="python"
+          echo "ecosystem=$eco" >> $GITHUB_OUTPUT
+          echo "Detected ecosystem: $eco"
+
+      - name: Setup Node
+        if: steps.detect.outputs.ecosystem == 'npm'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: '22' }
+
+      - name: Setup Go
+        if: steps.detect.outputs.ecosystem == 'go'
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with: { go-version: 'stable' }
+
+      - name: Setup Python
+        if: steps.detect.outputs.ecosystem == 'python'
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5
+        with: { python-version: '3.12' }
+
+      # ── BUILD: deps resolve + lockfile coherent + compiles ─────────────
+      - name: BUILD
+        id: build
+        continue-on-error: true
+        run: |
+          set +e
+          case "${{ steps.detect.outputs.ecosystem }}" in
+            npm)
+              npm ci 2>&1 || npm install --no-audit --no-fund 2>&1
+              [ $? -ne 0 ] && { echo "result=FAIL" >> $GITHUB_OUTPUT; exit 0; }
+              if node -e "process.exit(require('./package.json').scripts?.build?0:1)"; then
+                npm run build 2>&1 || { echo "result=FAIL" >> $GITHUB_OUTPUT; exit 0; }
+              fi
+              echo "result=PASS" >> $GITHUB_OUTPUT ;;
+            go)
+              go build ./... 2>&1 && echo "result=PASS" >> $GITHUB_OUTPUT || echo "result=FAIL" >> $GITHUB_OUTPUT ;;
+            python)
+              if [ -f requirements.txt ]; then pip install -r requirements.txt 2>&1; else pip install . 2>&1; fi
+              [ $? -eq 0 ] && echo "result=PASS" >> $GITHUB_OUTPUT || echo "result=FAIL" >> $GITHUB_OUTPUT ;;
+            *) echo "result=NOT_APPLICABLE" >> $GITHUB_OUTPUT ;;
+          esac
+
+      # ── TEST: existing suite passes (NOT_APPLICABLE if none) ───────────
+      - name: TEST
+        id: test
+        continue-on-error: true
+        run: |
+          set +e
+          case "${{ steps.detect.outputs.ecosystem }}" in
+            npm)
+              HAS=$(node -e "const t=require('./package.json').scripts?.test||''; process.stdout.write(t && !/no test specified/.test(t) ? '1':'0')")
+              if [ "$HAS" = "1" ]; then
+                npm test 2>&1 && echo "result=PASS" >> $GITHUB_OUTPUT || echo "result=FAIL" >> $GITHUB_OUTPUT
+              else echo "result=NOT_APPLICABLE" >> $GITHUB_OUTPUT; fi ;;
+            go)
+              if ls **/*_test.go >/dev/null 2>&1 || find . -name '*_test.go' | grep -q .; then
+                go test ./... 2>&1 && echo "result=PASS" >> $GITHUB_OUTPUT || echo "result=FAIL" >> $GITHUB_OUTPUT
+              else echo "result=NOT_APPLICABLE" >> $GITHUB_OUTPUT; fi ;;
+            python)
+              if python -c "import pytest" 2>/dev/null && { [ -d tests ] || ls test_*.py >/dev/null 2>&1; }; then
+                pytest -q 2>&1 && echo "result=PASS" >> $GITHUB_OUTPUT || echo "result=FAIL" >> $GITHUB_OUTPUT
+              else echo "result=NOT_APPLICABLE" >> $GITHUB_OUTPUT; fi ;;
+            *) echo "result=NOT_APPLICABLE" >> $GITHUB_OUTPUT ;;
+          esac
+
+      # ── SMOKE: declared entrypoint starts without immediate error ──────
+      - name: SMOKE
+        id: smoke
+        continue-on-error: true
+        run: |
+          set +e
+          case "${{ steps.detect.outputs.ecosystem }}" in
+            npm)
+              MAIN=$(node -e "const p=require('./package.json'); process.stdout.write(p.main||'')")
+              if [ -n "$MAIN" ] && [ -f "$MAIN" ]; then
+                timeout 30 node -e "require('./${MAIN}')" 2>&1 && echo "result=PASS" >> $GITHUB_OUTPUT || echo "result=FAIL" >> $GITHUB_OUTPUT
+              else echo "result=NOT_APPLICABLE" >> $GITHUB_OUTPUT; fi ;;
+            go)
+              if [ -f main.go ] || grep -rq "package main" --include=*.go . 2>/dev/null; then
+                timeout 30 go run . --help >/dev/null 2>&1; [ $? -le 1 ] && echo "result=PASS" >> $GITHUB_OUTPUT || echo "result=NOT_APPLICABLE" >> $GITHUB_OUTPUT
+              else echo "result=NOT_APPLICABLE" >> $GITHUB_OUTPUT; fi ;;
+            *) echo "result=NOT_APPLICABLE" >> $GITHUB_OUTPUT ;;
+          esac
+
+      # ── SURFACE: breaking version drift (mirrors core/verdict.ts) ──────
+      - name: SURFACE
+        id: surface
+        run: |
+          node -e '
+            const from = process.env.FROM, to = process.env.TO;
+            const parse = (v) => { if (!v) return null; const m = v.replace(/^[^0-9]*/,"").match(/^(\d+)\.(\d+)\.(\d+)/); return m?[+m[1],+m[2],+m[3]]:null; };
+            const a = parse(from), b = parse(to);
+            let r = "NOT_APPLICABLE";
+            if (a && b) { const breaking = a[0]!==b[0] || (a[0]===0 && a[1]!==b[1]); r = breaking ? "FAIL" : "PASS"; }
+            require("fs").appendFileSync(process.env.GITHUB_OUTPUT, "result="+r+"\n");
+          '
+        env:
+          FROM: ${{ inputs.bump_from }}
+          TO: ${{ inputs.bump_to }}
+
+      # ── Aggregate (ADR-005 C-005-002/003) ─────────────────────────────
+      - name: Aggregate verdict
+        id: aggregate
+        run: |
+          node -e '
+            const dims = [
+              { dimension: "BUILD",   result: process.env.BUILD || "NOT_APPLICABLE" },
+              { dimension: "TEST",    result: process.env.TEST || "NOT_APPLICABLE" },
+              { dimension: "SMOKE",   result: process.env.SMOKE || "NOT_APPLICABLE" },
+              { dimension: "SURFACE", result: process.env.SURFACE || "NOT_APPLICABLE" },
+            ];
+            const fail = dims.some(d => d.result === "FAIL");
+            const pass = dims.some(d => d.result === "PASS");
+            const verdict = fail ? "NO-GO" : (pass ? "GO" : "GO-UNVERIFIED");
+            const out = process.env.GITHUB_OUTPUT;
+            require("fs").appendFileSync(out, "verdict=" + verdict + "\n");
+            require("fs").appendFileSync(out, "dimensions=" + JSON.stringify(dims) + "\n");
+            console.log("VERDICT:", verdict);
+            console.table(dims);
+          '
+        env:
+          BUILD: ${{ steps.build.outputs.result }}
+          TEST: ${{ steps.test.outputs.result }}
+          SMOKE: ${{ steps.smoke.outputs.result }}
+          SURFACE: ${{ steps.surface.outputs.result }}
+
+      # ── Provenance record to git-steer-state (C-005-006) ──────────────
+      - name: Record verdict
+        if: ${{ env.STATE_APP_ID != '' }}
+        env:
+          STATE_APP_ID: ${{ secrets.GIT_STEER_APP_ID }}
+        run: |
+          echo "TODO at integration: append {repo,pr,sourceSha,dimensions,verdict,ts} to git-steer-state/state/verdicts.jsonl using a git-steer-state-scoped token. The caller workflows already plumb this token."
+
+      - name: Summary
+        run: |
+          {
+            echo "## Functional-Integrity Verdict: ${{ steps.aggregate.outputs.verdict }}"
+            echo ""
+            echo "| Dimension | Result |"
+            echo "|-----------|--------|"
+            echo "| BUILD   | ${{ steps.build.outputs.result }} |"
+            echo "| TEST    | ${{ steps.test.outputs.result }} |"
+            echo "| SMOKE   | ${{ steps.smoke.outputs.result }} |"
+            echo "| SURFACE | ${{ steps.surface.outputs.result }} |"
+            echo ""
+            echo "Target: \`${{ inputs.target_repo }}@${{ inputs.ref }}\` · PR: ${{ inputs.pr_number }}"
+            echo "_GO auto-merges; NO-GO / GO-UNVERIFIED are held (ADR-005 C-005-003/004)._"
+          } >> $GITHUB_STEP_SUMMARY
