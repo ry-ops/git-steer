@@ -28,9 +28,11 @@ const installationId = await keytar.getPassword('git-steer', 'git-steer-installa
 const app = new App({ appId, privateKey });
 const octokit = await app.getInstallationOctokit(Number(installationId));
 
-// Find open alerts for the rule
+// Find open alerts for the rule (optional --ref to catch PR-head instances)
+const refArg = process.argv.indexOf('--ref');
+const ref = refArg >= 0 ? process.argv[refArg + 1] : undefined;
 const alerts = (await octokit.paginate('GET /repos/{owner}/{repo}/code-scanning/alerts', {
-  owner: OWNER, repo: REPO, state: 'open', per_page: 100,
+  owner: OWNER, repo: REPO, state: 'open', per_page: 100, ...(ref ? { ref } : {}),
 })).filter((a) => a.rule?.id === RULE);
 
 console.log(`Open ${RULE} alerts: ${alerts.length}\n`);
