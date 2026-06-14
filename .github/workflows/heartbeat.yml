@@ -33,6 +33,13 @@ jobs:
         with:
           node-version: '20'
 
+      # Private @git-fabric/* deps resolve to ssh URLs; rewrite to HTTPS-with-token
+      # so npm install can fetch them on the runner (no SSH key needed).
+      - name: Configure git auth for private deps
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.GIT_FABRIC_PAT }}@github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://x-access-token:${{ secrets.GIT_FABRIC_PAT }}@github.com/".insteadOf "git@github.com:"
+
       - name: Install dependencies and build
         run: npm install --no-audit --no-fund && npm run build
 
@@ -184,17 +191,8 @@ jobs:
           STATE_REPO: git-steer-state
         run: node scripts/ci-dashboard.mjs
 
-      - name: Sync changelog to blog
-        if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit' || inputs.task == 'changelog-sync'
-        env:
-          # GIT_FABRIC_PAT spans both orgs: reads ry-ops PRs/state AND writes fabric-forge/blog.
-          # (The ry-ops App token can read ry-ops but cannot write the fabric-forge deploy repo.)
-          GH_TOKEN: ${{ secrets.GIT_FABRIC_PAT }}
-          STATE_OWNER: ry-ops
-          STATE_REPO: git-steer-state
-          BLOG_OWNER: fabric-forge   # live ry-ops.dev deploy source (Pages blog-5f3); ry-ops/blog is a stale mirror
-          BLOG_REPO: blog
-        run: node scripts/ci-changelog.mjs
+      # NOTE: changelog sync moved to its own workflow (.github/workflows/changelog.yml)
+      # so it runs reliably without depending on this heartbeat's full build.
 
       - name: Log heartbeat to state
         if: always()
