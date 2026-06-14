@@ -301,8 +301,55 @@ jobs:
           echo "url=$PR_URL" >> $GITHUB_OUTPUT
           echo "number=$PR_NUM" >> $GITHUB_OUTPUT
 
+      # ── ADR-005 functional-integrity gate (CANARY: inlined in this one path) ──
+      # Runs on the fixed branch BEFORE merge. Verdict logic mirrors the canonical,
+      # unit-tested src/core/verdict.ts. To roll out to the other remediation paths,
+      # extract these dimensions into a shared composite action (ADR-005 C-005-005).
+      - name: Functional-integrity gate
+        id: gate
+        if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
+        run: |
+          set +e
+          BUILD=NOT_APPLICABLE; TEST=NOT_APPLICABLE; SMOKE=NOT_APPLICABLE; SURFACE=NOT_APPLICABLE
+
+          # BUILD — deps resolve / lockfile coherent / compiles
+          if [ -f package.json ]; then
+            npm ci >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null 2>&1
+            if [ $? -ne 0 ]; then BUILD=FAIL
+            elif node -e "process.exit(require('./package.json').scripts?.build?0:1)"; then
+              npm run build >/dev/null 2>&1 && BUILD=PASS || BUILD=FAIL
+            else BUILD=PASS; fi
+          elif [ -f go.mod ]; then
+            go build ./... >/dev/null 2>&1 && BUILD=PASS || BUILD=FAIL
+          elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then
+            { [ -f requirements.txt ] && pip install -r requirements.txt || pip install . ; } >/dev/null 2>&1 && BUILD=PASS || BUILD=FAIL
+          fi
+
+          # TEST — existing suite passes (NOT_APPLICABLE if none)
+          if [ -f package.json ]; then
+            HAS=$(node -e "const t=require('./package.json').scripts?.test||'';process.stdout.write(t&&!/no test specified/.test(t)?'1':'0')")
+            [ "$HAS" = "1" ] && { npm test >/dev/null 2>&1 && TEST=PASS || TEST=FAIL; }
+          elif [ -f go.mod ]; then
+            if find . -name '*_test.go' | grep -q .; then go test ./... >/dev/null 2>&1 && TEST=PASS || TEST=FAIL; fi
+          elif python -c "import pytest" 2>/dev/null && { [ -d tests ] || ls test_*.py >/dev/null 2>&1; }; then
+            pytest -q >/dev/null 2>&1 && TEST=PASS || TEST=FAIL
+          fi
+
+          # SMOKE — declared npm entrypoint imports without immediate error
+          if [ -f package.json ]; then
+            MAIN=$(node -e "process.stdout.write(require('./package.json').main||'')")
+            [ -n "$MAIN" ] && [ -f "$MAIN" ] && { timeout 30 node -e "require('./$MAIN')" >/dev/null 2>&1 && SMOKE=PASS || SMOKE=FAIL; }
+          fi
+
+          # SURFACE — NOT_APPLICABLE for batch fixes (no single from->to); per-bump SURFACE comes with the shared action
+          VERDICT=$(node -e "const d=['$BUILD','$TEST','$SMOKE','$SURFACE'];process.stdout.write(d.includes('FAIL')?'NO-GO':(d.includes('PASS')?'GO':'GO-UNVERIFIED'))")
+          {
+            echo "build=$BUILD"; echo "test=$TEST"; echo "smoke=$SMOKE"; echo "surface=$SURFACE"; echo "verdict=$VERDICT";
+          } >> $GITHUB_OUTPUT
+          echo "Functional-integrity verdict: $VERDICT  (BUILD=$BUILD TEST=$TEST SMOKE=$SMOKE SURFACE=$SURFACE)"
+
       - name: Merge Pull Request
-        if: steps.pr.outputs.number != '' && inputs.dry_run == false
+        if: steps.pr.outputs.number != '' && inputs.dry_run == false && steps.gate.outputs.verdict == 'GO'
         id: wait-merge
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -335,6 +382,21 @@ jobs:
               echo "Native auto-merge unavailable — enable 'Allow auto-merge' on $REPO, or merge #$PR_NUM manually."
             fi
           fi
+
+      # ── ADR-005 disposition: non-GO verdict is held for human review ──
+      - name: Hold for review (non-GO verdict)
+        if: steps.pr.outputs.number != '' && inputs.dry_run == false && steps.gate.outputs.verdict != '' && steps.gate.outputs.verdict != 'GO'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          REPO="${{ inputs.target_repo }}"
+          PR_NUM="${{ steps.pr.outputs.number }}"
+          gh label create "needs-human-merge" --color "d93f0b" \
+            --description "Held by ADR-005 functional-integrity gate" --repo "$REPO" 2>/dev/null || true
+          gh pr edit "$PR_NUM" --repo "$REPO" --add-label "needs-human-merge" 2>/dev/null || true
+          gh pr comment "$PR_NUM" --repo "$REPO" --body "$(printf '🚦 **Functional-integrity gate: %s** (ADR-005)\n\n| Dimension | Result |\n|---|---|\n| BUILD | %s |\n| TEST | %s |\n| SMOKE | %s |\n| SURFACE | %s |\n\nAuto-merge withheld — held for human review. A GO verdict is required to auto-merge.' \
+            "${{ steps.gate.outputs.verdict }}" "${{ steps.gate.outputs.build }}" "${{ steps.gate.outputs.test }}" "${{ steps.gate.outputs.smoke }}" "${{ steps.gate.outputs.surface }}")" 2>/dev/null || true
+          echo "Held PR #$PR_NUM for review — verdict ${{ steps.gate.outputs.verdict }}"
 
       - name: Verify fixes applied
         if: steps.wait-merge.outputs.merged == 'true'
@@ -380,8 +442,10 @@ jobs:
             --arg severity "${{ inputs.severity }}" \
             --arg fixed "${{ steps.alerts.outputs.count || '0' }}" \
             --arg merged "${{ steps.wait-merge.outputs.merged || 'na' }}" \
+            --arg verdict "${{ steps.gate.outputs.verdict || 'na' }}" \
+            --arg dimensions "BUILD=${{ steps.gate.outputs.build || 'na' }} TEST=${{ steps.gate.outputs.test || 'na' }} SMOKE=${{ steps.gate.outputs.smoke || 'na' }} SURFACE=${{ steps.gate.outputs.surface || 'na' }}" \
             --arg verify "${{ steps.verify.outputs.result || 'na' }}" \
             --arg remaining "${{ steps.verify.outputs.remaining_alerts || 'na' }}" \
             --arg pr_url "${{ steps.pr.outputs.url || '' }}" \
             --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{id:$id,status:$status,repo:$repo,severity:$severity,fixed:($fixed|tonumber),merged:$merged,verify:$verify,remaining:$remaining,pr_url:$pr_url,ts:$ts}'
+            '{id:$id,status:$status,repo:$repo,severity:$severity,fixed:($fixed|tonumber),merged:$merged,verdict:$verdict,dimensions:$dimensions,verify:$verify,remaining:$remaining,pr_url:$pr_url,ts:$ts}'
