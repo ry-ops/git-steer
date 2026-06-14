@@ -1,0 +1,216 @@
+# ══════════════════════════════════════════════════════════════
+# ADR-004 — CVE Remediation Doctrine
+# Comprehensive vulnerability handling: full coverage, SBOM, VEX
+# ══════════════════════════════════════════════════════════════
+
+metadata:
+  id: ADR-004
+  title: "CVE Remediation Doctrine"
+  status: ACCEPTED
+  date: "2026-06-14"
+  author: "Ryan // ry-ops.dev"
+  supersedes: null
+  superseded_by: null
+  amends:
+    - ADR-003   # refines C-003-004 CVE severity policy (scope now all severities)
+  affects:
+    - ry-ops/git-steer
+    - ry-ops/git-steer-state
+    - all managed repos
+
+context: |
+  Earlier doctrine (ADR-003, C-003-004) scoped automated CVE
+  remediation primarily to CRITICAL and HIGH severities via a
+  severity-based PR policy (CRITICAL = confirmed PR, HIGH = draft PR).
+  In practice, MEDIUM and LOW alerts accumulated unaddressed, and
+  alerts with no available upstream fix remained perpetually "open"
+  with no record of triage — indistinguishable from un-triaged debt.
+
+  Two changes make a more comprehensive doctrine both desirable and
+  operationally feasible:
+
+  1. The companion git-steer app provides managed API throttling and
+     proxying. GitHub rate limiting is therefore no longer a planning
+     constraint on fleet-wide remediation. Operations that previously
+     had to be paced 2-3 repos at a time can now run across the full
+     managed fleet in a single pass.
+
+  2. Supply-chain expectations have matured: a Software Bill of
+     Materials (SBOM) per repo and a Vulnerability Exploitability
+     eXchange (VEX) record for unfixable findings are now the baseline
+     for defensible vulnerability management, not optional extras.
+
+  This ADR establishes comprehensive CVE remediation as the
+  authoritative doctrine so it does not have to be restated per
+  scanning session.
+
+decision: |
+  git-steer remediates EVERY detected CVE across all managed repos,
+  regardless of severity, and drives each finding to a terminal,
+  recorded state. There is no "open and ignored" state.
+
+  A CVE reaches a terminal state by exactly one of two paths:
+
+  1. FIXED — a dependency bump, patch, or upstream remedy is applied
+     via PR and merged. The severity-based PR mechanics from ADR-003
+     C-003-004 are retained and extended (see C-004-001).
+
+  2. SUPPRESSED — no fix is currently available, so a VEX statement
+     is recorded documenting the exploitability assessment (see
+     C-004-003). A suppressed CVE is revisited when a fix becomes
+     available or the SBOM component version changes.
+
+  Every managed repo carries a current SBOM (see C-004-002), and VEX
+  statements are linked to SBOM components by PURL so every
+  suppression is traceable to a specific component version.
+
+constraints:
+  - id: C-004-001
+    type: HARD
+    scope: cve-coverage
+    rule: >
+      CVE remediation applies to ALL severities — CRITICAL, HIGH,
+      MEDIUM, and LOW — not only CRITICAL and HIGH. This amends
+      ADR-003 C-003-004. The PR mechanics are retained and extended:
+      CRITICAL opens a confirmed (non-draft) PR; HIGH, MEDIUM, and LOW
+      open draft PRs (MEDIUM/LOW MAY be batched into a single
+      dependency PR per ecosystem). Every detected CVE must reach a
+      terminal state — fixed or suppressed-via-VEX. No CVE may remain
+      open without either a remediation PR or a VEX record.
+    check: |
+      for repo in managed_repos:
+        open_alerts(repo).every(a =>
+          has_remediation_pr(a) || has_vex_statement(a))
+    violation: NO-GO
+    adr: ADR-004
+
+  - id: C-004-002
+    type: HARD
+    scope: sbom
+    rule: >
+      Every managed repo must have a current SBOM generated and
+      stored in git-steer-state. The SBOM format is CycloneDX
+      (SPDX accepted for ecosystems where CycloneDX tooling is
+      unavailable). SBOMs are regenerated on dependency changes and
+      on each heartbeat sweep. The stored SBOM records the generation
+      timestamp and the commit SHA it describes.
+    check: |
+      for repo in managed_repos:
+        sbom_exists(repo)
+        && sbom.format in ['CycloneDX', 'SPDX']
+        && sbom.has_fields(['generatedAt', 'sourceSha'])
+    violation: NO-GO
+    adr: ADR-004
+
+  - id: C-004-003
+    type: HARD
+    scope: vex
+    rule: >
+      When a CVE has no available fix (no patched version published,
+      no upstream remedy), a VEX statement MUST be recorded in
+      OpenVEX format. The statement's status is one of: not_affected,
+      affected, fixed, under_investigation. A status of not_affected
+      REQUIRES a justification drawn from the OpenVEX standard set:
+      component_not_present, vulnerable_code_not_present,
+      vulnerable_code_not_in_execute_path,
+      vulnerable_code_cannot_be_controlled_by_adversary,
+      inline_mitigations_already_exist. A status of affected REQUIRES
+      an action_statement describing the mitigation or acceptance
+      rationale. VEX statements reference the CVE id and the affected
+      component PURL.
+    check: |
+      for vex in vex_statements:
+        vex.status in ['not_affected','affected','fixed','under_investigation']
+        && (vex.status != 'not_affected' || vex.justification in OPENVEX_JUSTIFICATIONS)
+        && (vex.status != 'affected' || vex.action_statement != null)
+        && vex.has_fields(['vulnerability','product_purl','timestamp'])
+    violation: NO-GO
+    adr: ADR-004
+
+  - id: C-004-004
+    type: SOFT
+    scope: vex-sbom-linkage
+    rule: >
+      VEX statements should reference SBOM component identifiers
+      (PURLs) so each suppression is traceable to a specific component
+      version. When the SBOM records a new version of a previously
+      suppressed component, the corresponding VEX statement is
+      re-evaluated rather than silently carried forward.
+    check: |
+      for vex in vex_statements:
+        vex.product_purl in sbom.component_purls
+    violation: WARN
+    adr: ADR-004
+
+  - id: C-004-005
+    type: SOFT
+    scope: vex-lifecycle
+    rule: >
+      Suppressed CVEs are revisited when a fix becomes available or
+      the component version changes. The heartbeat sweep re-checks
+      under_investigation and affected VEX statements against the
+      advisory database; if a patched version now exists, the finding
+      transitions from suppressed back to the FIXED remediation path.
+    check: |
+      heartbeat.sweep re-evaluates vex_statements
+        where status in ['under_investigation','affected']
+    violation: WARN
+    adr: ADR-004
+
+  - id: C-004-006
+    type: ADVISORY
+    scope: rate-limiting
+    rule: >
+      With the companion git-steer app providing managed API
+      throttling and proxying, GitHub rate limiting is no longer a
+      planning constraint on fleet-wide remediation. Operations MAY
+      run across the full managed fleet in a single pass without
+      manual pacing. The single ThrottledOctokit instance mandated by
+      ADR-002 C-002-006 remains in place as an infrastructure-level
+      safety net; this ADR reclassifies rate limits from a
+      "pace manually" operational concern to a "handled by
+      infrastructure" one. ADR-002 C-002-006 is unchanged.
+    adr: ADR-004
+
+rationale: |
+  Comprehensive coverage closes the gap where MEDIUM/LOW findings and
+  unfixable findings became indistinguishable from un-triaged debt.
+  A CVE that cannot be fixed today is not the same as a CVE nobody
+  looked at — the VEX record captures that distinction explicitly and
+  defensibly, and it survives audits.
+
+  SBOM-per-repo is the foundation the rest of the doctrine rests on:
+  without an authoritative component inventory, VEX statements have
+  nothing concrete to bind to, and "did we address everything?" has no
+  ground truth. CycloneDX is preferred for its first-class
+  vulnerability and VEX support.
+
+  OpenVEX was chosen over ad-hoc suppression because it is a
+  machine-readable standard with a fixed justification vocabulary.
+  That vocabulary forces a real exploitability assessment
+  (is the code even present? is it reachable?) rather than a blanket
+  "won't fix," and it lets downstream consumers reason about our
+  suppressions automatically.
+
+  Reclassifying rate limiting reflects operational reality: the
+  companion app absorbs the throughput concern that previously forced
+  manual pacing and earlier account-suspension caution. The throttled
+  client stays as a safety net, but fleet-wide single-pass remediation
+  is now the sanctioned mode of operation.
+
+consequences:
+  positive:
+    - Every CVE reaches a recorded terminal state — no silent backlog
+    - Unfixable findings are documented, not ignored — audit-defensible
+    - SBOM-per-repo gives ground truth for "did we cover everything?"
+    - OpenVEX justifications force real exploitability assessment
+    - Fleet-wide remediation runs in a single pass without manual pacing
+  risks:
+    - risk: "Remediating all severities increases PR volume across the fleet"
+      mitigation: "MEDIUM/LOW batched into per-ecosystem dependency PRs; draft status keeps them out of the merge path until reviewed"
+    - risk: "VEX not_affected justifications could be applied carelessly to silence alerts"
+      mitigation: "Fixed OpenVEX justification vocabulary requires a specific, checkable claim; VEX-SBOM linkage (C-004-004) ties each suppression to a component version and forces re-evaluation on change"
+    - risk: "SBOM generation across all managed repos adds sweep cost"
+      mitigation: "Regenerated only on dependency change or heartbeat; companion app throttling removes rate-limit pressure (C-004-006)"
+
+superseded_by: null
