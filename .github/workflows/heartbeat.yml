@@ -33,12 +33,21 @@ jobs:
         with:
           node-version: '20'
 
-      # Private @git-fabric/* deps resolve to ssh URLs; rewrite to HTTPS-with-token
-      # so npm install can fetch them on the runner (no SSH key needed).
-      - name: Configure git auth for private deps
+      # Private @git-fabric/* deps resolve to ssh URLs (git@github.com). Install the
+      # deploy SSH key so npm can fetch them on the runner.
+      - name: Setup SSH for private @git-fabric deps
+        env:
+          GIT_SSH_KEY: ${{ secrets.GIT_SSH_KEY }}
         run: |
-          git config --global url."https://x-access-token:${{ secrets.GIT_FABRIC_PAT }}@github.com/".insteadOf "ssh://git@github.com/"
-          git config --global --add url."https://x-access-token:${{ secrets.GIT_FABRIC_PAT }}@github.com/".insteadOf "git@github.com:"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$GIT_SSH_KEY" > ~/.ssh/gitfabric
+          chmod 600 ~/.ssh/gitfabric
+          cat >> ~/.ssh/config <<'CFG'
+          Host github.com
+            IdentityFile ~/.ssh/gitfabric
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+          CFG
 
       - name: Install dependencies and build
         run: npm install --no-audit --no-fund && npm run build
