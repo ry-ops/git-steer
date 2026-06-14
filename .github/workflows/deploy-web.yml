@@ -84,6 +84,8 @@ jobs:
     name: Deploy to k3s
     needs: build-and-deploy
     runs-on: [self-hosted, k3s]
+    # Least privilege: deploy uses in-pod kube service-account creds, not GITHUB_TOKEN.
+    permissions: {}
     steps:
       - name: Install kubectl
         run: |

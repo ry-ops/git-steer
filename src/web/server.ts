@@ -9,6 +9,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import type { FastifyInstance } from 'fastify';
 import { GitHubClient } from '../github/client.js';
@@ -35,6 +36,13 @@ export interface WebServerConfig {
 export async function startWebServer(config: WebServerConfig): Promise<FastifyInstance> {
   const app = Fastify({ logger: true });
   await app.register(cors, { origin: true });
+
+  // Global rate limiting on all routes (CodeQL js/missing-rate-limiting).
+  // Protects the scan/fix/SBOM/VEX endpoints from abuse; tunable via env.
+  await app.register(rateLimit, {
+    max: Number(process.env.RATE_LIMIT_MAX ?? 100),
+    timeWindow: process.env.RATE_LIMIT_WINDOW ?? '1 minute',
+  });
 
   // Decorate the instance with shared deps so routes can access them
   app.decorate('github', config.github);
