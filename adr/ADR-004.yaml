@@ -143,18 +143,42 @@ constraints:
     adr: ADR-004
 
   - id: C-004-005
-    type: SOFT
+    type: HARD
     scope: vex-lifecycle
     rule: >
-      Suppressed CVEs are revisited when a fix becomes available or
-      the component version changes. The heartbeat sweep re-checks
-      under_investigation and affected VEX statements against the
-      advisory database; if a patched version now exists, the finding
-      transitions from suppressed back to the FIXED remediation path.
+      EVERY suppressed finding is revisited on the NEXT scan (not only the
+      heartbeat) — regardless of VEX status, including not_affected
+      dispositions and dismissed code-scanning alerts. Each scan re-checks
+      whether a fix has become available or the component/code has changed;
+      if a patched version now exists, the finding transitions from
+      suppressed back to the FIXED remediation path, and a dismissed alert
+      is reopened. No suppression is permanent — it is a tracked state that
+      is re-validated every cycle.
     check: |
-      heartbeat.sweep re-evaluates vex_statements
-        where status in ['under_investigation','affected']
-    violation: WARN
+      scan.run re-evaluates ALL vex_statements (every status)
+        && reopens dismissed alerts whose disposition no longer holds
+        && moves to FIXED path any whose fix is now available
+    violation: NO-GO
+    adr: ADR-004
+
+  - id: C-004-007
+    type: HARD
+    scope: vex-automation
+    rule: >
+      Suppression is automatic and self-contained: when git-steer assigns a
+      VEX disposition to a finding it ALSO dismisses the corresponding
+      GitHub alert (code-scanning or Dependabot) with a matching reason in
+      the same operation, so the finding stops resurfacing while remaining
+      tracked by its VEX record. This requires no per-finding human approval
+      — the agent applies its triage judgment directly. The pairing of
+      VEX-record + alert-dismissal is atomic: a dismissal without a VEX
+      record, or a VEX record without dismissal, is a violation. Re-opening
+      on re-evaluation (C-004-005) is likewise automatic.
+    check: |
+      for finding in suppressed_findings:
+        has_vex_record(finding) && github_alert_dismissed(finding)
+        && dismissal.reason matches vex.status/justification
+    violation: NO-GO
     adr: ADR-004
 
   - id: C-004-006
