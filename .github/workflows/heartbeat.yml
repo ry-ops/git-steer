@@ -34,7 +34,7 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies and build
-        run: npm ci && npm run build
+        run: npm install --no-audit --no-fund && npm run build
 
       - name: Generate token
         id: app-token
@@ -187,10 +187,12 @@ jobs:
       - name: Sync changelog to blog
         if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit' || inputs.task == 'changelog-sync'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # GIT_FABRIC_PAT spans both orgs: reads ry-ops PRs/state AND writes fabric-forge/blog.
+          # (The ry-ops App token can read ry-ops but cannot write the fabric-forge deploy repo.)
+          GH_TOKEN: ${{ secrets.GIT_FABRIC_PAT }}
           STATE_OWNER: ry-ops
           STATE_REPO: git-steer-state
-          BLOG_OWNER: ry-ops
+          BLOG_OWNER: fabric-forge   # live ry-ops.dev deploy source (Pages blog-5f3); ry-ops/blog is a stale mirror
           BLOG_REPO: blog
         run: node scripts/ci-changelog.mjs
 
