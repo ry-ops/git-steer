@@ -17,7 +17,8 @@
 
 import keytar from 'keytar';
 import { App } from 'octokit';
-import { validateVexInput, vexId } from '../dist/core/vex.js';
+import { validateVexInput, vexId, makeVexLedgerEntry } from '../dist/core/vex.js';
+import { appendJsonl } from './lib/state-jsonl.mjs';
 
 const appId = await keytar.getPassword('git-steer', 'git-steer-app-id');
 const privateKey = await keytar.getPassword('git-steer', 'git-steer-private-key');
@@ -95,6 +96,7 @@ try {
 const existingVex = cacheJson._vex || {};
 const now = new Date().toISOString();
 let newVexCount = 0;
+const ledgerRows = [];
 
 // ── 4. Create canonical, validated VEX entries ────────────────────────
 for (const alert of noFixAlerts) {
@@ -116,6 +118,7 @@ for (const alert of noFixAlerts) {
   if (error) { console.warn(`  [skip] ${id}: ${error}`); continue; }
 
   existingVex[id] = entry;
+  ledgerRows.push(makeVexLedgerEntry(entry, null, 'cli:vex-no-fix', now));
   newVexCount++;
 }
 
@@ -130,7 +133,10 @@ await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
   content,
   ...(cacheSha ? { sha: cacheSha } : {}),
 });
-console.log('State saved.\n');
+
+// Append history rows to the vex.jsonl ledger
+await appendJsonl(octokit, owner, STATE_REPO, 'state/vex.jsonl', ledgerRows);
+console.log(`State saved. (${ledgerRows.length} ledger rows appended)\n`);
 
 // ── 6. Report ─────────────────────────────────────────────────────────
 const byRepo = {};

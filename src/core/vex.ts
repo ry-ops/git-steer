@@ -72,6 +72,50 @@ export function validateVexInput(body: VexInput): string | null {
   return null;
 }
 
+// ── Append-only ledger (history) ──────────────────────────────────────
+
+/**
+ * One immutable row per VEX change, appended to state/vex.jsonl. The `_vex`
+ * map in cache.json holds current state; this ledger holds the full history
+ * (who/what/when, before -> after) — the same append-only pattern as
+ * audit.jsonl / rfcs.jsonl.
+ */
+export interface VexLedgerEntry {
+  ts: string;
+  repo: string;
+  cve_id: string;
+  action: 'set' | 'delete';
+  prev_status: VexStatus | null;          // status before this change (null = new)
+  status: VexStatus | null;               // status after (null = deleted)
+  justification?: VexJustification;
+  action_statement?: string;
+  product_purl?: string;
+  source: string;                         // e.g. 'mcp:vex_set', 'cli:vex-no-fix', 'cli:apply-dispositions', 'web'
+  updated_by: string;
+}
+
+/** Build a ledger row for a set/update. `prev` is the prior status (or null). */
+export function makeVexLedgerEntry(
+  entry: VexEntry,
+  prevStatus: VexStatus | null,
+  source: string,
+  ts: string,
+): VexLedgerEntry {
+  return {
+    ts,
+    repo: entry.repo,
+    cve_id: entry.cve_id,
+    action: 'set',
+    prev_status: prevStatus,
+    status: entry.status,
+    justification: entry.justification,
+    action_statement: entry.action_statement,
+    product_purl: entry.product_purl,
+    source,
+    updated_by: entry.updated_by,
+  };
+}
+
 export interface OpenVexDoc {
   '@context': string;
   '@id': string;

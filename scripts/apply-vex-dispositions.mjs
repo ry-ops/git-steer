@@ -9,7 +9,8 @@
 
 import keytar from 'keytar';
 import { App } from 'octokit';
-import { validateVexInput, vexId } from '../dist/core/vex.js';
+import { validateVexInput, vexId, makeVexLedgerEntry } from '../dist/core/vex.js';
+import { appendJsonl } from './lib/state-jsonl.mjs';
 
 const REPO_FULL = 'ry-ops/git-steer';
 const [OWNER, REPO] = REPO_FULL.split('/');
@@ -60,9 +61,11 @@ const existingVex = cacheJson._vex || {};
 
 const now = new Date().toISOString();
 let written = 0, dismissed = 0;
+const ledgerRows = [];
 
 for (const d of DISPOSITIONS) {
   const cveId = `codeql/${d.rule}#${d.number}`;
+  const prevStatus = existingVex[vexId(REPO_FULL, cveId)]?.status ?? null;
   const entry = {
     cve_id: cveId,
     repo: REPO_FULL,
@@ -78,8 +81,9 @@ for (const d of DISPOSITIONS) {
   const err = validateVexInput(entry);
   if (err) { console.error(`  [skip] ${cveId}: ${err}`); continue; }
 
-  // 1. Write VEX record
+  // 1. Write VEX record (+ ledger row)
   existingVex[vexId(REPO_FULL, cveId)] = entry;
+  ledgerRows.push(makeVexLedgerEntry(entry, prevStatus, 'cli:apply-dispositions', now));
   written++;
 
   // 2. Dismiss the GitHub code-scanning alert (matching reason)
@@ -107,5 +111,8 @@ await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
   ...(cacheSha ? { sha: cacheSha } : {}),
 });
 
-console.log(`\nVEX records written: ${written}   |   GH alerts dismissed: ${dismissed}`);
+// ── Append history rows to the vex.jsonl ledger ───────────────────────
+await appendJsonl(octokit, OWNER, STATE_REPO, 'state/vex.jsonl', ledgerRows);
+
+console.log(`\nVEX records written: ${written}   |   GH alerts dismissed: ${dismissed}   |   ledger rows: ${ledgerRows.length}`);
 console.log(`Total _vex entries in state: ${Object.keys(existingVex).length}`);

@@ -16,7 +16,7 @@ import crypto from 'crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebServerConfig } from '../server.js';
 import { getRedis, KEYS } from '../redis.js';
-import { validateVexInput, toOpenVex } from '../../core/vex.js';
+import { validateVexInput, toOpenVex, makeVexLedgerEntry } from '../../core/vex.js';
 import type { VexStatus, VexJustification, VexEntry, VexInput } from '../../core/vex.js';
 
 // Canonical VEX vocabulary/validation/serialization lives in core/vex.ts so
@@ -76,6 +76,25 @@ export async function registerVexRoutes(app: FastifyInstance, _config: WebServer
     }
   });
 
+  // VEX change history (append-only ledger), newest first
+  app.get<{
+    Params: { owner: string; repo: string };
+    Querystring: { cveId?: string; limit?: string };
+  }>('/api/vex/:owner/:repo/history', async (req, reply) => {
+    const { owner, repo } = req.params;
+    const fullName = `${owner}/${repo}`;
+    const limit = Math.min(parseInt(req.query.limit ?? '200', 10) || 200, 1000);
+    try {
+      const redis = await getRedis();
+      const raw = await redis.lRange(KEYS.vexLedger(fullName), 0, limit - 1); // lPush => newest first
+      let rows = raw.map((r) => { try { return JSON.parse(r); } catch { return null; } }).filter(Boolean);
+      if (req.query.cveId) rows = rows.filter((r: any) => r.cve_id === req.query.cveId);
+      return reply.send({ repo: fullName, count: rows.length, history: rows });
+    } catch (err: any) {
+      return reply.status(500).send({ error: `Failed to fetch VEX history: ${err.message}` });
+    }
+  });
+
   // Create or update a VEX entry
   app.post<{
     Params: { owner: string; repo: string };
@@ -103,8 +122,19 @@ export async function registerVexRoutes(app: FastifyInstance, _config: WebServer
         updated_by: body.updated_by ?? 'web',
       };
 
+      // Capture prior status for the ledger before overwriting.
+      let prevStatus: VexStatus | null = null;
+      try {
+        const prevRaw = await redis.get(KEYS.vex(fullName, entry.cve_id));
+        if (prevRaw) prevStatus = (JSON.parse(prevRaw) as VexEntry).status;
+      } catch { /* none */ }
+
       await redis.set(KEYS.vex(fullName, entry.cve_id), JSON.stringify(entry));
       await redis.sAdd(KEYS.vexList(fullName), entry.cve_id);
+
+      // Append-only history (mirrors state/vex.jsonl on the MCP side).
+      const ledgerRow = makeVexLedgerEntry(entry, prevStatus, 'web', entry.created_at);
+      await redis.lPush(KEYS.vexLedger(fullName), JSON.stringify(ledgerRow));
 
       return reply.status(201).send({ created: true, entry });
     } catch (err: any) {

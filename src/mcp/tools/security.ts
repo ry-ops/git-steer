@@ -149,6 +149,19 @@ export function getTools(): Tool[] {
       },
     },
     {
+      name: 'vex_history',
+      description: 'Look up VEX history from the append-only vex.jsonl ledger (who/what/when, before -> after). Filter by repo and/or cveId. Returns chronological history plus the current status.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: { type: 'string', description: 'Optional — limit to a repo (with repo)' },
+          repo: { type: 'string', description: 'Optional — limit to a repo (with owner)' },
+          cveId: { type: 'string', description: 'Optional — limit to a single CVE/finding id' },
+          status: { type: 'string', description: 'Optional — filter to a status', enum: ['not_affected', 'affected', 'fixed', 'under_investigation'] },
+        },
+      },
+    },
+    {
       name: 'policy_eval',
       description: 'Evaluate managed repos against security policies (Dependabot, secret scanning, branch protection, advanced security). Reports pass/fail per control.',
       inputSchema: {
@@ -237,6 +250,7 @@ export function handleCall(name: string, args: Record<string, any>, deps: ToolDe
     case 'security_sweep': return handleSecuritySweep(args, deps);
     case 'sbom_generate': return handleSbomGenerate(args, deps);
     case 'vex_set': return handleVexSet(args, deps);
+    case 'vex_history': return handleVexHistory(args, deps);
     case 'policy_eval': return handlePolicyEval(args, deps);
     case 'attestation_list': return handleAttestationList(args, deps);
     default: return null;
@@ -500,6 +514,24 @@ async function handleVexSet(args: Record<string, any>, deps: ToolDeps): Promise<
   });
 
   return { success: true, entry };
+}
+
+async function handleVexHistory(args: Record<string, any>, deps: ToolDeps): Promise<any> {
+  const repo = args.owner && args.repo ? `${args.owner}/${args.repo}` : undefined;
+  const history = deps.state.getVexLedger({ repo, cveId: args.cveId, status: args.status });
+
+  // Current status for the queried scope (from the _vex map).
+  const all = deps.state.getAllVex();
+  const current = Object.values(all).filter((e: any) =>
+    (!repo || e.repo === repo) && (!args.cveId || e.cve_id === args.cveId),
+  );
+
+  return {
+    filter: { repo: repo ?? 'all', cveId: args.cveId ?? 'all', status: args.status ?? 'all' },
+    changes: history.length,
+    history,
+    current,
+  };
 }
 
 async function handlePolicyEval(args: Record<string, any>, deps: ToolDeps): Promise<any> {
