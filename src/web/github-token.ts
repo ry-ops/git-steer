@@ -7,6 +7,8 @@
 import { Octokit } from 'octokit';
 
 export interface SecurityAlert {
+  /** Which GitHub alert class this finding came from. */
+  source: 'dependabot' | 'code-scanning';
   alertNumber: number;
   severity: string;
   package: string;
@@ -46,12 +48,30 @@ export class TokenGitHubClient {
   }
 
   /**
-   * Fetch Dependabot security alerts for a repo via REST API.
-   * Returns normalized alert objects.
+   * Fetch ALL open security findings for a repo, across both GitHub alert
+   * classes — Dependabot AND Code Scanning — fully paginated.
+   *
+   * Per ADR-004 ("report ALL"), every detected issue must surface. The old
+   * implementation queried Dependabot only and capped at one 100-item page,
+   * so it silently dropped code-scanning findings entirely and truncated any
+   * repo with >100 dependency alerts. Both classes are now merged.
+   *
+   * Code-scanning findings have no patched version, so `fixVersion` is null —
+   * the dependency-bump fix paths filter on `fixVersion` and therefore skip
+   * them automatically, routing them to the manual/VEX remediation path.
    */
   async getSecurityAlertsDetailed(owner: string, repo: string): Promise<SecurityAlert[]> {
+    const [dependabot, codeScanning] = await Promise.all([
+      this.fetchDependabotAlerts(owner, repo),
+      this.fetchCodeScanningAlerts(owner, repo),
+    ]);
+    return [...dependabot, ...codeScanning];
+  }
+
+  /** Dependabot dependency alerts (open, fully paginated). */
+  private async fetchDependabotAlerts(owner: string, repo: string): Promise<SecurityAlert[]> {
     try {
-      const { data } = await this.octokit.rest.dependabot.listAlertsForRepo({
+      const data = await this.octokit.paginate('GET /repos/{owner}/{repo}/dependabot/alerts', {
         owner,
         repo,
         state: 'open',
@@ -59,8 +79,9 @@ export class TokenGitHubClient {
       });
 
       return data.map((a: any) => ({
+        source: 'dependabot' as const,
         alertNumber: a.number,
-        severity: a.security_vulnerability?.severity ?? a.security_advisory?.severity ?? 'unknown',
+        severity: (a.security_vulnerability?.severity ?? a.security_advisory?.severity ?? 'unknown').toLowerCase(),
         package: a.security_vulnerability?.package?.name ?? a.dependency?.package?.name ?? 'unknown',
         ecosystem: a.security_vulnerability?.package?.ecosystem ?? a.dependency?.package?.ecosystem ?? 'unknown',
         cve: a.security_advisory?.cve_id ?? null,
@@ -76,6 +97,43 @@ export class TokenGitHubClient {
       }));
     } catch (err: any) {
       // Dependabot alerts might be disabled or we lack permissions
+      if (err.status === 403 || err.status === 404) {
+        return [];
+      }
+      throw err;
+    }
+  }
+
+  /** Code-scanning (CodeQL/SAST) alerts (open, fully paginated). */
+  private async fetchCodeScanningAlerts(owner: string, repo: string): Promise<SecurityAlert[]> {
+    try {
+      const data = await this.octokit.paginate('GET /repos/{owner}/{repo}/code-scanning/alerts', {
+        owner,
+        repo,
+        state: 'open',
+        per_page: 100,
+      });
+
+      return data.map((a: any) => ({
+        source: 'code-scanning' as const,
+        alertNumber: a.number,
+        // security_severity_level is critical/high/medium/low; rule.severity (error/warning/note) is the fallback
+        severity: (a.rule?.security_severity_level ?? a.rule?.severity ?? 'unknown').toLowerCase(),
+        package: a.rule?.id ?? 'unknown',
+        ecosystem: 'code-scanning',
+        cve: null,
+        ghsaId: null,
+        summary: a.rule?.description ?? a.rule?.name ?? '',
+        description: a.most_recent_instance?.message?.text ?? a.rule?.full_description ?? '',
+        currentVersion: '',
+        fixVersion: null,
+        manifestPath: a.most_recent_instance?.location?.path ?? '',
+        state: a.state,
+        createdAt: a.created_at,
+        url: a.html_url,
+      }));
+    } catch (err: any) {
+      // Code scanning not enabled, no analysis yet, or no permission
       if (err.status === 403 || err.status === 404) {
         return [];
       }
