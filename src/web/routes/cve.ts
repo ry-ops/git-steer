@@ -21,6 +21,7 @@ import type { FastifyInstance } from 'fastify';
 import type { WebServerConfig } from '../server.js';
 import type { SecurityAlert, TokenGitHubClient } from '../github-token.js';
 import { getRedis, KEYS } from '../redis.js';
+import { buildSbom } from './sbom.js';
 
 // ── Scan lifecycle types ──────────────────────────────────────────────
 
@@ -679,20 +680,13 @@ export async function registerCveRoutes(app: FastifyInstance, config: WebServerC
       await saveScanRecord(verifyScan);
       await recordTrend(verifyScan);
 
-      // If all clear, generate a stub SBOM snapshot
+      // If all clear, generate a real CycloneDX SBOM snapshot (ADR-004 C-004-002)
       let sbomGenerated = false;
       if (alerts.length === 0) {
         try {
           const redis = await getRedis();
-          const sbomSnapshot = {
-            repo: fullName,
-            generated_at: new Date().toISOString(),
-            tool: 'git-steer-verify',
-            note: 'Auto-generated after clean verification scan',
-            packages: [],
-            total: 0,
-          };
-          await redis.set(KEYS.sbom(fullName), JSON.stringify(sbomSnapshot));
+          const snapshot = await buildSbom((gh as any).getOctokit(), owner, repo);
+          await redis.set(KEYS.sbom(fullName), JSON.stringify(snapshot));
           sbomGenerated = true;
         } catch { /* non-fatal */ }
       }
