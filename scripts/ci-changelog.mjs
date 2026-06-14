@@ -199,9 +199,14 @@ async function getManagedRepos() {
       { owner: STATE_OWNER, repo: STATE_REPO, path: 'config/managed-repos.yaml' }
     );
     const content = Buffer.from(data.content, 'base64').toString('utf8');
-    const repos = content.match(/^\s*-\s+(.+)$/gm);
-    if (repos) {
-      return repos.map((r) => {
+    // managed-repos.yaml entries are structured: "- owner: X\n  name: Y".
+    const structured = [...content.matchAll(/-\s*owner:\s*(\S+)\s*\r?\n\s*name:\s*(\S+)/g)]
+      .map((m) => ({ owner: m[1], name: m[2], fullName: `${m[1]}/${m[2]}` }));
+    if (structured.length) return structured;
+    // Back-compat: flat "- owner/repo" lines.
+    const flat = content.match(/^\s*-\s+(\S+\/\S+)\s*$/gm);
+    if (flat) {
+      return flat.map((r) => {
         const name = r.replace(/^\s*-\s+/, '').trim();
         const [owner, repo] = name.split('/');
         return { owner, name: repo, fullName: name };
