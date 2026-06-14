@@ -8,6 +8,8 @@
 import { GitHubClient } from '../github/client.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { etagCache } from '../core/etag-cache.js';
+import { validateVexInput, vexId } from '../core/vex.js';
+import type { VexEntry } from '../core/vex.js';
 
 export interface StateManagerConfig {
   github: GitHubClient;
@@ -414,30 +416,26 @@ export class StateManager {
 
   // ========== VEX Operations ==========
 
-  setVexStatus(entry: {
-    id: string;
-    owner: string;
-    repo: string;
-    cveId: string;
-    status: string;
-    justification: string | null;
-    detail: string | null;
-    setAt: string;
-    setBy: string;
-  }): void {
+  /**
+   * Persist a VEX entry to the git-steer-state `_vex` store. Validates against
+   * the canonical OpenVEX rules (ADR-004 C-004-003) shared with the web store —
+   * throws on a non-compliant entry rather than writing bad data.
+   */
+  setVexStatus(entry: VexEntry): void {
     if (!this.data) return;
-    const map: Record<string, typeof entry> = this.data.state.cache['_vex'] ?? {};
-    map[entry.id] = entry;
+    const error = validateVexInput(entry);
+    if (error) throw new Error(`Invalid VEX entry: ${error}`);
+    const map: Record<string, VexEntry> = this.data.state.cache['_vex'] ?? {};
+    map[vexId(entry.repo, entry.cve_id)] = entry;
     this.data.state.cache['_vex'] = map;
     this.dirty = true;
   }
 
-  getVexStatus(owner: string, repo: string, cveId: string): any | null {
-    const id = `${owner}/${repo}::${cveId}`;
-    return this.data?.state.cache['_vex']?.[id] ?? null;
+  getVexStatus(repo: string, cveId: string): VexEntry | null {
+    return this.data?.state.cache['_vex']?.[vexId(repo, cveId)] ?? null;
   }
 
-  getAllVex(): Record<string, any> {
+  getAllVex(): Record<string, VexEntry> {
     return this.data?.state.cache['_vex'] ?? {};
   }
 

@@ -28,7 +28,8 @@ const repoAlerts = {};
 
 for (const repo of repos) {
   try {
-    const { data: alerts } = await octokit.request(
+    // Fully paginated — do not truncate repos with >100 alerts.
+    const alerts = await octokit.paginate(
       'GET /repos/{owner}/{repo}/dependabot/alerts',
       { owner: repo.owner.login, repo: repo.name, state: 'open', per_page: 100 }
     );

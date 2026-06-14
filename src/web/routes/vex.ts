@@ -16,106 +16,13 @@ import crypto from 'crypto';
 import type { FastifyInstance } from 'fastify';
 import type { WebServerConfig } from '../server.js';
 import { getRedis, KEYS } from '../redis.js';
+import { validateVexInput, toOpenVex } from '../../core/vex.js';
+import type { VexStatus, VexJustification, VexEntry, VexInput } from '../../core/vex.js';
 
-export type VexStatus = 'not_affected' | 'affected' | 'fixed' | 'under_investigation';
-
-// OpenVEX standard justification vocabulary (ADR-004 C-004-003)
-export type VexJustification =
-  | 'component_not_present'
-  | 'vulnerable_code_not_present'
-  | 'vulnerable_code_not_in_execute_path'
-  | 'vulnerable_code_cannot_be_controlled_by_adversary'
-  | 'inline_mitigations_already_exist';
-
-export interface VexEntry {
-  cve_id: string;
-  repo: string;
-  /** SBOM component this statement applies to (ADR-004 C-004-004). */
-  product_purl?: string;
-  status: VexStatus;
-  justification?: VexJustification;   // required when status === 'not_affected'
-  action_statement?: string;          // required when status === 'affected'
-  impact_statement?: string;          // optional detail for not_affected
-  detail?: string;
-  created_at: string;
-  updated_by: string;
-}
-
-const VALID_STATUSES: VexStatus[] = ['not_affected', 'affected', 'fixed', 'under_investigation'];
-const VALID_JUSTIFICATIONS: VexJustification[] = [
-  'component_not_present',
-  'vulnerable_code_not_present',
-  'vulnerable_code_not_in_execute_path',
-  'vulnerable_code_cannot_be_controlled_by_adversary',
-  'inline_mitigations_already_exist',
-];
-
-// ── Validation (pure; testable) ───────────────────────────────────────
-
-export interface VexInput {
-  cve_id?: string;
-  status?: string;
-  justification?: string;
-  action_statement?: string;
-  product_purl?: string;
-}
-
-/** Returns null if valid, else an error string. Enforces ADR-004 C-004-003. */
-export function validateVexInput(body: VexInput): string | null {
-  if (!body.cve_id) return 'cve_id is required';
-  if (!body.status || !VALID_STATUSES.includes(body.status as VexStatus)) {
-    return `status must be one of: ${VALID_STATUSES.join(', ')}`;
-  }
-  if (body.justification && !VALID_JUSTIFICATIONS.includes(body.justification as VexJustification)) {
-    return `justification must be one of: ${VALID_JUSTIFICATIONS.join(', ')}`;
-  }
-  if (body.status === 'not_affected' && !body.justification) {
-    return `status "not_affected" requires a justification (one of: ${VALID_JUSTIFICATIONS.join(', ')})`;
-  }
-  if (body.status === 'affected' && !body.action_statement) {
-    return 'status "affected" requires an action_statement describing the mitigation or acceptance rationale';
-  }
-  return null;
-}
-
-// ── OpenVEX serialization (pure; testable) ────────────────────────────
-
-export interface OpenVexDoc {
-  '@context': string;
-  '@id': string;
-  author: string;
-  timestamp: string;
-  version: number;
-  statements: Array<{
-    vulnerability: { name: string };
-    products: Array<{ '@id': string }>;
-    status: VexStatus;
-    justification?: VexJustification;
-    impact_statement?: string;
-    action_statement?: string;
-  }>;
-}
-
-export function toOpenVex(repo: string, entries: VexEntry[], id: string, timestamp: string): OpenVexDoc {
-  return {
-    '@context': 'https://openvex.dev/ns/v0.2.0',
-    '@id': id,
-    author: 'git-steer',
-    timestamp,
-    version: 1,
-    statements: entries.map((e) => {
-      const stmt: OpenVexDoc['statements'][number] = {
-        vulnerability: { name: e.cve_id },
-        products: [{ '@id': e.product_purl || `pkg:github/${repo}` }],
-        status: e.status,
-      };
-      if (e.justification) stmt.justification = e.justification;
-      if (e.impact_statement) stmt.impact_statement = e.impact_statement;
-      if (e.action_statement) stmt.action_statement = e.action_statement;
-      return stmt;
-    }),
-  };
-}
+// Canonical VEX vocabulary/validation/serialization lives in core/vex.ts so
+// the web (Redis) and MCP (git-steer-state) stores share one definition.
+export { validateVexInput, toOpenVex };
+export type { VexStatus, VexJustification, VexEntry, VexInput };
 
 // ── Routes ────────────────────────────────────────────────────────────
 

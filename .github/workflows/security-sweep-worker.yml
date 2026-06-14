@@ -92,8 +92,11 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
-          ALERTS=$(gh api "repos/$REPO/dependabot/alerts" \
-            --jq '[.[] | select(.state == "open") | {
+          # --paginate --slurp: combine all pages into one array (no 30-item cap).
+          # state=open filters server-side; .[][]  flattens the per-page arrays.
+          ALERTS=$(gh api --paginate --slurp \
+            "repos/$REPO/dependabot/alerts?state=open&per_page=100" \
+            --jq '[.[][] | {
               package: .dependency.package.name,
               ecosystem: .dependency.package.ecosystem,
               severity: .security_advisory.severity,
@@ -346,8 +349,9 @@ jobs:
           REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
           echo "Waiting 30s for Dependabot..."
           sleep 30
-          REMAINING=$(gh api "repos/$REPO/dependabot/alerts" \
-            --jq '[.[] | select(.state == "open")] | length' 2>/dev/null || echo "unknown")
+          REMAINING=$(gh api --paginate --slurp \
+            "repos/$REPO/dependabot/alerts?state=open&per_page=100" \
+            --jq '[.[][]] | length' 2>/dev/null || echo "unknown")
           echo "remaining_alerts=$REMAINING" >> $GITHUB_OUTPUT
           if [ "$REMAINING" = "0" ]; then
             echo "result=all_clear" >> $GITHUB_OUTPUT
