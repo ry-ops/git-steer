@@ -1,0 +1,58 @@
+# Reference Dependabot config — source of truth for scripts/rollout-autonomy.mjs.
+# The rollout emits ONLY the package-ecosystem blocks whose manifests it detects
+# in a given repo (npm/pip/gomod/github-actions/docker), so each repo gets a
+# config matched to its actual stack.
+#
+# Grouping is the whole point: it collapses many single-dep PRs into one PR per
+# ecosystem, which (a) cuts PR volume — important given the account-safety
+# pacing rules — and (b) batches the auto-merge work. Security updates respect
+# these groups too, so security fix PRs also arrive grouped.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      npm-all:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      pip-all:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      gomod-all:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      actions-all:
+        patterns: ["*"]
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      docker-all:
+        patterns: ["*"]

@@ -5,6 +5,8 @@
 
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolDeps } from './types.js';
+import { validateVexInput } from '../../core/vex.js';
+import type { VexEntry } from '../../core/vex.js';
 
 export function getTools(): Tool[] {
   return [
@@ -122,7 +124,7 @@ export function getTools(): Tool[] {
     },
     {
       name: 'vex_set',
-      description: 'Set VEX (Vulnerability Exploitability eXchange) status on a CVE finding. Persisted to state repo as vex-status.jsonl.',
+      description: 'Set OpenVEX status on a CVE finding (ADR-004). Persisted to the git-steer-state _vex store. not_affected requires a justification; affected requires an actionStatement.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -136,11 +138,27 @@ export function getTools(): Tool[] {
           justification: {
             type: 'string',
             enum: ['component_not_present', 'vulnerable_code_not_present', 'vulnerable_code_not_in_execute_path', 'vulnerable_code_cannot_be_controlled_by_adversary', 'inline_mitigations_already_exist'],
-            description: 'Required when status is not_affected',
+            description: 'OpenVEX justification — REQUIRED when status is not_affected',
           },
+          actionStatement: { type: 'string', description: 'REQUIRED when status is affected — the mitigation or acceptance rationale' },
+          impactStatement: { type: 'string', description: 'Optional impact detail for not_affected' },
+          productPurl: { type: 'string', description: 'PURL of the affected SBOM component, e.g. pkg:npm/esbuild@0.25.12 (links to the SBOM, C-004-004)' },
           detail: { type: 'string', description: 'Optional free-text rationale' },
         },
         required: ['owner', 'repo', 'cveId', 'status'],
+      },
+    },
+    {
+      name: 'vex_history',
+      description: 'Look up VEX history from the append-only vex.jsonl ledger (who/what/when, before -> after). Filter by repo and/or cveId. Returns chronological history plus the current status.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          owner: { type: 'string', description: 'Optional — limit to a repo (with repo)' },
+          repo: { type: 'string', description: 'Optional — limit to a repo (with owner)' },
+          cveId: { type: 'string', description: 'Optional — limit to a single CVE/finding id' },
+          status: { type: 'string', description: 'Optional — filter to a status', enum: ['not_affected', 'affected', 'fixed', 'under_investigation'] },
+        },
       },
     },
     {
@@ -232,6 +250,7 @@ export function handleCall(name: string, args: Record<string, any>, deps: ToolDe
     case 'security_sweep': return handleSecuritySweep(args, deps);
     case 'sbom_generate': return handleSbomGenerate(args, deps);
     case 'vex_set': return handleVexSet(args, deps);
+    case 'vex_history': return handleVexHistory(args, deps);
     case 'policy_eval': return handlePolicyEval(args, deps);
     case 'attestation_list': return handleAttestationList(args, deps);
     default: return null;
@@ -463,27 +482,56 @@ async function handleSbomGenerate(args: Record<string, any>, deps: ToolDeps): Pr
 }
 
 async function handleVexSet(args: Record<string, any>, deps: ToolDeps): Promise<any> {
-  const entry = {
-    id: `${args.owner}/${args.repo}::${args.cveId}`,
-    owner: args.owner,
-    repo: args.repo,
-    cveId: args.cveId,
+  const entry: VexEntry = {
+    cve_id: args.cveId,
+    repo: `${args.owner}/${args.repo}`,
+    product_purl: args.productPurl ?? undefined,
     status: args.status,
-    justification: args.justification ?? null,
-    detail: args.detail ?? null,
-    setAt: new Date().toISOString(),
-    setBy: 'git-steer',
+    justification: args.justification ?? undefined,
+    action_statement: args.actionStatement ?? undefined,
+    impact_statement: args.impactStatement ?? undefined,
+    detail: args.detail ?? undefined,
+    created_at: new Date().toISOString(),
+    updated_by: 'git-steer',
   };
+
+  // Enforce ADR-004 C-004-003 before persisting (also enforced in setVexStatus).
+  const error = validateVexInput(entry);
+  if (error) {
+    deps.state.addAuditEntry({
+      action: 'vex_set', repo: entry.repo, result: 'failure',
+      details: { cveId: args.cveId, status: args.status, error },
+    });
+    return { success: false, error };
+  }
 
   deps.state.setVexStatus(entry);
   deps.state.addAuditEntry({
     action: 'vex_set',
-    repo: `${args.owner}/${args.repo}`,
+    repo: entry.repo,
     result: 'success',
     details: { cveId: args.cveId, status: args.status },
   });
 
   return { success: true, entry };
+}
+
+async function handleVexHistory(args: Record<string, any>, deps: ToolDeps): Promise<any> {
+  const repo = args.owner && args.repo ? `${args.owner}/${args.repo}` : undefined;
+  const history = deps.state.getVexLedger({ repo, cveId: args.cveId, status: args.status });
+
+  // Current status for the queried scope (from the _vex map).
+  const all = deps.state.getAllVex();
+  const current = Object.values(all).filter((e: any) =>
+    (!repo || e.repo === repo) && (!args.cveId || e.cve_id === args.cveId),
+  );
+
+  return {
+    filter: { repo: repo ?? 'all', cveId: args.cveId ?? 'all', status: args.status ?? 'all' },
+    changes: history.length,
+    history,
+    current,
+  };
 }
 
 async function handlePolicyEval(args: Record<string, any>, deps: ToolDeps): Promise<any> {

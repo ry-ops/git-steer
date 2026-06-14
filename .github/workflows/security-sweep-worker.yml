@@ -92,8 +92,11 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
-          ALERTS=$(gh api "repos/$REPO/dependabot/alerts" \
-            --jq '[.[] | select(.state == "open") | {
+          # --paginate --slurp: combine all pages into one array (no 30-item cap).
+          # state=open filters server-side; .[][]  flattens the per-page arrays.
+          ALERTS=$(gh api --paginate --slurp \
+            "repos/$REPO/dependabot/alerts?state=open&per_page=100" \
+            --jq '[.[][] | {
               package: .dependency.package.name,
               ecosystem: .dependency.package.ecosystem,
               severity: .security_advisory.severity,
@@ -191,7 +194,10 @@ jobs:
         env:
           FILTERED_JSON: ${{ steps.filter.outputs.filtered }}
         run: |
-          BRANCH="security/sweep-$(date +%Y%m%d-%H%M%S)"
+          # Deterministic branch: one stable sweep head per repo. Re-runs reuse
+          # this branch (force-push) rather than spawning a new timestamped
+          # branch + duplicate PR. See "Create or update PR" below.
+          BRANCH="security/sweep"
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           git config user.name "git-steer[bot]"
           git config user.email "git-steer[bot]@users.noreply.github.com"
@@ -199,7 +205,8 @@ jobs:
           PACKAGES=$(echo "$FILTERED_JSON" | jq -r '[.[].package] | unique | join(", ")')
           git add -A
           git commit -m "fix(security): patch ${{ steps.filter.outputs.count }} vulns ($PACKAGES)"
-          git push -u origin "$BRANCH"
+          # Force-push: idempotent refresh of the deterministic branch.
+          git push -f -u origin "$BRANCH"
 
       - name: Ensure labels
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
@@ -265,14 +272,30 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
-          PR_URL=$(gh pr create \
-            --title "fix(security): Patch ${{ steps.filter.outputs.count }} ${{ inputs.severity }}+ vulnerabilities" \
-            --body-file /tmp/pr_body.md \
-            --head "${{ steps.commit.outputs.branch }}" \
-            --label "security,dependencies,automated,severity:${{ inputs.severity }}" \
-            --repo "$REPO")
+          BRANCH="${{ steps.commit.outputs.branch }}"
+          # Idempotency guard: reuse an open PR on this head instead of opening a
+          # duplicate. The force-push above refreshed its diff.
+          EXISTING=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh pr edit "$EXISTING" --repo "$REPO" \
+              --title "fix(security): Patch ${{ steps.filter.outputs.count }} ${{ inputs.severity }}+ vulnerabilities" \
+              --body-file /tmp/pr_body.md >/dev/null
+            PR_NUM="$EXISTING"
+            PR_URL=$(gh pr view "$PR_NUM" --repo "$REPO" --json url --jq '.url')
+            echo "Reusing existing PR #$PR_NUM (refreshed)."
+          else
+            PR_URL=$(gh pr create \
+              --title "fix(security): Patch ${{ steps.filter.outputs.count }} ${{ inputs.severity }}+ vulnerabilities" \
+              --body-file /tmp/pr_body.md \
+              --head "$BRANCH" \
+              --label "security,dependencies,automated,severity:${{ inputs.severity }}" \
+              --repo "$REPO")
+            PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+            echo "Created PR #$PR_NUM."
+          fi
           echo "url=$PR_URL" >> $GITHUB_OUTPUT
-          echo "number=$(echo "$PR_URL" | grep -oE '[0-9]+$')" >> $GITHUB_OUTPUT
+          echo "number=$PR_NUM" >> $GITHUB_OUTPUT
 
       - name: Comment on RFC issue
         if: steps.pr.outputs.url != '' && inputs.dry_run == false && matrix.target.issueNumber != 0
@@ -303,7 +326,18 @@ jobs:
             echo "PR #$PR_NUM merged."
           else
             echo "merged=false" >> $GITHUB_OUTPUT
-            echo "Merge failed: $MERGE_RESP"
+            echo "Direct merge blocked (likely branch protection): $MERGE_RESP"
+            # #3: surface the blocked PR and let GitHub-native auto-merge land it
+            # once required checks/approvals clear — instead of silently exiting
+            # and re-firing a duplicate on the next sweep.
+            gh label create "needs-human-merge" --color "d93f0b" \
+              --description "Auto-merge blocked by branch protection" --repo "$REPO" 2>/dev/null || true
+            gh pr edit "$PR_NUM" --repo "$REPO" --add-label "needs-human-merge" 2>/dev/null || true
+            if gh pr merge "$PR_NUM" --repo "$REPO" --squash --auto 2>/dev/null; then
+              echo "Native auto-merge enabled; PR will land when branch protection clears."
+            else
+              echo "Native auto-merge unavailable — enable 'Allow auto-merge' on $REPO, or merge #$PR_NUM manually."
+            fi
           fi
 
       - name: Verify fixes applied
@@ -315,8 +349,9 @@ jobs:
           REPO="${{ matrix.target.owner }}/${{ matrix.target.repo }}"
           echo "Waiting 30s for Dependabot..."
           sleep 30
-          REMAINING=$(gh api "repos/$REPO/dependabot/alerts" \
-            --jq '[.[] | select(.state == "open")] | length' 2>/dev/null || echo "unknown")
+          REMAINING=$(gh api --paginate --slurp \
+            "repos/$REPO/dependabot/alerts?state=open&per_page=100" \
+            --jq '[.[][]] | length' 2>/dev/null || echo "unknown")
           echo "remaining_alerts=$REMAINING" >> $GITHUB_OUTPUT
           if [ "$REMAINING" = "0" ]; then
             echo "result=all_clear" >> $GITHUB_OUTPUT

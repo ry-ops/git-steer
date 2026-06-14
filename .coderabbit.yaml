@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit disabled for this repo — reviews consolidated on CodeQL/GHAS.
+# (Full uninstall is a GitHub settings action; this turns it off at the repo level.)
+reviews:
+  auto_review:
+    enabled: false
+  review_status: false
+  high_level_summary: false
+  poem: false
+chat:
+  auto_reply: false

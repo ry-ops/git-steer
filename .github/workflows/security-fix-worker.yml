@@ -206,7 +206,10 @@ jobs:
         env:
           FILTERED_JSON: ${{ steps.alerts.outputs.filtered }}
         run: |
-          BRANCH="security/fix-${{ inputs.severity }}-$(date +%Y%m%d-%H%M%S)"
+          # Deterministic branch: one stable head per severity per repo.
+          # Re-runs reuse this branch (force-push) instead of spawning a new
+          # timestamped branch + duplicate PR. See "Create or update PR" below.
+          BRANCH="security/fix-${{ inputs.severity }}"
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           git config user.name "git-steer[bot]"
           git config user.email "git-steer[bot]@users.noreply.github.com"
@@ -214,7 +217,9 @@ jobs:
           PACKAGES=$(echo "$FILTERED_JSON" | jq -r '[.[].package] | unique | join(", ")')
           git add -A
           git commit -m "fix(security): patch ${{ steps.alerts.outputs.count }} vulns ($PACKAGES)"
-          git push -u origin "$BRANCH"
+          # Force-push: idempotent refresh of the deterministic branch. If an
+          # open PR already points at it, this updates that PR's diff in place.
+          git push -f -u origin "$BRANCH"
 
       - name: Write PR body script
         if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
@@ -252,6 +257,7 @@ jobs:
           REPO="${{ inputs.target_repo }}"
           SEVERITY="${{ inputs.severity }}"
           COUNT="${{ steps.alerts.outputs.count }}"
+          BRANCH="${{ steps.commit.outputs.branch }}"
 
           # Ensure labels (fire-and-forget, parallel with PR body)
           (
@@ -270,17 +276,80 @@ jobs:
           wait "$LABELS_PID"
           wait "$BODY_PID"
 
-          PR_URL=$(gh pr create \
-            --title "fix(security): Patch $COUNT $SEVERITY+ vulnerabilities" \
-            --body-file /tmp/pr_body.md \
-            --head "${{ steps.commit.outputs.branch }}" \
-            --label "security,dependencies,automated,severity:$SEVERITY" \
-            --repo "$REPO")
+          # Idempotency guard: reuse an open PR already pointing at this head
+          # instead of opening a duplicate. The force-push above refreshed its
+          # diff; here we just realign the title/body.
+          EXISTING=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh pr edit "$EXISTING" --repo "$REPO" \
+              --title "fix(security): Patch $COUNT $SEVERITY+ vulnerabilities" \
+              --body-file /tmp/pr_body.md >/dev/null
+            PR_NUM="$EXISTING"
+            PR_URL=$(gh pr view "$PR_NUM" --repo "$REPO" --json url --jq '.url')
+            echo "Reusing existing PR #$PR_NUM (refreshed)."
+          else
+            PR_URL=$(gh pr create \
+              --title "fix(security): Patch $COUNT $SEVERITY+ vulnerabilities" \
+              --body-file /tmp/pr_body.md \
+              --head "$BRANCH" \
+              --label "security,dependencies,automated,severity:$SEVERITY" \
+              --repo "$REPO")
+            PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+            echo "Created PR #$PR_NUM."
+          fi
           echo "url=$PR_URL" >> $GITHUB_OUTPUT
-          echo "number=$(echo "$PR_URL" | grep -oE '[0-9]+$')" >> $GITHUB_OUTPUT
+          echo "number=$PR_NUM" >> $GITHUB_OUTPUT
+
+      # ── ADR-005 functional-integrity gate (CANARY: inlined in this one path) ──
+      # Runs on the fixed branch BEFORE merge. Verdict logic mirrors the canonical,
+      # unit-tested src/core/verdict.ts. To roll out to the other remediation paths,
+      # extract these dimensions into a shared composite action (ADR-005 C-005-005).
+      - name: Functional-integrity gate
+        id: gate
+        if: steps.changes.outputs.has_changes == 'true' && inputs.dry_run == false
+        run: |
+          set +e
+          BUILD=NOT_APPLICABLE; TEST=NOT_APPLICABLE; SMOKE=NOT_APPLICABLE; SURFACE=NOT_APPLICABLE
+
+          # BUILD — deps resolve / lockfile coherent / compiles
+          if [ -f package.json ]; then
+            npm ci >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null 2>&1
+            if [ $? -ne 0 ]; then BUILD=FAIL
+            elif node -e "process.exit(require('./package.json').scripts?.build?0:1)"; then
+              npm run build >/dev/null 2>&1 && BUILD=PASS || BUILD=FAIL
+            else BUILD=PASS; fi
+          elif [ -f go.mod ]; then
+            go build ./... >/dev/null 2>&1 && BUILD=PASS || BUILD=FAIL
+          elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then
+            { [ -f requirements.txt ] && pip install -r requirements.txt || pip install . ; } >/dev/null 2>&1 && BUILD=PASS || BUILD=FAIL
+          fi
+
+          # TEST — existing suite passes (NOT_APPLICABLE if none)
+          if [ -f package.json ]; then
+            HAS=$(node -e "const t=require('./package.json').scripts?.test||'';process.stdout.write(t&&!/no test specified/.test(t)?'1':'0')")
+            [ "$HAS" = "1" ] && { npm test >/dev/null 2>&1 && TEST=PASS || TEST=FAIL; }
+          elif [ -f go.mod ]; then
+            if find . -name '*_test.go' | grep -q .; then go test ./... >/dev/null 2>&1 && TEST=PASS || TEST=FAIL; fi
+          elif python -c "import pytest" 2>/dev/null && { [ -d tests ] || ls test_*.py >/dev/null 2>&1; }; then
+            pytest -q >/dev/null 2>&1 && TEST=PASS || TEST=FAIL
+          fi
+
+          # SMOKE — declared npm entrypoint imports without immediate error
+          if [ -f package.json ]; then
+            MAIN=$(node -e "process.stdout.write(require('./package.json').main||'')")
+            [ -n "$MAIN" ] && [ -f "$MAIN" ] && { timeout 30 node -e "require('./$MAIN')" >/dev/null 2>&1 && SMOKE=PASS || SMOKE=FAIL; }
+          fi
+
+          # SURFACE — NOT_APPLICABLE for batch fixes (no single from->to); per-bump SURFACE comes with the shared action
+          VERDICT=$(node -e "const d=['$BUILD','$TEST','$SMOKE','$SURFACE'];process.stdout.write(d.includes('FAIL')?'NO-GO':(d.includes('PASS')?'GO':'GO-UNVERIFIED'))")
+          {
+            echo "build=$BUILD"; echo "test=$TEST"; echo "smoke=$SMOKE"; echo "surface=$SURFACE"; echo "verdict=$VERDICT";
+          } >> $GITHUB_OUTPUT
+          echo "Functional-integrity verdict: $VERDICT  (BUILD=$BUILD TEST=$TEST SMOKE=$SMOKE SURFACE=$SURFACE)"
 
       - name: Merge Pull Request
-        if: steps.pr.outputs.number != '' && inputs.dry_run == false
+        if: steps.pr.outputs.number != '' && inputs.dry_run == false && steps.gate.outputs.verdict == 'GO'
         id: wait-merge
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -299,8 +368,35 @@ jobs:
             echo "PR #$PR_NUM merged."
           else
             echo "merged=false" >> $GITHUB_OUTPUT
-            echo "Merge failed: $MERGE_RESP"
+            echo "Direct merge blocked (likely branch protection): $MERGE_RESP"
+            # #3: handle the merge-failure case instead of silently exiting and
+            # re-firing next dispatch. (a) Flag for human visibility, and
+            # (b) enable GitHub-native auto-merge so the PR lands on its own once
+            # required checks/approvals are satisfied — no re-dispatch needed.
+            gh label create "needs-human-merge" --color "d93f0b" \
+              --description "Auto-merge blocked by branch protection" --repo "$REPO" 2>/dev/null || true
+            gh pr edit "$PR_NUM" --repo "$REPO" --add-label "needs-human-merge" 2>/dev/null || true
+            if gh pr merge "$PR_NUM" --repo "$REPO" --squash --auto 2>/dev/null; then
+              echo "Native auto-merge enabled; PR will land when branch protection clears."
+            else
+              echo "Native auto-merge unavailable — enable 'Allow auto-merge' on $REPO, or merge #$PR_NUM manually."
+            fi
           fi
+
+      # ── ADR-005 disposition: non-GO verdict is held for human review ──
+      - name: Hold for review (non-GO verdict)
+        if: steps.pr.outputs.number != '' && inputs.dry_run == false && steps.gate.outputs.verdict != '' && steps.gate.outputs.verdict != 'GO'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          REPO="${{ inputs.target_repo }}"
+          PR_NUM="${{ steps.pr.outputs.number }}"
+          gh label create "needs-human-merge" --color "d93f0b" \
+            --description "Held by ADR-005 functional-integrity gate" --repo "$REPO" 2>/dev/null || true
+          gh pr edit "$PR_NUM" --repo "$REPO" --add-label "needs-human-merge" 2>/dev/null || true
+          gh pr comment "$PR_NUM" --repo "$REPO" --body "$(printf '🚦 **Functional-integrity gate: %s** (ADR-005)\n\n| Dimension | Result |\n|---|---|\n| BUILD | %s |\n| TEST | %s |\n| SMOKE | %s |\n| SURFACE | %s |\n\nAuto-merge withheld — held for human review. A GO verdict is required to auto-merge.' \
+            "${{ steps.gate.outputs.verdict }}" "${{ steps.gate.outputs.build }}" "${{ steps.gate.outputs.test }}" "${{ steps.gate.outputs.smoke }}" "${{ steps.gate.outputs.surface }}")" 2>/dev/null || true
+          echo "Held PR #$PR_NUM for review — verdict ${{ steps.gate.outputs.verdict }}"
 
       - name: Verify fixes applied
         if: steps.wait-merge.outputs.merged == 'true'
@@ -346,8 +442,10 @@ jobs:
             --arg severity "${{ inputs.severity }}" \
             --arg fixed "${{ steps.alerts.outputs.count || '0' }}" \
             --arg merged "${{ steps.wait-merge.outputs.merged || 'na' }}" \
+            --arg verdict "${{ steps.gate.outputs.verdict || 'na' }}" \
+            --arg dimensions "BUILD=${{ steps.gate.outputs.build || 'na' }} TEST=${{ steps.gate.outputs.test || 'na' }} SMOKE=${{ steps.gate.outputs.smoke || 'na' }} SURFACE=${{ steps.gate.outputs.surface || 'na' }}" \
             --arg verify "${{ steps.verify.outputs.result || 'na' }}" \
             --arg remaining "${{ steps.verify.outputs.remaining_alerts || 'na' }}" \
             --arg pr_url "${{ steps.pr.outputs.url || '' }}" \
             --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{id:$id,status:$status,repo:$repo,severity:$severity,fixed:($fixed|tonumber),merged:$merged,verify:$verify,remaining:$remaining,pr_url:$pr_url,ts:$ts}'
+            '{id:$id,status:$status,repo:$repo,severity:$severity,fixed:($fixed|tonumber),merged:$merged,verdict:$verdict,dimensions:$dimensions,verify:$verify,remaining:$remaining,pr_url:$pr_url,ts:$ts}'

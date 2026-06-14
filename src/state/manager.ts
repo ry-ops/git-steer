@@ -8,6 +8,8 @@
 import { GitHubClient } from '../github/client.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { etagCache } from '../core/etag-cache.js';
+import { validateVexInput, vexId, makeVexLedgerEntry } from '../core/vex.js';
+import type { VexEntry, VexLedgerEntry } from '../core/vex.js';
 
 export interface StateManagerConfig {
   github: GitHubClient;
@@ -129,6 +131,7 @@ export interface StateData {
     cache: Record<string, any>;
     rfcs: RfcEntry[];
     quality: QualityEntry[];
+    vexLedger: VexLedgerEntry[];
   };
   shas: Record<string, string>;
 }
@@ -182,6 +185,7 @@ export class StateManager {
     const cache = await this.loadJson('state/cache.json');
     const rfcs = await this.loadJsonLines('state/rfcs.jsonl');
     const quality = await this.loadJsonLines('state/quality.jsonl');
+    const vexLedger = await this.loadJsonLines('state/vex.jsonl');
 
     this.data = {
       config: {
@@ -195,6 +199,7 @@ export class StateManager {
         cache,
         rfcs,
         quality,
+        vexLedger,
       },
       shas: {},
     };
@@ -249,6 +254,9 @@ export class StateManager {
 
     // Save quality results
     await this.saveJsonLines('state/quality.jsonl', this.data.state.quality);
+
+    // Save VEX ledger (append-only history)
+    await this.saveJsonLines('state/vex.jsonl', this.data.state.vexLedger);
 
     // Persist ETag map so conditional requests survive process restarts.
     this.data.state.cache._etags = etagCache.snapshot();
@@ -414,31 +422,45 @@ export class StateManager {
 
   // ========== VEX Operations ==========
 
-  setVexStatus(entry: {
-    id: string;
-    owner: string;
-    repo: string;
-    cveId: string;
-    status: string;
-    justification: string | null;
-    detail: string | null;
-    setAt: string;
-    setBy: string;
-  }): void {
+  /**
+   * Persist a VEX entry to the git-steer-state `_vex` store (current state) and
+   * append an immutable row to the vex.jsonl ledger (history). Validates against
+   * the canonical OpenVEX rules (ADR-004 C-004-003) shared with the web store —
+   * throws on a non-compliant entry rather than writing bad data.
+   */
+  setVexStatus(entry: VexEntry, source = 'mcp:vex_set'): void {
     if (!this.data) return;
-    const map: Record<string, typeof entry> = this.data.state.cache['_vex'] ?? {};
-    map[entry.id] = entry;
+    const error = validateVexInput(entry);
+    if (error) throw new Error(`Invalid VEX entry: ${error}`);
+
+    const prev = this.getVexStatus(entry.repo, entry.cve_id);
+    const map: Record<string, VexEntry> = this.data.state.cache['_vex'] ?? {};
+    map[vexId(entry.repo, entry.cve_id)] = entry;
     this.data.state.cache['_vex'] = map;
+
+    // Append-only history row (before -> after).
+    this.data.state.vexLedger.push(
+      makeVexLedgerEntry(entry, prev?.status ?? null, source, new Date().toISOString()),
+    );
+
     this.dirty = true;
   }
 
-  getVexStatus(owner: string, repo: string, cveId: string): any | null {
-    const id = `${owner}/${repo}::${cveId}`;
-    return this.data?.state.cache['_vex']?.[id] ?? null;
+  getVexStatus(repo: string, cveId: string): VexEntry | null {
+    return this.data?.state.cache['_vex']?.[vexId(repo, cveId)] ?? null;
   }
 
-  getAllVex(): Record<string, any> {
+  getAllVex(): Record<string, VexEntry> {
     return this.data?.state.cache['_vex'] ?? {};
+  }
+
+  /** Query the append-only VEX ledger (history), newest first. */
+  getVexLedger(filter?: { repo?: string; cveId?: string; status?: string }): VexLedgerEntry[] {
+    let rows = this.data?.state.vexLedger ?? [];
+    if (filter?.repo) rows = rows.filter((r) => r.repo === filter.repo);
+    if (filter?.cveId) rows = rows.filter((r) => r.cve_id === filter.cveId);
+    if (filter?.status) rows = rows.filter((r) => r.status === filter.status);
+    return [...rows].sort((a, b) => b.ts.localeCompare(a.ts));
   }
 
   // ========== RFC Operations ==========

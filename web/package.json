@@ -22,5 +22,9 @@
     "tailwindcss": "^3.4.16",
     "typescript": "^5.7.2",
     "vite": "^6.0.3"
+  },
+  "overrides": {
+    "esbuild": "0.28.1",
+    "react-router": "6.30.4"
   }
 }

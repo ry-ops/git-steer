@@ -25,6 +25,7 @@ export const KEYS = {
   scanLatest: (repo: string) => `gitsteer:scan:latest:${repo.replace('/', ':')}`,
   vex: (repo: string, cveId: string) => `gitsteer:vex:${repo.replace('/', ':')}:${cveId}`,
   vexList: (repo: string) => `gitsteer:vex:${repo.replace('/', ':')}`,
+  vexLedger: (repo: string) => `gitsteer:vexledger:${repo.replace('/', ':')}`,
   sbom: (repo: string) => `gitsteer:sbom:${repo.replace('/', ':')}`,
   trend: (repo: string) => `gitsteer:trend:${repo.replace('/', ':')}`,
   autoScan: (repo: string) => `gitsteer:autoscan:${repo.replace('/', ':')}`,

@@ -1,0 +1,258 @@
+# ══════════════════════════════════════════════════════════════
+# ADR-005 — Functional Integrity Verification Doctrine
+# Go/No-Go gate: a remediation must leave the repo in working form
+# ══════════════════════════════════════════════════════════════
+
+metadata:
+  id: ADR-005
+  title: "Functional Integrity Verification Doctrine"
+  status: ACCEPTED
+  date: "2026-06-14"
+  author: "Ryan // ry-ops.dev"
+  supersedes: null
+  superseded_by: null
+  amends:
+    - ADR-004   # refines C-004-001 — FIXED now requires a GO verdict, not merge alone
+  affects:
+    - ry-ops/git-steer
+    - ry-ops/git-steer-state
+    - all managed repos
+
+context: |
+  ADR-004 drove every CVE to a terminal state — FIXED (remediation PR
+  merged) or SUPPRESSED (VEX recorded). But "merged" was defined as the
+  terminal proof of FIXED, and merged is not the same as working. The
+  autonomy and security-fix workers apply a dependency bump and attempt
+  merge with no build, test, or smoke step in the remediation path
+  (security-fix-worker.yml, security-sweep-worker.yml, dependabot-
+  automerge.yml, rollout-autonomy.mjs). The only thing between a blind
+  bump and a merge is each managed repo's own branch protection: the
+  direct merge API call fails on red required checks, and the native
+  auto-merge fallback waits for green.
+
+  This outsources the "does the repo still function?" guarantee to
+  per-repo configuration that git-steer does not own or enforce. Two
+  failure modes follow:
+
+  1. A repo with weak or absent branch protection merges an unverified
+     bump — nothing checked that it still builds, runs, or passes tests.
+
+  2. A repo with green CI but no executable tests produces a FALSE GO.
+     Required checks pass because there is nothing to fail. "CI is green"
+     is read as "remediation is safe" when no functional claim was
+     actually tested.
+
+  A dependency bump is the most common way an automated remediation
+  breaks a working repo (major-version jumps, removed exports, changed
+  peer-dependency ranges, lockfile incoherence). The remediation
+  doctrine has no defense against this today.
+
+  This ADR adds the missing half of ADR-004: a remediation does not
+  merely close an alert, it must leave the repo in functional form, and
+  that must be verified — TAEM-style go/no-go preflight — before merge,
+  uniformly across the fleet rather than per-repo by configuration.
+
+decision: |
+  No automated remediation merges without a functional-integrity GO
+  verdict. A verification gate runs AFTER the fix is applied and BEFORE
+  the merge call, on every remediation path, and emits a structured
+  verdict that gates the merge.
+
+  The verdict is one of three states, and it measures verification
+  CONFIDENCE, not merely "did the configured checks pass":
+
+  1. GO — the repo was shown to remain in functional form after the fix.
+     Required dimensions were exercised and passed. Merge proceeds.
+
+  2. NO-GO — a required dimension failed (build broke, tests regressed,
+     entrypoint will not start, or a breaking surface change was
+     detected). Merge is blocked. The PR is held and the underlying CVE
+     is routed back into ADR-004's terminal-state machinery as deferred
+     remediation (see C-005-004).
+
+  3. GO-UNVERIFIED — the fix applied cleanly and nothing failed, but the
+     repo offered no executable verification (no tests, no buildable
+     target, no startable entrypoint). This is distinct from GO: a green
+     signal with nothing behind it is not a passed gate. GO-UNVERIFIED
+     does NOT auto-merge; it is held for human disposition and surfaced
+     as a verification-coverage gap.
+
+  FIXED (ADR-004 C-004-001) is hereby refined: a CVE reaches FIXED only
+  when its remediation PR merges UNDER a GO verdict. A merge without a
+  GO verdict does not satisfy FIXED.
+
+constraints:
+  - id: C-005-001
+    type: HARD
+    scope: pre-merge-gate
+    rule: >
+      Every automated remediation path (security-fix-worker,
+      security-sweep-worker, dependabot-automerge, rollout-autonomy)
+      MUST run the functional-integrity gate after applying the fix and
+      before any merge call (direct API merge or native auto-merge
+      enablement). Merge proceeds only on a GO verdict. This is an
+      explicit, git-steer-owned gate; it does not rely on the target
+      repo's branch protection being present or correctly configured.
+    check: |
+      for path in remediation_paths:
+        path.merge_step.depends_on(path.verification_gate)
+        && path.verification_gate.runs_after(path.fix_apply_step)
+        && path.merge_step.guarded_by(verdict == 'GO')
+    violation: NO-GO
+    adr: ADR-005
+
+  - id: C-005-002
+    type: HARD
+    scope: verdict-dimensions
+    rule: >
+      The gate evaluates the repo across functional dimensions and
+      aggregates them into a single verdict. The required dimensions are:
+      BUILD (compiles / dependencies resolve / lockfile coherent),
+      TEST (existing test suite passes), SMOKE (declared entrypoint
+      starts without immediate error), and SURFACE (no breaking public-
+      API or behavioral drift introduced by the bump — e.g. major
+      version jump, removed export). Any required dimension reporting
+      FAIL yields NO-GO. A dimension reporting NOT_APPLICABLE (the repo
+      has no such target) does not fail the gate but counts toward the
+      GO-UNVERIFIED determination in C-005-003.
+    check: |
+      verdict = aggregate(dimensions)
+      verdict == 'NO-GO' iff any(d.result == 'FAIL' for d in required)
+    violation: NO-GO
+    adr: ADR-005
+
+  - id: C-005-003
+    type: HARD
+    scope: verification-confidence
+    rule: >
+      A GO verdict REQUIRES at least one functional dimension to have
+      actually executed and passed — green-by-absence is not GO. If a
+      fix applies cleanly and no dimension reported FAIL, but no
+      dimension actually executed (no tests present, nothing buildable,
+      no startable entrypoint), the verdict is GO-UNVERIFIED, never GO.
+      GO-UNVERIFIED PRs are not auto-merged; they are held for human
+      disposition and recorded as a verification-coverage gap against
+      the repo.
+    check: |
+      verdict == 'GO' implies
+        any(d.result == 'PASS' for d in dimensions)
+      (no_fail && no_pass) implies verdict == 'GO-UNVERIFIED'
+    violation: NO-GO
+    adr: ADR-005
+
+  - id: C-005-004
+    type: HARD
+    scope: no-go-disposition
+    rule: >
+      A NO-GO verdict blocks the merge and routes the finding back into
+      ADR-004's terminal-state machinery as deferred remediation: the
+      PR is held as draft and labeled needs-human-merge, the verdict
+      (with failing dimension and evidence) is surfaced on the
+      dashboard, and the underlying CVE — if it would otherwise remain
+      open — is recorded as a VEX statement with status 'affected' and
+      an action_statement noting the remediation is blocked pending a
+      working fix (ADR-004 C-004-003). A NO-GO finding therefore still
+      reaches an ADR-004 terminal state; it does not regress to "open
+      and ignored".
+    check: |
+      verdict == 'NO-GO' implies
+        pr.is_draft && pr.has_label('needs-human-merge')
+        && dashboard.shows(verdict)
+        && (cve.still_open implies has_vex_statement(cve, status='affected'))
+    violation: NO-GO
+    adr: ADR-005
+
+  - id: C-005-005
+    type: SOFT
+    scope: gate-uniformity
+    rule: >
+      The gate SHOULD be implemented once as a reusable callable
+      workflow / composite action (e.g. verify-functional-form) invoked
+      by every remediation path, rather than reimplemented per worker.
+      A single implementation keeps the verdict semantics identical
+      fleet-wide and makes the gate's behavior auditable from one place.
+      Verification runs in ephemeral GitHub Actions runners consistent
+      with the zero-footprint philosophy (ADR-002) — no local cloning.
+    check: |
+      remediation_paths.all(p => p.invokes('verify-functional-form'))
+    violation: WARN
+    adr: ADR-005
+
+  - id: C-005-006
+    type: SOFT
+    scope: verdict-provenance
+    rule: >
+      Each verdict SHOULD be recorded in git-steer-state with the repo,
+      the PR/branch, the commit SHA verified, the per-dimension results,
+      and a timestamp — the same provenance discipline SBOMs carry
+      (ADR-004 C-004-002, generatedAt + sourceSha). This gives "was this
+      merge verified, and how?" a ground-truth answer that survives
+      audit, and lets the dashboard distinguish GO from GO-UNVERIFIED
+      merges across the fleet.
+    check: |
+      for verdict in recorded_verdicts:
+        verdict.has_fields(['repo','pr','sourceSha','dimensions','timestamp'])
+    violation: WARN
+    adr: ADR-005
+
+  - id: C-005-007
+    type: ADVISORY
+    scope: coverage-feedback
+    rule: >
+      GO-UNVERIFIED is a signal, not just a state. A managed repo that
+      repeatedly returns GO-UNVERIFIED has a verification-coverage gap
+      that undermines the entire remediation guarantee for that repo.
+      The heartbeat sweep MAY track GO-UNVERIFIED frequency per repo and
+      surface chronically unverifiable repos as remediation debt, so the
+      gap can be closed (add a smoke target, add minimal tests) rather
+      than silently tolerated.
+    adr: ADR-005
+
+rationale: |
+  ADR-004 made "did we address every CVE?" answerable. This ADR makes
+  "did addressing it break anything?" answerable. The two together close
+  the loop: a remediation is not done when the alert closes, it is done
+  when the alert closes AND the repo still works — or when it is
+  explicitly held because it does not.
+
+  The three-state verdict exists specifically to defeat the false-GO
+  failure mode. A two-state pass/fail collapses "verified working" and
+  "nothing was checked" into the same green light, which is exactly the
+  trap of merging dependency bumps into repos with no tests. Naming
+  GO-UNVERIFIED as its own state makes verification absence visible and
+  actionable instead of disguising it as success — the TAEM preflight
+  principle that readiness is not the same as "it did not error".
+
+  The gate is git-steer-owned and fleet-uniform rather than delegated to
+  branch protection because git-steer does not control, and cannot
+  assume, the protection configuration of every managed repo. A
+  guarantee that depends on each repo being configured correctly is not
+  a guarantee. Owning the gate makes the functional-form promise
+  identical everywhere git-steer remediates.
+
+  Routing NO-GO back through ADR-004's VEX 'affected' path (C-005-004)
+  is deliberate: a blocked remediation is a known-unfixed-right-now
+  finding, which is precisely what VEX 'affected' + action_statement
+  exists to record. The doctrines compose — no new "stuck" state is
+  introduced, and the no-silent-backlog property of ADR-004 is
+  preserved.
+
+consequences:
+  positive:
+    - A remediation now guarantees functional form, not just a closed alert
+    - False GO on test-less repos is eliminated — GO requires real verification
+    - The functional-form guarantee is uniform fleet-wide, not per-repo-configured
+    - NO-GO findings still reach an ADR-004 terminal state — no new stuck state
+    - Verdict provenance makes "was this merge safe, and how?" auditable
+    - GO-UNVERIFIED surfaces verification-coverage gaps as closable debt
+  risks:
+    - risk: "Adding a pre-merge gate slows remediation throughput and adds runner cost"
+      mitigation: "Gate runs in ephemeral Actions runners reusing the repo's own CI where present; SURFACE/BUILD checks are cheap and short-circuit before TEST/SMOKE on obvious breaks"
+    - risk: "GO-UNVERIFIED repos accumulate held PRs that need human attention"
+      mitigation: "C-005-007 tracks chronic GO-UNVERIFIED as remediation debt so the coverage gap gets closed at the source rather than generating recurring manual work"
+    - risk: "A flaky test suite produces false NO-GO and blocks legitimate fixes"
+      mitigation: "NO-GO holds rather than discards the PR (draft + needs-human-merge); evidence is recorded so a human can distinguish flake from real regression; flaky-suite repos surface as coverage-quality debt"
+    - risk: "SURFACE drift detection is heuristic and may miss subtle breaking changes"
+      mitigation: "SURFACE is one dimension among four; TEST and SMOKE catch behavioral breaks SURFACE misses; the gate raises confidence, it does not claim proof"
+
+superseded_by: null
