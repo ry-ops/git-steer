@@ -56,26 +56,26 @@ for (const e of current.sort((a, b) => (a.repo + a.cve_id).localeCompare(b.repo 
   console.log(`     ${e.justification || e.action_statement || ''}${e.product_purl ? '  [' + e.product_purl + ']' : ''}`);
 }
 
-if (currentOnly) process.exit(0);
+// ── History (from append-only vex.jsonl ledger) — skipped in --current mode ──
+if (!currentOnly) {
+  const ledgerRaw = await readState('state/vex.jsonl');
+  let rows = ledgerRaw.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+  if (fRepo) rows = rows.filter((r) => r.repo === fRepo);
+  if (fCve) rows = rows.filter((r) => r.cve_id === fCve);
+  if (fStatus) rows = rows.filter((r) => r.status === fStatus);
+  rows.sort((a, b) => b.ts.localeCompare(a.ts)); // newest first
 
-// ── History (from append-only vex.jsonl ledger) ───────────────────────
-const ledgerRaw = await readState('state/vex.jsonl');
-let rows = ledgerRaw.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
-if (fRepo) rows = rows.filter((r) => r.repo === fRepo);
-if (fCve) rows = rows.filter((r) => r.cve_id === fCve);
-if (fStatus) rows = rows.filter((r) => r.status === fStatus);
-rows.sort((a, b) => b.ts.localeCompare(a.ts)); // newest first
-
-console.log(`\n=== HISTORY (${rows.length} change${rows.length === 1 ? '' : 's'}, newest first) ===`);
-if (rows.length === 0) {
-  console.log('  (no ledger rows — state/vex.jsonl is empty or absent)');
-} else {
-  for (const r of rows) {
-    const transition = r.prev_status ? `${r.prev_status} → ${r.status}` : `(new) ${r.status}`;
-    console.log(`${r.ts}  ${r.repo}  ${r.cve_id}`);
-    console.log(`     ${transition.padEnd(34)} via ${r.source} (${r.updated_by})`);
-    if (r.justification) console.log(`     justification: ${r.justification}`);
-    if (r.action_statement) console.log(`     action: ${r.action_statement}`);
+  console.log(`\n=== HISTORY (${rows.length} change${rows.length === 1 ? '' : 's'}, newest first) ===`);
+  if (rows.length === 0) {
+    console.log('  (no ledger rows — state/vex.jsonl is empty or absent)');
+  } else {
+    for (const r of rows) {
+      const transition = r.prev_status ? `${r.prev_status} → ${r.status}` : `(new) ${r.status}`;
+      console.log(`${r.ts}  ${r.repo}  ${r.cve_id}`);
+      console.log(`     ${transition.padEnd(34)} via ${r.source} (${r.updated_by})`);
+      if (r.justification) console.log(`     justification: ${r.justification}`);
+      if (r.action_statement) console.log(`     action: ${r.action_statement}`);
+    }
   }
+  console.log('');
 }
-console.log('');

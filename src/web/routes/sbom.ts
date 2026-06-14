@@ -57,9 +57,10 @@ export interface SbomSnapshot {
 function purl(ecosystem: 'npm' | 'golang' | 'pypi', name: string, version: string): string {
   const v = version.replace(/^[\^~>=<\s]+/, '').trim() || '*';
   if (ecosystem === 'npm') {
-    // scoped names (@scope/name) → encode @ and the separating /
+    // scoped names (@scope/name): encode @ and each path segment, keeping the
+    // namespace separator. Per-segment encoding avoids partial-escaping bugs.
     const enc = name.startsWith('@')
-      ? `%40${encodeURIComponent(name.slice(1)).replace('%2F', '/')}`
+      ? '%40' + name.slice(1).split('/').map(encodeURIComponent).join('/')
       : encodeURIComponent(name);
     return `pkg:npm/${enc}@${v}`;
   }
