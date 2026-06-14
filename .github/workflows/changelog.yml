@@ -23,7 +23,7 @@ jobs:
       - name: Sync changelog to fabric-forge/blog
         env:
           # GIT_FABRIC_PAT reads ry-ops PRs/state AND writes the fabric-forge/blog deploy repo.
-          GH_TOKEN: ${{ secrets.GIT_FABRIC_PAT }}
+          GH_TOKEN: ${{ secrets.BLOG_WRITE_PAT }}
           STATE_OWNER: ry-ops
           STATE_REPO: git-steer-state
           BLOG_OWNER: fabric-forge   # live ry-ops.dev deploy source (Pages blog-5f3)
