@@ -10,6 +10,11 @@ on:
     - cron: '0 7 * * *'   # daily, 1h after the heartbeat
   workflow_dispatch: {}
 
+# Least privilege: only the checkout needs GITHUB_TOKEN read; writes to the blog
+# repo use the git-steer App token, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   changelog:
     runs-on: ubuntu-latest
