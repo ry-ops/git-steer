@@ -1,0 +1,262 @@
+# ══════════════════════════════════════════════════════════════
+# ADR-006 — Autonomous Remediation Control Loop
+# The gate feeds a self-driving escalation ladder, not a human inbox
+# ══════════════════════════════════════════════════════════════
+
+metadata:
+  id: ADR-006
+  title: "Autonomous Remediation Control Loop"
+  status: ACCEPTED
+  date: "2026-06-14"
+  author: "Ryan // ry-ops.dev"
+  supersedes: null
+  superseded_by: null
+  amends:
+    - ADR-005   # refines C-005-004 — NO-GO advances the loop before any human handoff
+  affects:
+    - ry-ops/git-steer
+    - ry-ops/git-steer-state
+    - all managed repos
+
+context: |
+  ADR-005 added the functional-integrity gate: no remediation merges
+  without a GO verdict. But its NO-GO and GO-UNVERIFIED dispositions
+  route the finding to a human (held PR + needs-human-merge). Taken
+  literally, that breaks autonomy: a large share of CVE fixes are major
+  or 0.x-minor version jumps, which the SURFACE dimension flags, so a
+  strict gate would funnel most remediations into a human queue. A
+  check system that stops being autonomous the moment a check is
+  cautious is not the system this fleet needs.
+
+  The resolution is to recognize that the gate is a SENSOR, not a
+  terminal. A verdict is feedback into a control loop, not a verdict on
+  the human's to-do list. When a candidate fix fails verification, the
+  autonomous response is to try a safer candidate — not to stop and
+  wait. Verification and autonomy are only in tension if the loop has a
+  single rung. Give it several, ordered safest-first, and the system
+  stays fully autonomous while every merge remains functionally
+  verified.
+
+  A human is still reachable — but as the LAST resort, after the loop
+  has autonomously exhausted its options, and reached autonomously
+  (not as the default disposition of the first NO-GO).
+
+decision: |
+  Automated remediation is a closed-loop control system. For a finding,
+  git-steer generates an ordered ladder of candidate fixes, safest
+  first. It applies each candidate, runs the ADR-005 gate, and merges
+  the FIRST candidate that returns GO — then stops. A NO-GO or
+  GO-UNVERIFIED on a candidate advances the loop to the next rung; it
+  does NOT hand off to a human.
+
+  The candidate ladder (safest first):
+    1. patch-within-minor      (e.g. 1.4.2 -> 1.4.7)
+    2. minor-within-major      (e.g. 1.4.2 -> 1.7.0)
+    3. minimum-patched-version (Dependabot first_patched, may cross
+                                a major / 0.x-minor boundary)
+    4. minimum-patched-version WITH behavioral evidence — the terminal
+       autonomous rung (see C-006-003)
+
+  A human is engaged only when every rung is exhausted without an
+  autonomous GO (or a test-backed terminal accept). At that point
+  ADR-005 C-005-004 applies — the PR is held as draft + needs-human-
+  merge and the CVE is recorded VEX 'affected' with an action_statement
+  — but it is reached autonomously and remains an ADR-004 terminal
+  state. No silent backlog; no human in the happy path or the common
+  unhappy path.
+
+constraints:
+  - id: C-006-001
+    type: HARD
+    scope: loop-autonomy
+    rule: >
+      A NO-GO or GO-UNVERIFIED verdict on a candidate fix advances the
+      remediation loop to the next candidate; it MUST NOT, by itself,
+      route the finding to a human. Human handoff occurs only via
+      C-006-004 (ladder exhausted). This refines ADR-005 C-005-004:
+      that disposition is the loop's terminal fallback, not its
+      response to the first failed candidate.
+    check: |
+      on(verdict in ['NO-GO','GO-UNVERIFIED']):
+        loop.has_next_candidate() ? loop.advance() : apply(ADR-005.C-005-004)
+    violation: NO-GO
+    adr: ADR-006
+
+  - id: C-006-002
+    type: HARD
+    scope: candidate-ordering
+    rule: >
+      Candidates are evaluated in safest-first order (patch-within-minor,
+      minor-within-major, minimum-patched-version, then the test-backed
+      terminal rung). The FIRST candidate returning GO is merged and the
+      loop halts — later, riskier candidates are not attempted once a
+      safe verified fix exists. A candidate that does not resolve the
+      underlying advisory (version still vulnerable) is skipped, not run.
+    check: |
+      candidates == sorted_by_risk_ascending(viable_candidates)
+      && merge(first(c for c in candidates if verify(c) == 'GO'))
+    violation: NO-GO
+    adr: ADR-006
+
+  - id: C-006-003
+    type: HARD
+    scope: surface-test-override
+    rule: >
+      A candidate that the gate marks NO-GO SOLELY because of SURFACE
+      (a major / 0.x-minor version jump) MAY be merged autonomously, but
+      ONLY as the terminal ladder rung AND ONLY when BUILD == PASS and
+      TEST == PASS — real behavioral evidence that the jump did not
+      break the repo. Such a merge is recorded with the provenance flag
+      `surface_override: test_backed` (ADR-005 C-005-006). Absent
+      executed-and-passing tests, a SURFACE-FAIL candidate is NEVER
+      auto-merged — it falls through to human handoff (C-006-004). A
+      candidate that is NO-GO for BUILD or TEST or SMOKE is never
+      override-eligible; only SURFACE is.
+    check: |
+      auto_merge(c) where c.verdict=='NO-GO'
+        implies c.is_terminal_rung
+          && c.dimensions.surface=='FAIL'
+          && c.dimensions.build=='PASS' && c.dimensions.test=='PASS'
+          && no_other_fail(c)
+          && record.surface_override == 'test_backed'
+    violation: NO-GO
+    adr: ADR-006
+
+  - id: C-006-004
+    type: HARD
+    scope: human-last-resort
+    rule: >
+      Human handoff is the loop's terminal fallback, reached ONLY when
+      every ladder rung has been attempted without an autonomous GO and
+      no test-backed SURFACE override applies. The handoff itself is
+      performed autonomously: the best-evidenced candidate PR is held
+      draft + needs-human-merge, the per-rung verdict history is
+      attached, and the CVE is recorded VEX 'affected' with an
+      action_statement naming the rungs attempted (ADR-005 C-005-004,
+      ADR-004 C-004-003). The finding therefore still reaches an ADR-004
+      terminal state.
+    check: |
+      human_handoff(finding) implies
+        all(verify(c) != 'GO' for c in finding.candidates)
+        && pr.is_draft && pr.has_label('needs-human-merge')
+        && has_vex_statement(finding.cve, status='affected')
+    violation: NO-GO
+    adr: ADR-006
+
+  - id: C-006-005
+    type: SOFT
+    scope: loop-bounds
+    rule: >
+      The loop is bounded: a finite candidate ladder (no open-ended
+      version search) and a per-finding attempt budget. Each rung's
+      verdict is recorded with provenance (ADR-005 C-005-006) so the
+      full attempt history — what was tried, what each gate said — is
+      auditable from git-steer-state. A loop that cannot make progress
+      within budget terminates into C-006-004, never spins.
+    check: |
+      loop.candidates.is_finite() && loop.attempts <= BUDGET
+      && for rung in loop.attempts: recorded_verdict(rung)
+    violation: WARN
+    adr: ADR-006
+
+  - id: C-006-006
+    type: SOFT
+    scope: re-entrancy
+    rule: >
+      The loop is idempotent and re-entrant. Re-running a finding that
+      previously exhausted to human handoff does not duplicate PRs; it
+      resumes against the current state. When a new patched version is
+      published for a parked finding, the next scan re-enters the loop
+      from rung 1 (composes with ADR-004 C-004-005 re-evaluation): a
+      previously human-parked finding can become autonomously fixed once
+      a safer verified candidate exists.
+    check: |
+      rerun(finding) reuses open PR/branch (no duplication)
+      && new_patched_version(finding) => loop re-enters at rung 1
+    violation: WARN
+    adr: ADR-006
+
+  - id: C-006-007
+    type: ADVISORY
+    scope: unverified-self-healing
+    rule: >
+      GO-UNVERIFIED (nothing executed) is not auto-merged, but before
+      parking the loop MAY attempt to establish minimal verification
+      autonomously — e.g. synthesize a smoke check (import/start the
+      declared entrypoint) so a re-verify can reach GO. A repo that
+      chronically yields GO-UNVERIFIED is surfaced as verification-
+      coverage debt (ADR-005 C-005-007) so the gap is closed at the
+      source rather than silently lowering the remediation guarantee.
+    adr: ADR-006
+
+  - id: C-006-008
+    type: HARD
+    scope: hard-stop-persistence
+    rule: >
+      The human hard-stop (C-006-004) is NOT enforced the first time a
+      finding falls out of the ladder. A "sweep" is one git-steer
+      identify-and-repair run. On each sweep, a finding that exhausts the
+      ladder without a GO has its consecutive-fall-out counter
+      incremented in git-steer-state; the counter resets the moment the
+      finding is resolved or any candidate newly verifies GO. The hard
+      stop — draft + needs-human-merge + VEX 'affected' (C-006-004) — is
+      enforced ONLY when that counter reaches the persistence threshold
+      (default 3 consecutive sweeps). Below the threshold the finding
+      stays fully in the autonomous loop and is re-attempted every sweep,
+      because an upstream patch (ADR-004 C-004-005) or a newly-buildable
+      candidate may resolve it without a human ever being involved. The
+      hard-stop therefore catches only what KEEPS falling out — the
+      persistent, genuinely-stuck residual — not transient one-sweep
+      failures. This refines C-006-004: ladder-exhaustion is necessary
+      but no longer sufficient for human handoff; persistence is required.
+    check: |
+      on each sweep:
+        for f in fallen_out(sweep): f.consecutive_fallouts += 1
+        for f in resolved_or_new_GO(sweep): f.consecutive_fallouts = 0
+      human_hard_stop(f) iff f.consecutive_fallouts >= PERSISTENCE_THRESHOLD
+    violation: NO-GO
+    adr: ADR-006
+
+rationale: |
+  The check system and autonomy were only ever in conflict under a
+  one-rung loop, where "this fix failed verification" had nowhere to go
+  but a person. A multi-rung loop dissolves the conflict: the gate's
+  caution becomes a routing signal, not a stop signal. Safest-first
+  ordering means the system reaches for the least-disruptive verified
+  fix it can find, and only escalates risk when it must.
+
+  C-006-003 is the crux of "rigorous AND autonomous." A bare
+  major-version jump with no tests behind it is exactly the blind merge
+  ADR-005 exists to stop — so it is never auto-merged. But the same
+  jump with a passing test suite is not blind: the repo demonstrably
+  still works. Letting strong behavioral evidence (BUILD+TEST PASS)
+  clear a SURFACE flag — and ONLY a SURFACE flag, ONLY at the terminal
+  rung, ONLY with provenance recorded — keeps the system autonomous on
+  the hard cases without ever merging something unproven. SURFACE stays
+  a real gate for the test-less repos where it is the only signal; it
+  yields to evidence where evidence exists.
+
+  Making human handoff the autonomously-reached terminal fallback —
+  rather than the default disposition of the first NO-GO — preserves
+  both properties at once: every merge is functionally verified (ADR-005)
+  and the system runs without a human in the loop except where a fix
+  genuinely cannot be verified to work (ADR-006). That residual human
+  case is the one that actually warrants a human.
+
+consequences:
+  positive:
+    - Verification and autonomy coexist — the gate routes, it does not stop
+    - The least-disruptive verified fix is preferred; risk escalates only as needed
+    - Major/0.x bumps stay autonomous when behavioral evidence backs them
+    - Unproven major bumps are still never auto-merged — SURFACE holds where it is the only signal
+    - Human attention is spent only on findings no candidate can verify
+    - Full per-rung verdict history makes every autonomous decision auditable
+  risks:
+    - risk: "The escalation ladder multiplies verification runs (cost / latency)"
+      mitigation: "Safest rung usually verifies GO first and halts; cheap BUILD/SURFACE dimensions short-circuit before TEST/SMOKE; bounded by C-006-005"
+    - risk: "Test-backed SURFACE override merges a major bump that tests did not exercise"
+      mitigation: "Override requires executed-and-passing TEST (not green-by-absence); confined to the terminal rung; recorded with surface_override provenance for audit and rollback"
+    - risk: "A finding with only an unverifiable fix loops then parks, feeling like no progress"
+      mitigation: "Parking IS an ADR-004 terminal state (VEX affected + action_statement); re-entrancy (C-006-006) auto-fixes it once a safer/verified candidate appears"
+
+superseded_by: null
