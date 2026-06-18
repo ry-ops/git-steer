@@ -20,8 +20,7 @@
  * Usage: node scripts/escalate-remediate.mjs <owner/repo> [--threshold N]
  */
 
-import keytar from 'keytar';
-import { App } from 'octokit';
+import { App, Octokit } from 'octokit';
 import { validateVexInput, vexId, makeVexLedgerEntry } from '../dist/core/vex.js';
 import { appendJsonl } from './lib/state-jsonl.mjs';
 
@@ -38,11 +37,18 @@ const WORKER = 'security-fix-worker.yml';
 const STEER = { owner: 'ry-ops', repo: 'git-steer' };
 const STATE_REPO = 'git-steer-state';
 
-const appId = await keytar.getPassword('git-steer', 'git-steer-app-id');
-const privateKey = await keytar.getPassword('git-steer', 'git-steer-private-key');
-const installationId = await keytar.getPassword('git-steer', 'git-steer-installation-id');
-const app = new App({ appId, privateKey });
-const octokit = await app.getInstallationOctokit(Number(installationId));
+// Dual auth: GH_TOKEN in CI (heartbeat), macOS Keychain (keytar) locally.
+let octokit;
+if (process.env.GH_TOKEN) {
+  octokit = new Octokit({ auth: process.env.GH_TOKEN });
+} else {
+  const keytar = (await import('keytar')).default;
+  const appId = await keytar.getPassword('git-steer', 'git-steer-app-id');
+  const privateKey = await keytar.getPassword('git-steer', 'git-steer-private-key');
+  const installationId = await keytar.getPassword('git-steer', 'git-steer-installation-id');
+  const app = new App({ appId, privateKey });
+  octokit = await app.getInstallationOctokit(Number(installationId));
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

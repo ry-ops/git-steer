@@ -141,40 +141,30 @@ jobs:
           echo "total_alerts=$TOTAL_ALERTS" >> $GITHUB_OUTPUT
           echo "repos_with_alerts=$REPOS_WITH_ALERTS" >> $GITHUB_OUTPUT
 
-      - name: Auto-trigger security sweep for critical alerts
+      # ADR-006: for each managed repo with open Dependabot alerts, run the
+      # escalation ladder. The gated worker (ADR-005) merges every scope that
+      # verifies GO and holds the residual; the consecutive-fall-out counter is
+      # tracked in git-steer-state, and the human hard-stop (VEX affected +
+      # escalation:hard-stop) fires ONLY at the persistence threshold of 3
+      # consecutive sweeps (C-006-008). This is the standing, self-driving loop.
+      - name: ADR-006 escalation sweep
         if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          CRITICAL_REPOS=""
-
+          echo "## ADR-006 Escalation Sweep"
+          ESCALATED=0
           while IFS= read -r repo; do
             [ -z "$repo" ] && continue
-
-            CRITICAL=$(gh api "repos/$repo/dependabot/alerts" \
-              --jq '[.[] | select(.state == "open" and .security_advisory.severity == "critical")] | length' 2>/dev/null || echo "0")
-
-            if [ "$CRITICAL" -gt 0 ]; then
-              OWNER=$(echo "$repo" | cut -d'/' -f1)
-              REPO_NAME=$(echo "$repo" | cut -d'/' -f2)
-
-              if [ -n "$CRITICAL_REPOS" ]; then
-                CRITICAL_REPOS="${CRITICAL_REPOS},"
-              fi
-              CRITICAL_REPOS="${CRITICAL_REPOS}{\"owner\":\"$OWNER\",\"repo\":\"$REPO_NAME\",\"issueNumber\":0}"
-            fi
+            ALERTS=$(gh api "repos/$repo/dependabot/alerts" \
+              --jq '[.[] | select(.state == "open")] | length' 2>/dev/null || echo "0")
+            [ "${ALERTS:-0}" -gt 0 ] 2>/dev/null || continue
+            echo "::group::escalate $repo ($ALERTS open)"
+            node scripts/escalate-remediate.mjs "$repo" || echo "  (escalation error for $repo — non-fatal)"
+            echo "::endgroup::"
+            ESCALATED=$((ESCALATED + 1))
           done <<< "${{ steps.repos.outputs.repos }}"
-
-          if [ -n "$CRITICAL_REPOS" ]; then
-            echo "Critical alerts found, dispatching security sweep..."
-            gh workflow run security-sweep.yml \
-              -f "target_repos=[${CRITICAL_REPOS}]" \
-              -f severity=critical \
-              -f job_id="heartbeat-sweep-$(date +%Y%m%d)" \
-              -f dry_run=false
-          else
-            echo "No critical alerts found, skipping auto-sweep."
-          fi
+          echo "Escalation ladder run on $ESCALATED repo(s) with open alerts."
 
       - name: Follow up on security PRs
         if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit'
