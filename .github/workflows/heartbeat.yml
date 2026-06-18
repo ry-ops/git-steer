@@ -65,14 +65,21 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          # Fetch managed repos from git-steer-state
+          # Parse managed-repos.yaml (owner/name pairs) into full "owner/name"
+          # lines via a real YAML parse — the old grep|sed produced "owner: ry-ops".
           REPOS=$(gh api repos/ry-ops/git-steer-state/contents/config/managed-repos.yaml \
-            --jq '.content' | base64 -d | grep -E '^\s+-\s+' | sed 's/.*- //' || echo "")
+            --jq '.content' | base64 -d | node -e "
+              const yaml = require('yaml');
+              const fs = require('fs');
+              const doc = yaml.parse(fs.readFileSync(0, 'utf8')) || {};
+              for (const r of (doc.repos || [])) if (r && r.owner && r.name) console.log(r.owner + '/' + r.name);
+            " 2>/dev/null || echo "")
 
           if [ -z "$REPOS" ]; then
             # Fall back to installation repos
             REPOS=$(gh api /installation/repositories --jq '.repositories[].full_name')
           fi
+          echo "Managed repos: $(echo "$REPOS" | grep -c . ) found"
 
           echo "repos<<EOF" >> $GITHUB_OUTPUT
           echo "$REPOS" >> $GITHUB_OUTPUT
