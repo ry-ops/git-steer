@@ -167,6 +167,21 @@ async function loadCveQueue() {
   }
 }
 
+// ===== Load ADR-006 escalation state (state/cache.json `_escalation`) =====
+async function loadEscalation() {
+  try {
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/contents/{path}',
+      { owner: STATE_OWNER, repo: STATE_REPO, path: 'state/cache.json' }
+    );
+    const content = Buffer.from(data.content, 'base64').toString('utf8');
+    const cache = JSON.parse(content);
+    return (cache && cache._escalation) || {};
+  } catch {
+    return {};
+  }
+}
+
 // ===== Load existing quality results =====
 async function loadQuality() {
   try {
@@ -246,6 +261,110 @@ function buildMetrics(scanResults, rfcs, repos, timeline) {
   };
 }
 
+// ===== Classify a repo's ADR-006 escalation posture =====
+function classifyEscalation(entry, threshold) {
+  if (!entry) return { status: 'clear', consecutiveFallouts: 0, lastFloor: null, lastVerdict: null };
+  const fallouts = entry.consecutive_fallouts || 0;
+  let status;
+  if (fallouts >= threshold) status = 'hard-stop';   // human-held: ladder exhausted N sweeps running
+  else if (fallouts > 0) status = 'loop';            // still being auto-retried each sweep
+  else status = 'clear';
+  return {
+    status,
+    consecutiveFallouts: fallouts,
+    lastFloor: entry.last_floor ?? null,
+    lastVerdict: entry.last_verdict ?? null,
+  };
+}
+
+// ===== Build the machine-readable fleet status artifact =====
+// One small JSON so "what's the status of my repos?" is a single cheap fetch,
+// not a live fleet rescan. Mirrors what the heartbeat already computed.
+function buildStatus(scanResults, rfcs, repos, metrics, escalation, threshold) {
+  const severityOrder = ['critical', 'high', 'medium', 'low'];
+
+  // Union of managed repos and any repo carrying escalation state (so a
+  // hard-stop is never hidden just because the repo dropped off the list).
+  const repoNames = new Set(repos.map((r) => r.fullName));
+  for (const k of Object.keys(escalation)) repoNames.add(k);
+
+  const openBySeverity = { critical: 0, high: 0, medium: 0, low: 0 };
+  const perRepo = [];
+
+  for (const fullName of repoNames) {
+    const alerts = scanResults[fullName] || [];
+    const bySeverity = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const a of alerts) {
+      if (bySeverity[a.severity] != null) {
+        bySeverity[a.severity]++;
+        openBySeverity[a.severity]++;
+      }
+    }
+    const esc = classifyEscalation(escalation[fullName], threshold);
+    perRepo.push({
+      repo: fullName,
+      openAlerts: alerts.length,
+      bySeverity,
+      fixed: metrics.byRepo[fullName]?.fixed || 0,
+      escalation: esc.status,
+      consecutiveFallouts: esc.consecutiveFallouts,
+      lastFloor: esc.lastFloor,
+      lastVerdict: esc.lastVerdict,
+    });
+  }
+
+  // Surface worst-first: most open alerts, then severity weight.
+  const sevWeight = (r) =>
+    r.bySeverity.critical * 1000 + r.bySeverity.high * 100 + r.bySeverity.medium * 10 + r.bySeverity.low;
+  perRepo.sort((a, b) => b.openAlerts - a.openAlerts || sevWeight(b) - sevWeight(a));
+
+  const totalOpenAlerts = perRepo.reduce((s, r) => s + r.openAlerts, 0);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    dashboardUrl: `https://${STATE_OWNER}.github.io/${STATE_REPO}/`,
+    fleet: {
+      totalRepos: repos.length,
+      reposWithOpenAlerts: perRepo.filter((r) => r.openAlerts > 0).length,
+      totalOpenAlerts,
+      openBySeverity,
+      fixedCves: metrics.fixedCves,
+      fixRate: metrics.fixRate,
+      avgMttrHours: metrics.avgMttr,
+    },
+    escalation: {
+      threshold,
+      hardStop: perRepo.filter((r) => r.escalation === 'hard-stop').map((r) => r.repo),
+      inLoop: perRepo.filter((r) => r.escalation === 'loop').map((r) => r.repo),
+    },
+    repos: perRepo,
+  };
+}
+
+// ===== Deploy status.json to gh-pages (public, single unauthenticated fetch) =====
+async function deployStatus(status) {
+  let sha;
+  try {
+    const { data } = await octokit.request(
+      'GET /repos/{owner}/{repo}/contents/{path}',
+      { owner: STATE_OWNER, repo: STATE_REPO, path: 'status.json', ref: 'gh-pages' }
+    );
+    sha = data.sha;
+  } catch {
+    // File doesn't exist yet
+  }
+
+  await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+    owner: STATE_OWNER,
+    repo: STATE_REPO,
+    path: 'status.json',
+    message: `Update fleet status ${status.generatedAt}`,
+    content: Buffer.from(JSON.stringify(status, null, 2)).toString('base64'),
+    sha,
+    branch: 'gh-pages',
+  });
+}
+
 // ===== Deploy dashboard to gh-pages =====
 async function deployDashboard(html) {
   // Get current file SHA
@@ -290,7 +409,8 @@ async function main() {
   const quality = await loadQuality();
   const timelineHistory = await loadTimeline();
   const cveQueue = await loadCveQueue();
-  console.log(`Loaded ${rfcs.length} RFCs, ${quality.length} quality entries, ${timelineHistory.length} timeline entries, ${cveQueue.length} CVE queue entries\n`);
+  const escalation = await loadEscalation();
+  console.log(`Loaded ${rfcs.length} RFCs, ${quality.length} quality entries, ${timelineHistory.length} timeline entries, ${cveQueue.length} CVE queue entries, ${Object.keys(escalation).length} escalation records\n`);
 
   console.log('Building metrics...');
   // Count current open/fixed for today's snapshot
@@ -307,6 +427,19 @@ async function main() {
   await saveTimeline(timeline);
 
   const metrics = buildMetrics(scanResults, rfcs, repos, timeline);
+
+  // Build + publish the machine-readable fleet status BEFORE the dashboard's
+  // queue-merge mutates `metrics` below — keeps status.json based on actual
+  // open Dependabot alerts + RFC fixes, the canonical "is my fleet clean" view.
+  const ESCALATION_THRESHOLD = Number(process.env.ESCALATION_THRESHOLD) || 3;
+  const status = buildStatus(scanResults, rfcs, repos, metrics, escalation, ESCALATION_THRESHOLD);
+  console.log(
+    `Fleet status: ${status.fleet.totalOpenAlerts} open alerts across ${status.fleet.reposWithOpenAlerts}/${status.fleet.totalRepos} repos ` +
+    `(hard-stop: ${status.escalation.hardStop.length}, in-loop: ${status.escalation.inLoop.length})`
+  );
+  console.log('Publishing status.json to gh-pages...');
+  await deployStatus(status);
+  console.log(`Published https://${STATE_OWNER}.github.io/${STATE_REPO}/status.json\n`);
 
   // Convert scan results to RFC-like format for the dashboard
   const dashRfcs = rfcs.length > 0 ? rfcs : Object.entries(scanResults).map(([repo, alerts]) => ({
