@@ -13,6 +13,7 @@
  */
 
 import { Octokit } from 'octokit';
+import { parse as parseYaml } from 'yaml';
 import { generateDashboardHtml } from '../dist/dashboard/templates.js';
 
 const token = process.env.GH_TOKEN;
@@ -34,14 +35,26 @@ async function getManagedRepos() {
       { owner: STATE_OWNER, repo: STATE_REPO, path: 'config/managed-repos.yaml' }
     );
     const content = Buffer.from(data.content, 'base64').toString('utf8');
-    const repos = content.match(/^\s*-\s+(.+)$/gm);
-    if (repos) {
-      return repos.map((r) => {
-        const name = r.replace(/^\s*-\s+/, '').trim();
-        const [owner, repo] = name.split('/');
-        return { owner, name: repo, fullName: name };
-      });
-    }
+    // managed-repos.yaml is `repos: [{ owner, name, policies }]`. Parse it as
+    // real YAML — the old `/^\s*-\s+(.+)$/` regex captured `owner: ry-ops` off
+    // every entry, collapsing the whole fleet to one bogus name so the scan saw
+    // zero alerts everywhere (falsely-clean dashboard). Mirrors the #77 fix to
+    // heartbeat.yml. Also tolerates a legacy flat `- owner/name` list.
+    const doc = parseYaml(content) || {};
+    const entries = Array.isArray(doc) ? doc : (doc.repos || []);
+    const repos = entries
+      .map((r) => {
+        if (typeof r === 'string') {
+          const [owner, name] = r.split('/');
+          return owner && name ? { owner, name, fullName: `${owner}/${name}` } : null;
+        }
+        if (r && r.owner && r.name) {
+          return { owner: r.owner, name: r.name, fullName: `${r.owner}/${r.name}` };
+        }
+        return null;
+      })
+      .filter(Boolean);
+    if (repos.length > 0) return repos;
   } catch {
     // fallback
   }
