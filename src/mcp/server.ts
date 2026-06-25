@@ -89,22 +89,10 @@ const FABRIC_CVE_TOOLS: Tool[] = [
       required: ['cve_id'],
     },
   },
-  {
-    name: 'fabric_cve_triage',
-    description: '[git-fabric] Process pending CVE queue entries: apply severity policy and open PRs. CRITICAL = confirmed PR, HIGH = draft PR.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        auto_pr_threshold: {
-          type: 'string',
-          enum: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'],
-          default: 'HIGH',
-        },
-        max_prs_per_run: { type: 'number', default: 5 },
-        dry_run: { type: 'boolean', default: false },
-      },
-    },
-  },
+  // fabric_cve_triage RETIRED (ADR-007): CVE remediation now flows exclusively
+  // through the single gated security-fix-worker. The Fabric path opened PRs
+  // without the ADR-005 functional-integrity gate. Discovery tools below
+  // (scan/enrich/queue/stats/compact) remain — they feed the dashboard.
   {
     name: 'fabric_cve_queue',
     description: '[git-fabric] List CVE queue entries filtered by status and severity.',
@@ -332,7 +320,6 @@ export class MCPServer {
       // ========== Fabric CVE Tools (routed via gateway) ==========
       case 'fabric_cve_scan':
       case 'fabric_cve_enrich':
-      case 'fabric_cve_triage':
       case 'fabric_cve_queue':
       case 'fabric_cve_stats':
       case 'fabric_cve_compact': {
@@ -343,7 +330,6 @@ export class MCPServer {
         const TOOL_MAP: Record<string, string> = {
           'fabric_cve_scan': 'cve_scan',
           'fabric_cve_enrich': 'cve_enrich',
-          'fabric_cve_triage': 'cve_triage',
           'fabric_cve_queue': 'cve_queue_list',
           'fabric_cve_stats': 'cve_queue_stats',
           'fabric_cve_compact': 'cve_compact',

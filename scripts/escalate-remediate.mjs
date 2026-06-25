@@ -25,7 +25,13 @@ import { validateVexInput, vexId, makeVexLedgerEntry } from '../dist/core/vex.js
 import { appendJsonl } from './lib/state-jsonl.mjs';
 
 const target = process.argv[2];
-if (!target || !target.includes('/')) {
+// Strict owner/repo shape: bounds the charset (GitHub names are
+// [A-Za-z0-9._-]) so `target` can never carry a path-traversal or a
+// prototype-polluting key (__proto__/constructor/prototype) into the
+// `esc[target]` / `_vex[...]` object writes below.
+const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+const DANGEROUS = new Set(['__proto__', 'constructor', 'prototype']);
+if (!target || !REPO_RE.test(target) || target.split('/').some((s) => DANGEROUS.has(s))) {
   console.error('Usage: node scripts/escalate-remediate.mjs <owner/repo> [--threshold N]');
   process.exit(2);
 }
@@ -101,6 +107,40 @@ for (const sev of LADDER) {
   if (r.outcome === 'error') { floor = r; break; }
 }
 
+// ── genuine-clear check: a no-op ladder with deps still open is NOT cleared ──
+let remaining = 0;
+try {
+  remaining = (await octokit.paginate('GET /repos/{owner}/{repo}/dependabot/alerts', { owner: tOwner, repo: tRepo, state: 'open', per_page: 100 })).length;
+} catch { /* alerts unreadable */ }
+// Merged/skipped every rung but deps remain => silent fall-out (transitive /
+// unfixable by the bump worker). Count it toward the hard-stop; do NOT reset.
+if (!floor && remaining > 0) {
+  floor = { sev: 'no-op', verdict: `worker no-op; ${remaining} dep(s) remain — likely transitive, needs lock-regen/manual` };
+  console.log(`\n  ⚠ no merges but ${remaining} dep(s) remain — counting as a fall-out, not a clear`);
+}
+
+// ── visibility: every fall-out leaves a visible GitHub artifact ───────
+// Held rungs already produced a PR. A no-op fall-out has none, so ensure an
+// (idempotent) tracking issue exists — nothing is silently un-remediated.
+async function ensureTrackingIssue(falloutCount, nowStr) {
+  const title = `[security] ${tRepo}: dependency residual stuck in the ADR-006 loop`;
+  let issue = (await octokit.rest.issues.listForRepo({ owner: tOwner, repo: tRepo, state: 'open', per_page: 100 })).data
+    .find((i) => i.title === title && !i.pull_request);
+  const sweepNote = `Sweep ${nowStr.slice(0, 10)}: **${remaining}** dep(s) open · floor \`${floor.sev}\` · fall-out ${falloutCount}/${THRESHOLD}.`;
+  if (issue) {
+    try { await octokit.rest.issues.createComment({ owner: tOwner, repo: tRepo, issue_number: issue.number, body: sweepNote }); } catch { /* */ }
+    return issue.number;
+  }
+  try {
+    issue = (await octokit.rest.issues.create({
+      owner: tOwner, repo: tRepo, title,
+      body: `Autonomous remediation (ADR-006) ran, but the dependency-bump worker made **no mergeable change** — the residual is likely transitive and needs lock-regen or a manual fix. This issue tracks the repo while it stays in the escalation loop; it hard-stops to human review after ${THRESHOLD} consecutive sweeps.\n\n${sweepNote}`,
+      labels: ['security', 'automated'],
+    })).data;
+    return issue.number;
+  } catch { return null; }
+}
+
 // ── persistence (ADR-006 C-006-008) ───────────────────────────────────
 const { data: file } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', { owner: STEER.owner, repo: STATE_REPO, path: 'state/cache.json' });
 const cache = JSON.parse(Buffer.from(file.content, 'base64').toString('utf-8'));
@@ -109,16 +149,20 @@ const now = new Date().toISOString();
 const prev = esc[target]?.consecutive_fallouts ?? 0;
 
 let hardStop = false;
+let trackingIssue = null;
 if (floor) {
   const count = prev + 1;
-  esc[target] = { consecutive_fallouts: count, last_floor: floor.sev, last_verdict: floor.verdict ?? floor.detail, updated: now };
+  // a no-op fall-out has no fix PR -> open/refresh a visible tracking issue
+  if (!floor.pr) { try { trackingIssue = await ensureTrackingIssue(count, now); } catch { /* */ } }
+  esc[target] = { consecutive_fallouts: count, last_floor: floor.sev, last_verdict: floor.verdict ?? floor.detail, remaining, artifact: floor.pr ? `PR#${floor.pr}` : trackingIssue ? `issue#${trackingIssue}` : null, updated: now };
   hardStop = count >= THRESHOLD;
-  console.log(`\n  floor: ${floor.sev} (${floor.verdict ?? floor.detail}) | consecutive fall-outs: ${count}/${THRESHOLD}`);
+  const art = floor.pr ? `PR#${floor.pr}` : trackingIssue ? `issue #${trackingIssue}` : '(no artifact)';
+  console.log(`\n  floor: ${floor.sev} (${floor.verdict ?? floor.detail}) | fall-outs: ${count}/${THRESHOLD} | ${art}`);
   if (hardStop) console.log(`  ⛔ PERSISTENCE THRESHOLD REACHED — enforcing human hard-stop`);
   else console.log(`  ↻ below threshold — stays in the loop, re-attempted next sweep`);
 } else {
-  esc[target] = { consecutive_fallouts: 0, last_floor: null, cleared_at: now, updated: now };
-  console.log(`\n  ✅ ladder fully cleared — counter reset to 0`);
+  esc[target] = { consecutive_fallouts: 0, last_floor: null, remaining: 0, cleared_at: now, updated: now };
+  console.log(`\n  ✅ genuinely cleared (0 deps remain) — counter reset to 0`);
 }
 
 cache._escalation = esc;
@@ -129,34 +173,34 @@ await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
   sha: file.sha,
 });
 
-// ── enforce hard-stop at threshold: label + VEX affected ──────────────
-if (hardStop && floor?.pr) {
-  try {
-    await octokit.rest.issues.addLabels({ owner: tOwner, repo: tRepo, issue_number: floor.pr, labels: ['escalation:hard-stop'] });
-  } catch { /* label may not exist; best-effort */ }
+// ── enforce hard-stop at threshold: VEX affected + label PR/issue ─────
+if (hardStop) {
+  const num = floor.pr ?? trackingIssue;
+  const ref = floor.pr ? `PR#${floor.pr}` : trackingIssue ? `issue #${trackingIssue}` : 'no artifact';
+  if (num) { try { await octokit.rest.issues.addLabels({ owner: tOwner, repo: tRepo, issue_number: num, labels: ['escalation:hard-stop'] }); } catch { /* */ } }
   const entry = {
     cve_id: `escalation/${target}#fix-${floor.sev}`,
     repo: target,
     product_purl: `pkg:github/${target}`,
     status: 'affected',
-    action_statement: `Autonomous remediation exhausted the ADR-006 ladder for ${THRESHOLD} consecutive sweeps; floor=${floor.sev} verdict=${floor.verdict}. Held for human review at PR#${floor.pr}.`,
+    action_statement: `Autonomous remediation exhausted the ADR-006 ladder for ${THRESHOLD}+ consecutive sweeps; floor=${floor.sev}, ${remaining} dep(s) remain (${floor.verdict}). Held for human review at ${ref}.`,
     detail: `ADR-006 C-006-008 hard-stop.`,
     created_at: now,
     updated_by: 'cli:escalate-remediate',
   };
-  const err = validateVexInput(entry);
-  if (!err) {
-    const v = cache._vex ?? {};
-    v[vexId(target, entry.cve_id)] = entry;
-    cache._vex = v;
+  if (!validateVexInput(entry)) {
+    const fresh = (await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', { owner: STEER.owner, repo: STATE_REPO, path: 'state/cache.json' })).data;
+    const c2 = JSON.parse(Buffer.from(fresh.content, 'base64').toString('utf-8'));
+    c2._vex = c2._vex ?? {};
+    c2._vex[vexId(target, entry.cve_id)] = entry;
     await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
       owner: STEER.owner, repo: STATE_REPO, path: 'state/cache.json',
       message: `vex: hard-stop affected for ${target} (ADR-006 C-006-008)`,
-      content: Buffer.from(JSON.stringify(cache, null, 2)).toString('base64'),
-      sha: (await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', { owner: STEER.owner, repo: STATE_REPO, path: 'state/cache.json' })).data.sha,
+      content: Buffer.from(JSON.stringify(c2, null, 2)).toString('base64'),
+      sha: fresh.sha,
     });
     await appendJsonl(octokit, STEER.owner, STATE_REPO, 'state/vex.jsonl', [makeVexLedgerEntry(entry, null, 'cli:escalate-remediate', now)]);
-    console.log(`  VEX affected written + escalation:hard-stop labeled on PR#${floor.pr}`);
+    console.log(`  VEX affected written + escalation:hard-stop on ${ref}`);
   }
 }
 

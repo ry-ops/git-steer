@@ -19,7 +19,6 @@ export const DESTRUCTIVE_TOOLS: ReadonlySet<string> = new Set([
 
 /** Tools that default to dry_run=true when not explicitly set. */
 export const DRY_RUN_DEFAULT_TOOLS: ReadonlySet<string> = new Set([
-  'security_sweep',
   'security_fix_pr',
   'branch_reap',
   'oomkill_remediate',

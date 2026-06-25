@@ -1,0 +1,280 @@
+# ══════════════════════════════════════════════════════════════
+# ADR-007 — Autonomous Remediation Control Plane
+# One gated path, one shared gate, one source of truth — driven by
+# events and reconciled by a sweep
+# ══════════════════════════════════════════════════════════════
+
+metadata:
+  id: ADR-007
+  title: "Autonomous Remediation Control Plane"
+  status: ACCEPTED
+  date: "2026-06-24"
+  author: "Ryan // ry-ops.dev"
+  supersedes: null
+  superseded_by: null
+  amends:
+    - ADR-005   # finally satisfies C-005-005 (one gate) and C-005-006 (verdict provenance)
+    - ADR-006   # hardens C-006-008 persistence against silent clears
+  affects:
+    - ry-ops/git-steer
+    - ry-ops/git-steer-state
+    - all managed repos
+
+context: |
+  ADR-002..006 each added a correct idea — zero-footprint workers, a CVE
+  doctrine, a functional-integrity gate, an autonomous escalation ladder.
+  But they accreted as separate mechanisms rather than one system, and the
+  implementation drifted from the design. An end-to-end audit of the live
+  fleet (43 repos) found the autonomous loop had effectively STALLED while
+  reporting success:
+
+    1. OBSERVE was blind. The dashboard/status generator parsed
+       managed-repos.yaml with a regex that collapsed all 43 repos to one
+       bogus name, so the fleet scan reported 0 open alerts / 100% fixed
+       while 234 alerts (8 critical) sat open. A falsely-clean scoreboard
+       masked every failure below it.
+
+    2. REMEDIATE was fragmented and partly destructive. THREE remediation
+       paths existed — security-fix-worker (gated), security-sweep-worker
+       (NO gate — merged unverified), and the Fabric CVE gateway (opaque) —
+       so "how a CVE gets fixed" had three different answers with three
+       safety levels. The npm path ran `rm -f package-lock.json && npm audit
+       fix`, which failed silently and committed the lockfile DELETION,
+       fixing nothing.
+
+    3. VERIFY could not verify real repos. The ADR-005 gate probed only the
+       repository ROOT for a manifest, so every monorepo (frontend/ +
+       backend/, packages/*, python-sdk/, …) exercised nothing and was
+       forced to GO-UNVERIFIED → held for a human forever. ADR-005 C-005-005
+       ("implemented once") was violated: the gate was inlined in one path,
+       duplicated in a reusable workflow nothing called, and absent in
+       another path.
+
+    4. ESCALATE accumulated invisibly. Fall-out counters climbed past the
+       hard-stop threshold (a repo at 9 vs. threshold 3) with the escalation
+       state able to silently "clear" on a no-op sweep, and verdict
+       provenance (C-005-006) was a literal TODO — so no merge decision was
+       auditable.
+
+  The defects are not independent bugs; they are the symptom of having no
+  control PLANE — no single place that observes desired-vs-actual fleet
+  state and drives one well-defined remediation path to close the gap.
+
+decision: |
+  Treat fleet remediation as ONE closed-loop control plane with a single
+  implementation of each stage:
+
+    OBSERVE  — managed-repos.yaml is parsed as real YAML; the fleet scan
+               paginates; a machine-readable status.json (per-repo open
+               counts, severity rollup, escalation posture) is published to
+               git-steer-state each sweep and is THE source of truth for
+               desired-vs-actual state. (Cheap to read; no live re-scan.)
+
+    REMEDIATE — exactly ONE remediation worker: security-fix-worker, a
+               three-job pipeline (fix → gate → disposition). Dependency
+               bumps are non-destructive (lockfiles are updated in place and
+               a deleted lockfile is restored, never committed). The
+               security-sweep-worker and the Fabric CVE remediation path
+               (fabric_cve_triage) are RETIRED.
+
+    VERIFY   — exactly ONE shared, monorepo-aware functional-integrity gate
+               (verify-functional-form, backed by scripts/gate/run-gate.mjs),
+               invoked by the worker via workflow_call. It discovers every
+               package in the tree and gates each, satisfying ADR-005
+               C-005-005 at last.
+
+    ESCALATE — the ADR-006 ladder, with no silent clears: a no-op sweep that
+               leaves dependencies open counts as a fall-out and leaves a
+               visible tracking artifact; every gate verdict is persisted to
+               state/verdicts.jsonl (C-005-006), making each merge decision
+               auditable.
+
+    TRIGGER  — two and only two: the heartbeat (cron) is the reconciliation
+               sweep; a repository_dispatch (cve-detected), fired by the
+               git-steer App's dependabot_alert webhook, is the low-latency
+               path so a CRITICAL does not wait for the daily tick.
+
+constraints:
+  - id: C-007-001
+    type: HARD
+    scope: single-remediation-path
+    rule: >
+      There is exactly ONE autonomous CVE remediation worker
+      (security-fix-worker). No other workflow, MCP tool, or gateway path
+      may apply a dependency fix and merge it. The security-sweep-worker
+      workflow and the Fabric CVE remediation tool (fabric_cve_triage / MCP)
+      are retired; Fabric CVE tools that remain (scan/enrich/queue/stats/
+      compact) are READ-ONLY discovery feeding OBSERVE and MUST NOT open or
+      merge PRs.
+    check: |
+      count(workflows that fix-and-merge dependencies) == 1
+      && retired('security-sweep-worker.yml')
+      && 'fabric_cve_triage' not in advertised_tools
+    violation: NO-GO
+    adr: ADR-007
+
+  - id: C-007-002
+    type: HARD
+    scope: one-shared-monorepo-aware-gate
+    rule: >
+      Every remediation merge is gated by the SINGLE reusable
+      functional-integrity gate (verify-functional-form, run-gate.mjs),
+      invoked via workflow_call — never re-implemented inline. The gate
+      MUST discover manifests recursively (npm/go/python), excluding
+      node_modules/vendor, and run BUILD/TEST/SMOKE per package, rolling each
+      dimension up across packages (any FAIL → FAIL; else any PASS → PASS;
+      else NOT_APPLICABLE). This satisfies ADR-005 C-005-005. Verdict
+      aggregation mirrors src/core/verdict.ts.
+    check: |
+      worker.gate == uses('verify-functional-form.yml')
+      && gate.discovers_subdirectory_manifests
+      && no_inlined_copy_of_gate_logic
+    violation: NO-GO
+    adr: ADR-007
+
+  - id: C-007-003
+    type: HARD
+    scope: non-destructive-fix
+    rule: >
+      A remediation MUST NOT delete a lockfile. npm fixes update the lockfile
+      in place (npm install --package-lock-only / npm audit fix
+      --package-lock-only); any lockfile that ends up deleted in the working
+      tree is restored before commit. A change whose only effect is to remove
+      a lockfile is not a fix and MUST NOT be committed or merged.
+    check: |
+      committed_diff has no deleted (package-lock.json|uv.lock|go.sum|yarn.lock)
+    violation: NO-GO
+    adr: ADR-007
+
+  - id: C-007-004
+    type: HARD
+    scope: verdict-provenance
+    rule: >
+      Every gate run appends a provenance record
+      {repo, pr, branch, verdict, dimensions, packages, ts} to
+      git-steer-state/state/verdicts.jsonl. This discharges the ADR-005
+      C-005-006 TODO: every autonomous merge-or-hold decision is auditable
+      after the fact, and the dashboard can distinguish a GO merge from a
+      GO-UNVERIFIED hold.
+    check: |
+      on(gate.complete): append(state/verdicts.jsonl, verdict_record)
+    violation: WARN
+    adr: ADR-007
+
+  - id: C-007-005
+    type: HARD
+    scope: no-silent-clear
+    rule: >
+      The ADR-006 fall-out counter (C-006-008) is reset ONLY on a GENUINE
+      clear: zero open dependency alerts remain for the repo. A sweep in
+      which every rung was skipped/held but alerts remain is a fall-out, not
+      a clear, and MUST leave a visible GitHub artifact (the held PR, or an
+      idempotent tracking issue when no PR exists). No finding is silently
+      un-remediated.
+    check: |
+      reset(counter) implies open_alerts(repo) == 0
+      && fallout_without_pr implies tracking_issue_exists
+    violation: NO-GO
+    adr: ADR-007
+
+  - id: C-007-006
+    type: HARD
+    scope: observability-is-source-of-truth
+    rule: >
+      managed-repos.yaml is parsed as structured YAML (never line-regex);
+      the fleet alert scan paginates (no per-repo page cap); and a
+      machine-readable status.json — totalRepos, reposWithOpenAlerts,
+      open-by-severity, per-repo open counts and escalation posture
+      (clear/loop/hard-stop) — is published to git-steer-state every sweep.
+      Asking "what is the fleet's state?" is a single read of that artifact,
+      never a live re-scan. A control plane cannot drive on numbers it cannot
+      trust.
+    check: |
+      parse(managed-repos.yaml) via yaml AND scan.paginated
+      AND publish(status.json) each sweep
+    violation: NO-GO
+    adr: ADR-007
+
+  - id: C-007-007
+    type: HARD
+    scope: dual-trigger
+    rule: >
+      Remediation has exactly two triggers: (a) the heartbeat cron, the
+      standing reconciliation sweep that drives status.json and the
+      escalation ladder fleet-wide; and (b) a repository_dispatch
+      (event_type: cve-detected) carrying {repo}, the low-latency path that
+      runs the ladder for one repo immediately. (b) is fired by the git-steer
+      App's dependabot_alert webhook receiver — a running service, since
+      GitHub Dependabot does not natively trigger workflows. Interactive
+      MCP/LLM sessions are NOT a remediation trigger (they would put a paid
+      model in the control loop); they may read status.json and act only on
+      the bounded hard-stop residual.
+    check: |
+      triggers(remediation) == {heartbeat.schedule, repository_dispatch:cve-detected}
+      && interactive_session not in triggers(remediation)
+    violation: NO-GO
+    adr: ADR-007
+
+  - id: C-007-008
+    type: SOFT
+    scope: gateway-physical-removal
+    rule: >
+      Retiring the Fabric remediation path (C-007-001) is enforced at the
+      autonomous surface in this ADR (sweep-worker deleted; fabric_cve_triage
+      unadvertised + unrouted). The PHYSICAL removal of the remaining Fabric
+      gateway scaffolding (src/fabric/*, the web dashboard's cve_triage route
+      in src/web/routes/cve.ts, and the @git-fabric private deps) is deferred
+      to a tracked follow-up, because that scaffolding still powers READ-ONLY
+      discovery (cve_scan/queue/stats feeding OBSERVE) and the web layer, and
+      its excision needs its own PR with a full test pass. Until then the web
+      cve_triage route MUST be treated as deprecated and SHOULD route through
+      the gated worker.
+    check: |
+      followup_tracked('remove src/fabric scaffolding + web cve_triage route')
+    violation: WARN
+    adr: ADR-007
+
+rationale: |
+  The recurring failure mode was not any single bug — it was that no
+  component owned the whole loop, so each stage could fail in a way the
+  next stage could not see. A regex parse blinded OBSERVE; a root-only gate
+  stalled VERIFY; three workers fragmented REMEDIATE; a TODO and a silent
+  clear hollowed out ESCALATE. Each was individually plausible and
+  collectively fatal: the system reported a clean fleet while criticals
+  piled up behind held, partly-destructive PRs.
+
+  Consolidating to one path per stage is what makes the loop trustworthy.
+  One gated worker means a CVE is fixed exactly one way, and that way is
+  verified. One shared, monorepo-aware gate means verification actually
+  runs on the repos the fleet is made of — turning the dominant
+  GO-UNVERIFIED stall into real GO/NO-GO signal. Persisted verdicts and
+  no-silent-clears mean the loop's history is auditable and its backlog can
+  never hide. And a status.json that is the single source of truth means
+  the human (and any LLM) reads the scoreboard the loop already produced
+  instead of paying to recompute it.
+
+  Events plus a sweep is the right trigger topology: the sweep guarantees
+  eventual convergence (everything is reconciled at least daily), while the
+  webhook gives low latency where it matters (a new CRITICAL acts in
+  minutes, not a day). Keeping interactive sessions OUT of the trigger set
+  is the cost discipline that motivated this whole effort — the control
+  plane runs on the App's own compute, and a person is involved only at the
+  bounded hard-stop residual.
+
+consequences:
+  positive:
+    - One remediation path, one gate — a CVE is fixed and verified exactly one way
+    - Monorepos verify for real; the GO-UNVERIFIED stall is eliminated
+    - npm fixes can never strip a lockfile (no destructive merges)
+    - Every merge/hold decision is auditable (verdicts.jsonl); no silent backlog
+    - status.json is a cheap, trustworthy source of truth — no token-burning re-scans
+    - Criticals act in minutes via the event path; everything reconciles daily via the sweep
+  risks:
+    - risk: "The monorepo-aware gate runs BUILD/TEST per package — slower, more compute"
+      mitigation: "Bounded discovery depth + skip of node_modules/vendor; cheap dims short-circuit; cost is the App's, not a human's or an LLM's"
+    - risk: "Fabric gateway scaffolding remains in-tree pending the C-007-008 follow-up"
+      mitigation: "Remediation surface already retired (sweep-worker deleted, triage unadvertised/unrouted); residue is read-only discovery; tracked for physical removal"
+    - risk: "The event path depends on the App's webhook receiver (a running service)"
+      mitigation: "The heartbeat sweep is the always-on fallback; if the receiver is down, convergence is delayed to the next tick, not lost"
+
+superseded_by: null
