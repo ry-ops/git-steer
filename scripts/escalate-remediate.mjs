@@ -25,7 +25,13 @@ import { validateVexInput, vexId, makeVexLedgerEntry } from '../dist/core/vex.js
 import { appendJsonl } from './lib/state-jsonl.mjs';
 
 const target = process.argv[2];
-if (!target || !target.includes('/')) {
+// Strict owner/repo shape: bounds the charset (GitHub names are
+// [A-Za-z0-9._-]) so `target` can never carry a path-traversal or a
+// prototype-polluting key (__proto__/constructor/prototype) into the
+// `esc[target]` / `_vex[...]` object writes below.
+const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+const DANGEROUS = new Set(['__proto__', 'constructor', 'prototype']);
+if (!target || !REPO_RE.test(target) || target.split('/').some((s) => DANGEROUS.has(s))) {
   console.error('Usage: node scripts/escalate-remediate.mjs <owner/repo> [--threshold N]');
   process.exit(2);
 }

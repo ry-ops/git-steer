@@ -141,7 +141,13 @@ function aggregateVerdict(dims) {
 // ── main ─────────────────────────────────────────────────────────────
 function main() {
   const args = process.argv.slice(2);
-  const target = args[0] || '.';
+  // Resolve the target to an absolute, existing directory up front — the gate
+  // only ever walks a checked-out repo, never an arbitrary caller-supplied path.
+  const target = resolve(args[0] || '.');
+  if (!existsSync(target) || !statSync(target).isDirectory()) {
+    console.error(`run-gate: target is not a directory: ${target}`);
+    process.exit(2);
+  }
   const fromIdx = args.indexOf('--from');
   const toIdx = args.indexOf('--to');
   const from = fromIdx >= 0 ? args[fromIdx + 1] : '';
