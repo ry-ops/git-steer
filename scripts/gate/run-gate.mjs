@@ -62,53 +62,90 @@ function discover(root) {
 }
 
 // ── per-package dimension runners ────────────────────────────────────
+// Returns {ok, tail}: on failure, `tail` is the last lines of the combined
+// stderr+stdout so a held PR can say WHY it was held (ADR-007 observability).
 const run = (cmd, cwd, timeoutMs = 600_000, extraEnv = {}) => {
   try {
     execSync(cmd, { cwd, stdio: 'pipe', timeout: timeoutMs, env: { ...process.env, CI: 'true', ...extraEnv } });
-    return true;
-  } catch {
-    return false;
+    return { ok: true, tail: '' };
+  } catch (e) {
+    const combined = `${e.stderr?.toString() || ''}${e.stdout?.toString() || ''}`;
+    const lines = combined.split('\n').map((l) => l.replace(/\s+$/, '')).filter(Boolean);
+    return { ok: false, tail: lines.slice(-14).join('\n') };
   }
 };
 
 function gatePackage(pkg) {
   const { dir, ecosystem } = pkg;
   let build = 'NOT_APPLICABLE', test = 'NOT_APPLICABLE', smoke = 'NOT_APPLICABLE';
+  const errors = {}; // dimension -> failure tail, so a hold explains itself
 
   if (ecosystem === 'npm') {
     const pj = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
     // BUILD: deps resolve (lockfile coherent) + compiles if a build script exists
-    const installed = run('npm ci', dir) || run('npm install --no-audit --no-fund', dir);
-    if (!installed) build = 'FAIL';
-    else if (pj.scripts?.build) build = run('npm run build', dir) ? 'PASS' : 'FAIL';
-    else build = 'PASS';
+    const ci = run('npm ci', dir);
+    const inst = ci.ok ? ci : run('npm install --no-audit --no-fund', dir);
+    if (!inst.ok) { build = 'FAIL'; errors.build = inst.tail; }
+    else if (pj.scripts?.build) {
+      const b = run('npm run build', dir);
+      build = b.ok ? 'PASS' : 'FAIL';
+      if (!b.ok) errors.build = b.tail;
+    } else build = 'PASS';
     // TEST: only if a real test script exists
     const t = pj.scripts?.test || '';
-    if (build !== 'FAIL' && t && !/no test specified/.test(t)) test = run('npm test', dir) ? 'PASS' : 'FAIL';
+    if (build !== 'FAIL' && t && !/no test specified/.test(t)) {
+      const r = run('npm test', dir); test = r.ok ? 'PASS' : 'FAIL';
+      if (!r.ok) errors.test = r.tail;
+    }
     // SMOKE: declared entrypoint imports without immediate error. Pass the
     // entrypoint via env (not string-interpolated into the command) so a
     // hostile package.json `main` can't inject a shell/JS payload.
     if (build !== 'FAIL' && pj.main && existsSync(join(dir, pj.main))) {
-      smoke = run('node -e "require(process.env.GATE_SMOKE_MAIN)"', dir, 30_000, {
-        GATE_SMOKE_MAIN: resolve(dir, pj.main),
-      }) ? 'PASS' : 'FAIL';
+      const r = run('node -e "require(process.env.GATE_SMOKE_MAIN)"', dir, 30_000, { GATE_SMOKE_MAIN: resolve(dir, pj.main) });
+      smoke = r.ok ? 'PASS' : 'FAIL';
+      if (!r.ok) errors.smoke = r.tail;
     }
   } else if (ecosystem === 'go') {
-    build = run('go build ./...', dir) ? 'PASS' : 'FAIL';
+    const b = run('go build ./...', dir);
+    build = b.ok ? 'PASS' : 'FAIL';
+    if (!b.ok) errors.build = b.tail;
     if (build !== 'FAIL') {
-      const hasTests = run('bash -c "find . -name \'*_test.go\' -not -path \'*/vendor/*\' | grep -q ."', dir, 15_000);
-      if (hasTests) test = run('go test ./...', dir) ? 'PASS' : 'FAIL';
+      const hasTests = run('bash -c "find . -name \'*_test.go\' -not -path \'*/vendor/*\' | grep -q ."', dir, 15_000).ok;
+      if (hasTests) { const r = run('go test ./...', dir); test = r.ok ? 'PASS' : 'FAIL'; if (!r.ok) errors.test = r.tail; }
     }
   } else if (ecosystem === 'python') {
-    if (existsSync(join(dir, 'requirements.txt'))) build = run('pip install -r requirements.txt', dir) ? 'PASS' : 'FAIL';
-    else build = run('pip install .', dir) ? 'PASS' : 'FAIL';
+    const b = existsSync(join(dir, 'requirements.txt'))
+      ? run('pip install -r requirements.txt', dir)
+      : run('pip install .', dir);
+    build = b.ok ? 'PASS' : 'FAIL';
+    if (!b.ok) errors.build = b.tail;
     if (build !== 'FAIL') {
-      const hasPytest = run('python -c "import pytest"', dir, 15_000) &&
-        (existsSync(join(dir, 'tests')) || run('bash -c "ls test_*.py >/dev/null 2>&1"', dir, 5_000));
-      if (hasPytest) test = run('pytest -q', dir) ? 'PASS' : 'FAIL';
+      const hasPytest = run('python -c "import pytest"', dir, 15_000).ok &&
+        (existsSync(join(dir, 'tests')) || run('bash -c "ls test_*.py >/dev/null 2>&1"', dir, 5_000).ok);
+      if (hasPytest) { const r = run('pytest -q', dir); test = r.ok ? 'PASS' : 'FAIL'; if (!r.ok) errors.test = r.tail; }
     }
   }
-  return { build, test, smoke };
+  return { build, test, smoke, errors };
+}
+
+// ── human-readable hold reason (posted onto the held PR) ──────────────
+function buildReport(verdict, perPackage) {
+  if (verdict === 'GO') return '';
+  const failing = perPackage.filter((p) => p.errors && Object.keys(p.errors).length > 0);
+  const out = [`**Why this is held — gate verdict \`${verdict}\`:**`, ''];
+  if (failing.length === 0) {
+    out.push('No dimension produced executable evidence (green-by-absence): nothing built or tested, so the fix could not be verified. Add a build/test script so the gate can confirm the bump is safe.');
+  } else {
+    for (const p of failing) {
+      for (const [dim, tail] of Object.entries(p.errors)) {
+        out.push(
+          `<details><summary><code>${p.package}</code> (${p.ecosystem}) — ${dim.toUpperCase()} FAILED</summary>`,
+          '', '```', tail || '(no output captured)', '```', '</details>', '',
+        );
+      }
+    }
+  }
+  return out.join('\n').slice(0, 60000); // GitHub comment body cap is 65536
 }
 
 // ── cross-package aggregation per dimension ──────────────────────────
@@ -167,13 +204,17 @@ function main() {
   ];
   const verdict = aggregateVerdict(dims);
 
-  const out = { verdict, dimensions: dims, packages: perPackage, packagesDiscovered: pkgs.length };
+  const report = buildReport(verdict, perPackage);
+  const out = { verdict, dimensions: dims, packages: perPackage, packagesDiscovered: pkgs.length, report };
   console.log(JSON.stringify(out, null, 2));
 
   if (process.env.GITHUB_OUTPUT) {
-    appendFileSync(process.env.GITHUB_OUTPUT, `verdict=${verdict}\n`);
-    appendFileSync(process.env.GITHUB_OUTPUT, `dimensions=${JSON.stringify(dims)}\n`);
-    appendFileSync(process.env.GITHUB_OUTPUT, `packages=${JSON.stringify(perPackage)}\n`);
+    const gho = process.env.GITHUB_OUTPUT;
+    appendFileSync(gho, `verdict=${verdict}\n`);
+    appendFileSync(gho, `dimensions=${JSON.stringify(dims)}\n`);
+    appendFileSync(gho, `packages=${JSON.stringify(perPackage)}\n`);
+    // multiline: heredoc-style delimiter (the build tail is multi-line)
+    appendFileSync(gho, `report<<GATE_REPORT_EOF\n${report}\nGATE_REPORT_EOF\n`);
   }
   return out;
 }
