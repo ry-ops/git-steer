@@ -95,17 +95,20 @@ jobs:
           while IFS= read -r repo; do
             [ -z "$repo" ] && continue
 
-            # Enable vulnerability alerts
+            # Enable vulnerability ALERTS — git-steer's OBSERVE source.
             gh api "repos/$repo/vulnerability-alerts" \
               -X PUT \
               --silent 2>/dev/null && echo "  $repo: vulnerability alerts enabled" \
               || echo "  $repo: vulnerability alerts already enabled or not accessible"
 
-            # Enable automated security fixes
+            # DISABLE automated-security-fixes (ADR-007 single-channel policy):
+            # git-steer's gated, per-package worker is the SOLE remediation path.
+            # Dependabot's own security-update PRs are UNGATED and duplicate the
+            # same CVE fixes, so we keep alerts but stop the competing PR stream.
             gh api "repos/$repo/automated-security-fixes" \
-              -X PUT \
-              --silent 2>/dev/null && echo "  $repo: automated security fixes enabled" \
-              || echo "  $repo: automated security fixes already enabled or not accessible"
+              -X DELETE \
+              --silent 2>/dev/null && echo "  $repo: automated security fixes DISABLED (git-steer owns remediation)" \
+              || echo "  $repo: automated security fixes already disabled or not accessible"
           done <<< "${{ steps.repos.outputs.repos }}"
 
       - name: Security scan
