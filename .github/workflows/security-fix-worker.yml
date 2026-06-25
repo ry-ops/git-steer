@@ -138,19 +138,31 @@ jobs:
           HAS_GOMOD: ${{ steps.alerts.outputs.has_gomod }}
         run: |
           set +e
-          # npm — update the lockfile IN PLACE to patched versions. NEVER rm the
-          # lockfile (the old bug did `rm -f package-lock.json && npm audit fix`,
-          # which failed silently and committed the deletion — stripping the
-          # lockfile and fixing nothing).
+          # npm — apply Dependabot's OWN fix_version per alert. Do NOT delegate
+          # to `npm audit fix`: that uses npm's registry advisory DB, which
+          # diverges from GHSA/Dependabot, so it no-ops on the very alerts
+          # OBSERVE flagged. Instead, for each alert we install the patched
+          # version explicitly (direct deps) or pin it via `overrides`
+          # (transitive deps), then re-resolve the lockfile. NEVER rm a lockfile.
+          # The ADR-005 gate verifies the result (so aggressive-but-verified).
           if [ "$HAS_NPM" = "true" ]; then
-            find . -name "package.json" -not -path "*/node_modules/*" | while read pkg; do
-              DIR=$(dirname "$pkg")
-              if echo "$FILTERED_JSON" | jq -e '[.[] | select(.ecosystem == "npm")] | length > 0' >/dev/null; then
-                ( cd "$DIR"
-                  [ -f package-lock.json ] || npm install --package-lock-only --no-audit --no-fund 2>/dev/null
-                  npm audit fix --package-lock-only --no-audit --no-fund 2>/dev/null
-                ) || true
-              fi
+            echo "$FILTERED_JSON" | jq -r '.[] | select(.ecosystem=="npm" and .fix_version!=null) | "\(.manifest)\t\(.package)\t\(.fix_version)"' \
+              | while IFS=$'\t' read -r MANIFEST PKG FIXVER; do
+              [ -z "$FIXVER" ] && continue
+              DIR=$(dirname "$MANIFEST"); [ -d "$DIR" ] || DIR="."
+              PJ="$DIR/package.json"
+              [ -f "$PJ" ] || continue
+              ( cd "$DIR"
+                [ -f package-lock.json ] || npm install --package-lock-only --no-fund 2>/dev/null
+                IS_DIRECT=$(node -e "const p=require('./package.json');const d={...p.dependencies,...p.devDependencies};process.stdout.write(d['$PKG']?'1':'0')" 2>/dev/null)
+                if [ "$IS_DIRECT" = "1" ]; then
+                  npm install "${PKG}@${FIXVER}" --package-lock-only --no-fund 2>/dev/null
+                else
+                  # transitive: pin the patched version via overrides, then re-resolve
+                  node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.overrides=p.overrides||{};p.overrides['$PKG']='$FIXVER';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" 2>/dev/null
+                  npm install --package-lock-only --no-fund 2>/dev/null
+                fi
+              ) || true
             done
           fi
 
