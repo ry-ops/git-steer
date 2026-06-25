@@ -189,8 +189,16 @@ function main() {
   const toIdx = args.indexOf('--to');
   const from = fromIdx >= 0 ? args[fromIdx + 1] : '';
   const to = toIdx >= 0 ? args[toIdx + 1] : '';
+  // --scope <dir>: gate ONLY the package at this manifest dir (ADR-007
+  // per-package). Without it, an unrelated package's pre-existing build break
+  // would hold a scoped fix that never touched it.
+  const scopeIdx = args.indexOf('--scope');
+  const scope = scopeIdx >= 0 ? (args[scopeIdx + 1] || '') : '';
 
-  const pkgs = discover(target);
+  let pkgs = discover(target);
+  if (scope) {
+    pkgs = pkgs.filter((p) => (relative(target, p.dir) || '.') === scope);
+  }
   const perPackage = pkgs.map((p) => {
     const r = gatePackage(p);
     return { package: relative(target, p.dir) || '.', ecosystem: p.ecosystem, ...r };
