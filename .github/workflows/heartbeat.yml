@@ -173,6 +173,16 @@ jobs:
           done <<< "${{ steps.repos.outputs.repos }}"
           echo "Escalation ladder run on $ESCALATED repo(s) with open alerts."
 
+      # ADR-004 C-004-003: alerts with NO upstream fix can't be bumped, so the
+      # worker skips them. Track them as OpenVEX `under_investigation` in
+      # git-steer-state AND commit a documenting OpenVEX artifact to each
+      # affected repo via PR — so a no-fix advisory is visible, not silent.
+      - name: VEX no-fix advisories
+        if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node scripts/vex-no-fix.mjs || echo "  (vex-no-fix error — non-fatal)"
+
       - name: Follow up on security PRs
         if: inputs.task == 'security-scan' || inputs.task == '' || inputs.task == 'full-audit'
         env:
