@@ -320,6 +320,7 @@ jobs:
       target_repo: ${{ inputs.target_repo }}
       ref: ${{ needs.fix.outputs.branch }}
       pr_number: ${{ needs.fix.outputs.pr_number }}
+      scope: ${{ inputs.package_dir }}   # gate ONLY the package this PR changed
     secrets: inherit
 
   # ── disposition: GO auto-merges; anything else is held for a human ──────

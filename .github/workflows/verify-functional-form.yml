@@ -17,6 +17,7 @@ on:
       pr_number:   { required: false, type: string, default: '' }
       bump_from:   { required: false, type: string, default: '' }  # SURFACE: old version
       bump_to:     { required: false, type: string, default: '' }  # SURFACE: new version
+      scope:       { required: false, type: string, default: '' }  # gate ONLY this package dir
     outputs:
       verdict:
         value: ${{ jobs.verify.outputs.verdict }}
@@ -31,6 +32,7 @@ on:
       pr_number:   { required: false, type: string, default: '' }
       bump_from:   { required: false, type: string, default: '' }
       bump_to:     { required: false, type: string, default: '' }
+      scope:       { required: false, type: string, default: '' }
 
 permissions:
   contents: read
@@ -90,7 +92,8 @@ jobs:
         id: gate
         run: |
           node gitsteer/scripts/gate/run-gate.mjs target \
-            --from "${{ inputs.bump_from }}" --to "${{ inputs.bump_to }}"
+            --from "${{ inputs.bump_from }}" --to "${{ inputs.bump_to }}" \
+            --scope "${{ inputs.scope }}"
 
       # ── Verdict provenance to git-steer-state (C-005-006 / ADR-007 Move C) ──
       - name: Generate token (state repo)
