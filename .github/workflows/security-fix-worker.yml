@@ -20,6 +20,11 @@ on:
         default: 'critical'
         type: choice
         options: [critical, high, medium, low, all]
+      package_dir:
+        description: 'Scope the fix to ONE package/manifest dir (e.g. frontend, backend, "." for root). Empty = whole repo. Per-package scope lets the clean packages auto-merge while a broken one is held alone (ADR-007).'
+        required: false
+        default: ''
+        type: string
       dry_run:
         description: 'Preview only, no changes'
         required: false
@@ -90,6 +95,19 @@ jobs:
 
           FIXABLE=$(echo "$ALERTS" | jq --arg pat "$PATTERN" \
             '[.[] | select((.severity | test($pat)) and .fix_version != null)]')
+
+          # Per-package scope (ADR-007): keep only alerts whose manifest dir
+          # matches package_dir, so this PR touches exactly one buildable unit.
+          # The manifest dir is dirname(manifest_path), or "." at the repo root.
+          PKG_DIR="${{ inputs.package_dir }}"
+          if [ -n "$PKG_DIR" ]; then
+            FIXABLE=$(echo "$FIXABLE" | jq --arg d "$PKG_DIR" \
+              '[.[] | select(((.manifest | if test("/") then (split("/")[:-1] | join("/")) else "." end)) == $d)]')
+            SLUG=$(echo "$PKG_DIR" | sed 's#[/ ]#-#g; s#^\.$#root#')
+            echo "branch=security/fix-$SLUG" >> $GITHUB_OUTPUT
+          else
+            echo "branch=security/fix-$SEVERITY" >> $GITHUB_OUTPUT
+          fi
 
           echo "filtered<<EOF" >> $GITHUB_OUTPUT
           echo "$FIXABLE" >> $GITHUB_OUTPUT
@@ -223,7 +241,7 @@ jobs:
         env:
           FILTERED_JSON: ${{ steps.alerts.outputs.filtered }}
         run: |
-          BRANCH="security/fix-${{ inputs.severity }}"
+          BRANCH="${{ steps.alerts.outputs.branch }}"
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           git config user.name "git-steer[bot]"
           git config user.email "git-steer[bot]@users.noreply.github.com"
@@ -265,20 +283,20 @@ jobs:
         run: |
           REPO="${{ inputs.target_repo }}"; SEVERITY="${{ inputs.severity }}"
           COUNT="${{ steps.alerts.outputs.count }}"; BRANCH="${{ steps.commit.outputs.branch }}"
+          PKG_DIR="${{ inputs.package_dir }}"
+          SCOPE=${PKG_DIR:+ in \`$PKG_DIR\`}
+          TITLE="fix(security): Patch $COUNT vulnerabilities${PKG_DIR:+ in $PKG_DIR}"
           gh label create "security"     --color "d73a4a" --repo "$REPO" 2>/dev/null || true
           gh label create "dependencies" --color "0075ca" --repo "$REPO" 2>/dev/null || true
           gh label create "automated"    --color "bfd4f2" --repo "$REPO" 2>/dev/null || true
-          case $SEVERITY in critical) C="b60205";; high) C="ff9800";; medium) C="fbca04";; *) C="0e8a16";; esac
-          gh label create "severity:$SEVERITY" --color "$C" --repo "$REPO" 2>/dev/null || true
           EXISTING=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
           if [ -n "$EXISTING" ]; then
-            gh pr edit "$EXISTING" --repo "$REPO" \
-              --title "fix(security): Patch $COUNT $SEVERITY+ vulnerabilities" --body-file /tmp/pr_body.md >/dev/null
+            gh pr edit "$EXISTING" --repo "$REPO" --title "$TITLE" --body-file /tmp/pr_body.md >/dev/null
             PR_NUM="$EXISTING"
           else
-            PR_URL=$(gh pr create --title "fix(security): Patch $COUNT $SEVERITY+ vulnerabilities" \
+            PR_URL=$(gh pr create --title "$TITLE" \
               --body-file /tmp/pr_body.md --head "$BRANCH" \
-              --label "security,dependencies,automated,severity:$SEVERITY" --repo "$REPO")
+              --label "security,dependencies,automated" --repo "$REPO")
             PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$')
           fi
           echo "number=$PR_NUM" >> $GITHUB_OUTPUT
@@ -334,7 +352,7 @@ jobs:
         run: |
           REPO="${{ inputs.target_repo }}"; PR_NUM="${{ needs.fix.outputs.pr_number }}"
           RESP=$(gh api "repos/$REPO/pulls/$PR_NUM/merge" -X PUT -f merge_method=squash \
-            -f commit_title="fix(security): Patch ${{ needs.fix.outputs.count }} ${{ inputs.severity }}+ vulnerabilities" \
+            -f commit_title="fix(security): Patch ${{ needs.fix.outputs.count }} vulnerabilities${{ inputs.package_dir && format(' in {0}', inputs.package_dir) || '' }}" \
             -f commit_message="Auto-merged by git-steer (ADR-005 verdict: GO)." 2>&1) || true
           if [ "$(echo "$RESP" | jq -r '.merged // false' 2>/dev/null)" = "true" ]; then
             echo "PR #$PR_NUM merged (GO)."
