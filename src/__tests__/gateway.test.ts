@@ -158,7 +158,6 @@ describe('Gateway', () => {
     const FABRIC_CVE_TOOL_NAMES = [
       'fabric_cve_scan',
       'fabric_cve_enrich',
-      'fabric_cve_triage',
       'fabric_cve_queue',
       'fabric_cve_stats',
       'fabric_cve_compact',
@@ -173,12 +172,12 @@ describe('Gateway', () => {
       'config_show', 'config_add_repo', 'config_remove_repo',
       'security_scan', 'security_fix_pr', 'workflow_status',
       'repo_commit', 'repo_read_file', 'repo_list_files',
-      'security_enforce', 'security_sweep', 'code_quality_sweep',
+      'security_enforce', 'code_quality_sweep',
       'report_generate', 'dashboard_generate', 'code_review',
     ];
 
-    it('FABRIC_CVE_TOOLS has exactly 6 tools', () => {
-      expect(FABRIC_CVE_TOOL_NAMES).toHaveLength(6);
+    it('FABRIC_CVE_TOOLS has exactly 5 tools', () => {
+      expect(FABRIC_CVE_TOOL_NAMES).toHaveLength(5);
     });
 
     it('FABRIC_CVE_TOOLS has correct names', () => {

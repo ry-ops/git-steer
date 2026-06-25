@@ -22,8 +22,8 @@ describe('permissions', () => {
   });
 
   describe('DRY_RUN_DEFAULT_TOOLS', () => {
-    it('contains security_sweep', () => {
-      expect(DRY_RUN_DEFAULT_TOOLS.has('security_sweep')).toBe(true);
+    it('contains security_fix_pr', () => {
+      expect(DRY_RUN_DEFAULT_TOOLS.has('security_fix_pr')).toBe(true);
     });
 
     it('contains oomkill_remediate', () => {

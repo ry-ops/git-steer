@@ -1,0 +1,90 @@
+name: Event Remediate
+
+# ADR-007 Move D — event-driven remediation entry point.
+#
+# The standing heartbeat (cron, daily) is the reconciliation sweep. This is the
+# LOW-LATENCY path: instead of a new CRITICAL waiting up to ~24h for the next
+# tick, the git-steer GitHub App — which subscribes to the `dependabot_alert`
+# webhook — fires a repository_dispatch (event_type: cve-detected) the moment an
+# alert is created, and this workflow runs the ADR-006 escalation ladder for
+# just that repo immediately.
+#
+# DEPENDENCY: the webhook receiver that translates `dependabot_alert` ->
+# repository_dispatch is the companion git-steer App (a running service; GitHub
+# Dependabot does not natively trigger workflows). This workflow is the in-repo
+# half of that contract and is also manually dispatchable for testing.
+#
+#   client_payload: { "repo": "owner/name", "reason": "dependabot_alert.created" }
+
+on:
+  repository_dispatch:
+    types: [cve-detected]
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Target repository (owner/repo) to remediate now'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # one in-flight remediation per repo; a burst of alerts coalesces
+  group: event-remediate-${{ github.event.client_payload.repo || inputs.repo }}
+  cancel-in-progress: false
+
+jobs:
+  remediate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Resolve target
+        id: t
+        run: |
+          REPO="${{ github.event.client_payload.repo || inputs.repo }}"
+          if ! echo "$REPO" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+            echo "Invalid or missing target repo: '$REPO'" >&2; exit 1
+          fi
+          echo "repo=$REPO" >> $GITHUB_OUTPUT
+
+      - name: Checkout git-steer
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4
+        with:
+          node-version: '20'
+
+      - name: Setup SSH for private @git-fabric deps
+        env:
+          GIT_SSH_KEY: ${{ secrets.GIT_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$GIT_SSH_KEY" > ~/.ssh/gitfabric
+          chmod 600 ~/.ssh/gitfabric
+          cat >> ~/.ssh/config <<'CFG'
+          Host github.com
+            IdentityFile ~/.ssh/gitfabric
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+          CFG
+
+      - name: Install dependencies and build
+        run: npm install --no-audit --no-fund && npm run build
+
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.GIT_STEER_APP_ID }}
+          private-key: ${{ secrets.GIT_STEER_PRIVATE_KEY }}
+          owner: ry-ops
+
+      - name: ADR-006 escalation ladder (immediate)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          echo "Event-driven remediation for ${{ steps.t.outputs.repo }} (${{ github.event.client_payload.reason || 'manual' }})"
+          node scripts/escalate-remediate.mjs "${{ steps.t.outputs.repo }}"
