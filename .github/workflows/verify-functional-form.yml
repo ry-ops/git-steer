@@ -22,6 +22,8 @@ on:
         value: ${{ jobs.verify.outputs.verdict }}
       dimensions:
         value: ${{ jobs.verify.outputs.dimensions }}
+      report:
+        value: ${{ jobs.verify.outputs.report }}
   workflow_dispatch:
     inputs:
       target_repo: { required: true, type: string }
@@ -39,6 +41,7 @@ jobs:
     outputs:
       verdict: ${{ steps.gate.outputs.verdict }}
       dimensions: ${{ steps.gate.outputs.dimensions }}
+      report: ${{ steps.gate.outputs.report }}
     steps:
       - name: Parse target
         id: parse

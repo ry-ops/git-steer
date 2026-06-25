@@ -350,13 +350,24 @@ jobs:
         if: needs.gate.outputs.verdict != 'GO'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERDICT: ${{ needs.gate.outputs.verdict }}
+          DIMENSIONS: ${{ needs.gate.outputs.dimensions }}
+          GATE_REPORT: ${{ needs.gate.outputs.report }}
         run: |
           REPO="${{ inputs.target_repo }}"; PR_NUM="${{ needs.fix.outputs.pr_number }}"
-          VERDICT="${{ needs.gate.outputs.verdict }}"
           gh label create "needs-human-merge" --color "d93f0b" \
             --description "Held by ADR-005 functional-integrity gate" --repo "$REPO" 2>/dev/null || true
           gh pr edit "$PR_NUM" --repo "$REPO" --add-label "needs-human-merge" 2>/dev/null || true
-          gh pr comment "$PR_NUM" --repo "$REPO" --body "🚦 **Functional-integrity gate: ${VERDICT:-ERROR}** (ADR-005) — auto-merge withheld, held for human review. Dimensions: \`${{ needs.gate.outputs.dimensions }}\`" 2>/dev/null || true
+          # Build a self-explaining hold comment: verdict + dimensions + the
+          # captured failure tail (so the human sees exactly what broke).
+          {
+            echo "🚦 **Functional-integrity gate: ${VERDICT:-ERROR}** (ADR-005) — auto-merge withheld, held for human review."
+            echo ""
+            echo "Dimensions: \`${DIMENSIONS:-[]}\`"
+            echo ""
+            printf '%s\n' "${GATE_REPORT:-}"
+          } > /tmp/hold-comment.md
+          gh pr comment "$PR_NUM" --repo "$REPO" --body-file /tmp/hold-comment.md 2>/dev/null || true
           echo "Held PR #$PR_NUM — verdict ${VERDICT:-ERROR}"
 
       - name: Report to git-steer-state
