@@ -27,7 +27,7 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync, appendFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 
 const SKIP_DIRS = new Set(['node_modules', 'vendor', '.git', '.github', 'dist', 'build', '.next', '.venv', 'venv', '__pycache__']);
 const MAX_DEPTH = 4; // deep enough for packages/*/svc, shallow enough to stay fast
@@ -62,9 +62,9 @@ function discover(root) {
 }
 
 // ── per-package dimension runners ────────────────────────────────────
-const run = (cmd, cwd, timeoutMs = 600_000) => {
+const run = (cmd, cwd, timeoutMs = 600_000, extraEnv = {}) => {
   try {
-    execSync(cmd, { cwd, stdio: 'pipe', timeout: timeoutMs, env: { ...process.env, CI: 'true' } });
+    execSync(cmd, { cwd, stdio: 'pipe', timeout: timeoutMs, env: { ...process.env, CI: 'true', ...extraEnv } });
     return true;
   } catch {
     return false;
@@ -85,9 +85,13 @@ function gatePackage(pkg) {
     // TEST: only if a real test script exists
     const t = pj.scripts?.test || '';
     if (build !== 'FAIL' && t && !/no test specified/.test(t)) test = run('npm test', dir) ? 'PASS' : 'FAIL';
-    // SMOKE: declared entrypoint imports without immediate error
+    // SMOKE: declared entrypoint imports without immediate error. Pass the
+    // entrypoint via env (not string-interpolated into the command) so a
+    // hostile package.json `main` can't inject a shell/JS payload.
     if (build !== 'FAIL' && pj.main && existsSync(join(dir, pj.main))) {
-      smoke = run(`node -e "require('./${pj.main}')"`, dir, 30_000) ? 'PASS' : 'FAIL';
+      smoke = run('node -e "require(process.env.GATE_SMOKE_MAIN)"', dir, 30_000, {
+        GATE_SMOKE_MAIN: resolve(dir, pj.main),
+      }) ? 'PASS' : 'FAIL';
     }
   } else if (ecosystem === 'go') {
     build = run('go build ./...', dir) ? 'PASS' : 'FAIL';

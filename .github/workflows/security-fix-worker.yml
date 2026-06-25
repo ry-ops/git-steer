@@ -30,6 +30,10 @@ on:
         required: false
         type: string
 
+# Least privilege by default; jobs widen only what they need (CodeQL hardening).
+permissions:
+  contents: read
+
 jobs:
   # ─────────────────────────────────────────────────────────────────────
   fix:
@@ -293,6 +297,9 @@ jobs:
     needs: [fix, gate]
     if: always() && needs.fix.outputs.pr_number != '' && inputs.dry_run == false
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Parse target repo
         id: parse
