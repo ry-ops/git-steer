@@ -38,7 +38,6 @@ if (!target || !REPO_RE.test(target) || target.split('/').some((s) => DANGEROUS.
 const [tOwner, tRepo] = target.split('/');
 const tIdx = process.argv.indexOf('--threshold');
 const THRESHOLD = tIdx >= 0 ? Number(process.argv[tIdx + 1]) : 3;
-const LADDER = ['critical', 'high', 'medium', 'low'];
 const WORKER = 'security-fix-worker.yml';
 const STEER = { owner: 'ry-ops', repo: 'git-steer' };
 const STATE_REPO = 'git-steer-state';
@@ -58,53 +57,71 @@ if (process.env.GH_TOKEN) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ── dispatch one rung and wait for its run to finish ──────────────────
-async function runRung(sev) {
-  const branch = `security/fix-${sev}`;
+const slug = (d) => d.replace(/[/ ]/g, '-').replace(/^\.$/, 'root');
+const manifestDir = (m) => (m && m.includes('/') ? m.split('/').slice(0, -1).join('/') : '.');
+
+// ── discover the buildable units (package dirs) with a fixable alert ───
+async function discoverPackages() {
+  const alerts = await octokit.paginate('GET /repos/{owner}/{repo}/dependabot/alerts', {
+    owner: tOwner, repo: tRepo, state: 'open', per_page: 100,
+  });
+  const dirs = new Set();
+  for (const a of alerts) {
+    if (!a.security_vulnerability?.first_patched_version?.identifier) continue; // no-fix → vex-no-fix
+    dirs.add(manifestDir(a.dependency?.manifest_path || ''));
+  }
+  return [...dirs];
+}
+
+// ── dispatch ONE package, wait for its run, report held / merged ──────
+// ADR-007: per-package scope. Each package is gated and auto-merged on its own,
+// so the clean packages land without a human and only a genuinely-broken one is
+// held — instead of one bad package holding the whole repo's fixes hostage.
+async function runPackage(pkgDir) {
+  const branch = `security/fix-${slug(pkgDir)}`;
   const before = (await octokit.rest.actions.listWorkflowRuns({ ...STEER, workflow_id: WORKER, per_page: 1 }))
     .data.workflow_runs[0]?.id ?? 0;
 
   await octokit.rest.actions.createWorkflowDispatch({
     ...STEER, workflow_id: WORKER, ref: 'main',
-    inputs: { target_repo: target, severity: sev, dry_run: 'false' },
+    inputs: { target_repo: target, severity: 'all', package_dir: pkgDir, dry_run: 'false' },
   });
 
-  // wait for the new run to appear + complete
   let run = null;
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 90; i++) {
     await sleep(8000);
-    const runs = (await octokit.rest.actions.listWorkflowRuns({ ...STEER, workflow_id: WORKER, per_page: 5 })).data.workflow_runs;
+    const runs = (await octokit.rest.actions.listWorkflowRuns({ ...STEER, workflow_id: WORKER, per_page: 8 })).data.workflow_runs;
     run = runs.find((r) => r.id > before);
     if (run && run.status === 'completed') break;
   }
-  if (!run) return { sev, outcome: 'error', detail: 'no run observed' };
+  if (!run) return { sev: pkgDir, outcome: 'error', detail: 'no run observed' };
 
-  // outcome: open held PR on this scope's branch? else merged / no-change
   const open = (await octokit.rest.pulls.list({ owner: tOwner, repo: tRepo, head: `${tOwner}:${branch}`, state: 'open' })).data;
   if (open.length) {
-    const labels = open[0].labels.map((l) => l.name);
     let verdict = 'held';
     try {
       const comments = (await octokit.rest.issues.listComments({ owner: tOwner, repo: tRepo, issue_number: open[0].number })).data;
       const gc = [...comments].reverse().find((c) => /Functional-integrity gate/.test(c.body));
       verdict = gc?.body.match(/gate: ([A-Z-]+)/)?.[1] ?? 'held';
     } catch { /* */ }
-    return { sev, outcome: 'held', verdict, pr: open[0].number, labels };
+    return { sev: pkgDir, outcome: 'held', verdict, pr: open[0].number };
   }
-  return { sev, outcome: run.conclusion === 'success' ? 'merged_or_nochange' : 'error', detail: run.conclusion };
+  return { sev: pkgDir, outcome: run.conclusion === 'success' ? 'merged_or_nochange' : 'error', detail: run.conclusion };
 }
 
-// ── run the ladder ────────────────────────────────────────────────────
-console.log(`\n=== ADR-006 escalation: ${target} (hard-stop threshold ${THRESHOLD} sweeps) ===\n`);
+// ── sweep EVERY package (no early stop) ───────────────────────────────
+console.log(`\n=== ADR-006/007 per-package sweep: ${target} (hard-stop threshold ${THRESHOLD} sweeps) ===\n`);
+const packages = await discoverPackages();
+console.log(`  packages with a fixable alert: ${packages.length ? packages.join(', ') : '(none)'}\n`);
 let floor = null;
 const trail = [];
-for (const sev of LADDER) {
-  process.stdout.write(`  rung ${sev}... `);
-  const r = await runRung(sev);
+for (const pkgDir of packages) {
+  process.stdout.write(`  package ${pkgDir}... `);
+  const r = await runPackage(pkgDir);
   trail.push(r);
   console.log(r.outcome === 'held' ? `HELD (${r.verdict}) PR#${r.pr}` : r.outcome);
-  if (r.outcome === 'held') { floor = r; break; }
-  if (r.outcome === 'error') { floor = r; break; }
+  // the repo's residual "floor" is the first package that stayed held/errored
+  if (!floor && (r.outcome === 'held' || r.outcome === 'error')) floor = r;
 }
 
 // ── genuine-clear check: a no-op ladder with deps still open is NOT cleared ──
