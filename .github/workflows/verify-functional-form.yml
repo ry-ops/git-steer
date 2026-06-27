@@ -69,6 +69,17 @@ jobs:
           fetch-depth: 1
           path: target
 
+      # Baseline = the target repo's DEFAULT branch (no ref). The differential
+      # gate compares the fix branch against this so a failure that ALSO fails
+      # on base (pre-existing repo debt) doesn't hold a good security fix.
+      - name: Checkout base branch (baseline for the differential gate)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: ${{ inputs.target_repo }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 1
+          path: base
+
       - name: Checkout git-steer (the gate runner)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
@@ -93,7 +104,8 @@ jobs:
         run: |
           node gitsteer/scripts/gate/run-gate.mjs target \
             --from "${{ inputs.bump_from }}" --to "${{ inputs.bump_to }}" \
-            --scope "${{ inputs.scope }}"
+            --scope "${{ inputs.scope }}" \
+            --baseline base
 
       # ── Verdict provenance to git-steer-state (C-005-006 / ADR-007 Move C) ──
       - name: Generate token (state repo)

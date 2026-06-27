@@ -190,35 +190,60 @@ await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
   sha: file.sha,
 });
 
-// ── enforce hard-stop at threshold: VEX affected + label PR/issue ─────
-if (hardStop) {
-  const num = floor.pr ?? trackingIssue;
-  const ref = floor.pr ? `PR#${floor.pr}` : trackingIssue ? `issue #${trackingIssue}` : 'no artifact';
-  if (num) { try { await octokit.rest.issues.addLabels({ owner: tOwner, repo: tRepo, issue_number: num, labels: ['escalation:hard-stop'] }); } catch { /* */ } }
+// ── terminal disposition: every CVE residual ends FIXED or VEX'd ──────
+// The ADR-004 contract is simple: if there's a fix, apply it; if there isn't,
+// VEX it until one exists. A held PR (genuine gate NO-GO) is a human's call.
+// But a NO-OP fall-out means the bump worker CANNOT produce a fix (transitive /
+// not directly bumpable) — that is exactly "no fix available", so it gets a VEX
+// `under_investigation` on the FIRST sweep, not after looping to the hard-stop.
+// At the hard-stop threshold the residual escalates to `affected` (human review).
+// The VEX key is stable per repo so the lifecycle under_investigation -> affected
+// -> fixed tracks one entry the dashboard can read.
+const RESIDUAL_CVE = `escalation/${target}#residual`;
+async function setResidualVex(status, actionStatement) {
   const entry = {
-    cve_id: `escalation/${target}#fix-${floor.sev}`,
+    cve_id: RESIDUAL_CVE,
     repo: target,
     product_purl: `pkg:github/${target}`,
-    status: 'affected',
-    action_statement: `Autonomous remediation exhausted the ADR-006 ladder for ${THRESHOLD}+ consecutive sweeps; floor=${floor.sev}, ${remaining} dep(s) remain (${floor.verdict}). Held for human review at ${ref}.`,
-    detail: `ADR-006 C-006-008 hard-stop.`,
+    status,
+    detail: `ADR-006 residual${floor ? `: floor ${floor.sev} (${floor.verdict ?? floor.detail})` : ' cleared'}`.slice(0, 480),
     created_at: now,
     updated_by: 'cli:escalate-remediate',
   };
-  if (!validateVexInput(entry)) {
-    const fresh = (await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', { owner: STEER.owner, repo: STATE_REPO, path: 'state/cache.json' })).data;
-    const c2 = JSON.parse(Buffer.from(fresh.content, 'base64').toString('utf-8'));
-    c2._vex = c2._vex ?? {};
-    c2._vex[vexId(target, entry.cve_id)] = entry;
-    await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
-      owner: STEER.owner, repo: STATE_REPO, path: 'state/cache.json',
-      message: `vex: hard-stop affected for ${target} (ADR-006 C-006-008)`,
-      content: Buffer.from(JSON.stringify(c2, null, 2)).toString('base64'),
-      sha: fresh.sha,
-    });
-    await appendJsonl(octokit, STEER.owner, STATE_REPO, 'state/vex.jsonl', [makeVexLedgerEntry(entry, null, 'cli:escalate-remediate', now)]);
-    console.log(`  VEX affected written + escalation:hard-stop on ${ref}`);
+  if (status === 'affected') entry.action_statement = actionStatement;
+  // validateVexInput returns an error string when INVALID, null when valid.
+  if (validateVexInput(entry)) return;
+  const fresh = (await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', { owner: STEER.owner, repo: STATE_REPO, path: 'state/cache.json' })).data;
+  const c2 = JSON.parse(Buffer.from(fresh.content, 'base64').toString('utf-8'));
+  c2._vex = c2._vex ?? {};
+  const key = vexId(target, RESIDUAL_CVE);
+  const prev = c2._vex[key]?.status ?? null;
+  if (prev === status) return;                              // idempotent — already in this state
+  if (status === 'fixed' && prev === null) return;          // nothing to lift; don't manufacture a record
+  c2._vex[key] = entry;
+  await octokit.request('PUT /repos/{owner}/{repo}/contents/{path}', {
+    owner: STEER.owner, repo: STATE_REPO, path: 'state/cache.json',
+    message: `vex: residual ${status} for ${target} (ADR-006)`,
+    content: Buffer.from(JSON.stringify(c2, null, 2)).toString('base64'),
+    sha: fresh.sha,
+  });
+  await appendJsonl(octokit, STEER.owner, STATE_REPO, 'state/vex.jsonl', [makeVexLedgerEntry(entry, prev, 'cli:escalate-remediate', now)]);
+  console.log(`  VEX residual ${prev ?? 'new'} -> ${status} for ${target}`);
+}
+
+if (floor) {
+  if (hardStop) {
+    const num = floor.pr ?? trackingIssue;
+    const ref = floor.pr ? `PR#${floor.pr}` : trackingIssue ? `issue #${trackingIssue}` : 'no artifact';
+    if (num) { try { await octokit.rest.issues.addLabels({ owner: tOwner, repo: tRepo, issue_number: num, labels: ['escalation:hard-stop'] }); } catch { /* */ } }
+    await setResidualVex('affected', `Autonomous remediation exhausted the ADR-006 ladder for ${THRESHOLD}+ consecutive sweeps; floor=${floor.sev}, ${remaining} dep(s) remain (${floor.verdict ?? floor.detail}). Held for human review at ${ref}.`);
+  } else if (!floor.pr) {
+    // residual the bump worker couldn't fix (no PR producible) → VEX now
+    await setResidualVex('under_investigation');
   }
+} else {
+  // genuinely cleared (0 deps remain) → lift any residual VEX to fixed
+  await setResidualVex('fixed');
 }
 
 console.log(`\n=== trail ===`);
