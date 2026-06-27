@@ -19,7 +19,8 @@ const targetRepos = [
   'ry-ops/aiana',
   'ry-ops/ATSFlow',
   'ry-ops/DriveIQ',
-  'ry-ops/blog',
+  // ry-ops/blog removed: transferred to fabric-forge/blog and dropped from the
+  // managed fleet — remediation for it is intentionally skipped.
   'ry-ops/building-serverless-website-github-cloudflare',
   'ry-ops/getting-started-docker-containers',
   'ry-ops/building-rest-api-fastapi',

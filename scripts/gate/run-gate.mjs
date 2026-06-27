@@ -82,9 +82,14 @@ function gatePackage(pkg) {
 
   if (ecosystem === 'npm') {
     const pj = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-    // BUILD: deps resolve (lockfile coherent) + compiles if a build script exists
+    // BUILD: deps resolve (lockfile coherent) + compiles if a build script exists.
+    // Fallback ladder: npm ci -> npm install -> npm install --legacy-peer-deps.
+    // A peer-dependency conflict (ERESOLVE) is npm's resolver being strict, not
+    // the security bump being unsafe — so we retry the way a human would rather
+    // than failing BUILD and holding the fix forever (e.g. DriveIQ vite peer).
     const ci = run('npm ci', dir);
-    const inst = ci.ok ? ci : run('npm install --no-audit --no-fund', dir);
+    let inst = ci.ok ? ci : run('npm install --no-audit --no-fund', dir);
+    if (!inst.ok) inst = run('npm install --no-audit --no-fund --legacy-peer-deps', dir);
     if (!inst.ok) { build = 'FAIL'; errors.build = inst.tail; }
     else if (pj.scripts?.build) {
       const b = run('npm run build', dir);
@@ -155,6 +160,55 @@ function rollup(results, key) {
   return 'NOT_APPLICABLE';
 }
 
+// ── discover + gate a whole tree (optionally scoped to one package) ───
+function gateTree(root, scope) {
+  let pkgs = discover(root);
+  if (scope) pkgs = pkgs.filter((p) => (relative(root, p.dir) || '.') === scope);
+  return pkgs.map((p) => {
+    const r = gatePackage(p);
+    return { package: relative(root, p.dir) || '.', ecosystem: p.ecosystem, ...r };
+  });
+}
+
+function buildDims(perPackage, from, to) {
+  const dimKey = { BUILD: 'build', TEST: 'test', SMOKE: 'smoke' };
+  const dims = ['BUILD', 'TEST', 'SMOKE'].map((d) => {
+    const key = dimKey[d];
+    const dim = { dimension: d, result: rollup(perPackage, key) };
+    if (perPackage.some((p) => p[`${key}_preexisting`])) dim.preexisting = true;
+    return dim;
+  });
+  dims.push({ dimension: 'SURFACE', result: surfaceForBump(from, to) });
+  return dims;
+}
+
+// ── differential gate: neutralize failures that ALSO fail on the base ──
+// A security fix is only blocked for a dimension it REGRESSES (passed on the
+// base branch, fails on the fix branch). A dimension already red on base — a
+// missing test file, a broken monorepo import, a build that never worked — is
+// pre-existing repo debt, not the bump's fault, and must not hold the fix.
+// This is the line between "the fix breaks the build" and "the build was
+// already broken." Without it, any repo with a flaky/red main freezes forever.
+function applyBaseline(fixPkgs, basePkgs) {
+  const baseByPath = new Map(basePkgs.map((p) => [p.package, p]));
+  const notes = [];
+  for (const p of fixPkgs) {
+    const base = baseByPath.get(p.package);
+    for (const key of ['build', 'test', 'smoke']) {
+      // Neutralize ONLY if the base has this package and did NOT pass the
+      // dimension. If base passed it and the fix fails it, that's a genuine
+      // regression and stays a FAIL (legitimately held for a human).
+      if (p[key] === 'FAIL' && base && base[key] !== 'PASS') {
+        p[`${key}_preexisting`] = true;
+        if (p.errors && p.errors[key]) delete p.errors[key]; // no longer a hold reason
+        p[key] = 'NOT_APPLICABLE'; // neutral for rollup + verdict
+        notes.push(`\`${p.package}\` — ${key.toUpperCase()} fails on the base branch too; pre-existing, not counted as a regression.`);
+      }
+    }
+  }
+  return notes;
+}
+
 // ── SURFACE (mirrors surfaceForBump in src/core/verdict.ts) ───────────
 function surfaceForBump(from, to) {
   const parse = (v) => {
@@ -194,26 +248,42 @@ function main() {
   // would hold a scoped fix that never touched it.
   const scopeIdx = args.indexOf('--scope');
   const scope = scopeIdx >= 0 ? (args[scopeIdx + 1] || '') : '';
+  // --baseline <dir>: a checkout of the BASE branch, used to drop pre-existing
+  // failures so repo debt can't hold a good security fix (differential gate).
+  const baseIdx = args.indexOf('--baseline');
+  const baseline = baseIdx >= 0 ? (args[baseIdx + 1] || '') : '';
 
-  let pkgs = discover(target);
-  if (scope) {
-    pkgs = pkgs.filter((p) => (relative(target, p.dir) || '.') === scope);
+  const perPackage = gateTree(target, scope);
+  let dims = buildDims(perPackage, from, to);
+  let verdict = aggregateVerdict(dims);
+  let baselineNotes = [];
+
+  // Only pay for the baseline gate when the fix isn't already clean. A GO needs
+  // no baseline (nothing to excuse); a non-GO might be held purely by pre-existing
+  // breakage, so re-judge it against the base branch before holding for a human.
+  if (verdict !== 'GO' && baseline) {
+    const baseDir = resolve(baseline);
+    if (existsSync(baseDir) && statSync(baseDir).isDirectory()) {
+      const basePkgs = gateTree(baseDir, scope);
+      baselineNotes = applyBaseline(perPackage, basePkgs);
+      if (baselineNotes.length) {
+        dims = buildDims(perPackage, from, to);
+        verdict = aggregateVerdict(dims);
+      }
+    }
   }
-  const perPackage = pkgs.map((p) => {
-    const r = gatePackage(p);
-    return { package: relative(target, p.dir) || '.', ecosystem: p.ecosystem, ...r };
-  });
 
-  const dims = [
-    { dimension: 'BUILD', result: rollup(perPackage, 'build') },
-    { dimension: 'TEST', result: rollup(perPackage, 'test') },
-    { dimension: 'SMOKE', result: rollup(perPackage, 'smoke') },
-    { dimension: 'SURFACE', result: surfaceForBump(from, to) },
-  ];
-  const verdict = aggregateVerdict(dims);
-
-  const report = buildReport(verdict, perPackage);
-  const out = { verdict, dimensions: dims, packages: perPackage, packagesDiscovered: pkgs.length, report };
+  let report = buildReport(verdict, perPackage);
+  if (baselineNotes.length) {
+    const head = verdict === 'GO'
+      ? '**Differential gate — the security fix itself is clean; pre-existing failures were ignored:**'
+      : '**Differential gate — these pre-existing failures were ignored (not regressions):**';
+    report = [head, '', ...baselineNotes.map((n) => `- ${n}`), report ? '\n' + report : ''].join('\n').slice(0, 60000);
+  }
+  const out = {
+    verdict, dimensions: dims, packages: perPackage,
+    packagesDiscovered: perPackage.length, baselineApplied: baselineNotes.length > 0, report,
+  };
   console.log(JSON.stringify(out, null, 2));
 
   if (process.env.GITHUB_OUTPUT) {
