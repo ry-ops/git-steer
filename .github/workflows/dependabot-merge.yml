@@ -1,0 +1,93 @@
+name: Dependabot Auto-Merge (gated)
+
+# ADR-007: git-steer adopts Dependabot's version-bump PRs into the gated
+# control plane. Instead of merging blindly (or leaving them to pile up), it
+# runs the shared functional-integrity gate on the PR's branch — scoped to the
+# changed package — and auto-merges only if it builds. A bump that breaks the
+# build is held with the reason, exactly like git-steer's own fix PRs.
+#
+# SURFACE is intentionally not evaluated here (no bump_from/bump_to passed): a
+# routine version bump is judged on whether it actually BUILDS/TESTs, not on a
+# semver-shape heuristic — so e.g. uvicorn 0.41.0 -> 0.42.0 merges if it builds.
+#
+# Dispatched per open Dependabot PR by scripts/dependabot-sweep.mjs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo: { required: true, type: string }   # owner/repo
+      pr_number:   { required: true, type: string }
+      head_ref:    { required: true, type: string }    # the dependabot/* branch
+      scope:       { required: false, type: string, default: '' }  # changed package dir
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    uses: ./.github/workflows/verify-functional-form.yml
+    with:
+      target_repo: ${{ inputs.target_repo }}
+      ref: ${{ inputs.head_ref }}
+      pr_number: ${{ inputs.pr_number }}
+      scope: ${{ inputs.scope }}
+    secrets: inherit
+
+  disposition:
+    needs: gate
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Parse target repo
+        id: parse
+        run: |
+          echo "owner=$(echo "${{ inputs.target_repo }}" | cut -d'/' -f1)" >> $GITHUB_OUTPUT
+          echo "repo=$(echo "${{ inputs.target_repo }}" | cut -d'/' -f2)" >> $GITHUB_OUTPUT
+      - name: Generate token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.GIT_STEER_APP_ID }}
+          private-key: ${{ secrets.GIT_STEER_PRIVATE_KEY }}
+          owner: ${{ steps.parse.outputs.owner }}
+          repositories: ${{ steps.parse.outputs.repo }}
+
+      - name: Merge on GO
+        if: needs.gate.outputs.verdict == 'GO'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          REPO="${{ inputs.target_repo }}"; PR_NUM="${{ inputs.pr_number }}"
+          RESP=$(gh api "repos/$REPO/pulls/$PR_NUM/merge" -X PUT -f merge_method=squash \
+            -f commit_message="Auto-merged by git-steer (gated version bump, ADR-007 verdict: GO)." 2>&1) || true
+          if [ "$(echo "$RESP" | jq -r '.merged // false' 2>/dev/null)" = "true" ]; then
+            echo "Dependabot PR #$PR_NUM merged (GO)."
+          else
+            echo "Direct merge blocked: $RESP"
+            gh label create "needs-human-merge" --color "d93f0b" --repo "$REPO" 2>/dev/null || true
+            gh pr edit "$PR_NUM" --repo "$REPO" --add-label "needs-human-merge" 2>/dev/null || true
+            gh pr merge "$PR_NUM" --repo "$REPO" --squash --auto 2>/dev/null \
+              && echo "Native auto-merge enabled." || echo "Enable 'Allow auto-merge' on $REPO, or merge #$PR_NUM manually."
+          fi
+
+      - name: Hold on non-GO
+        if: needs.gate.outputs.verdict != 'GO'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERDICT: ${{ needs.gate.outputs.verdict }}
+          GATE_REPORT: ${{ needs.gate.outputs.report }}
+        run: |
+          REPO="${{ inputs.target_repo }}"; PR_NUM="${{ inputs.pr_number }}"
+          gh label create "needs-human-merge" --color "d93f0b" \
+            --description "Held by ADR-005 functional-integrity gate" --repo "$REPO" 2>/dev/null || true
+          gh pr edit "$PR_NUM" --repo "$REPO" --add-label "needs-human-merge" 2>/dev/null || true
+          {
+            echo "🚦 **Functional-integrity gate: ${VERDICT:-ERROR}** (ADR-005) — this version bump does not build cleanly, so git-steer is holding it for human review instead of auto-merging."
+            echo ""
+            printf '%s\n' "${GATE_REPORT:-}"
+          } > /tmp/hold.md
+          gh pr comment "$PR_NUM" --repo "$REPO" --body-file /tmp/hold.md 2>/dev/null || true
+          echo "Held Dependabot PR #$PR_NUM — verdict ${VERDICT:-ERROR}"
