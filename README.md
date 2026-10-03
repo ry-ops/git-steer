@@ -293,7 +293,7 @@ Seven-layer API safety stack:
 
 ```bash
 npm test              # Run all tests
-npm run test:coverage # Run with coverage report
+npm test -- --coverage # Run with coverage report
 ```
 
 ## GitHub App Permissions Required
@@ -330,3 +330,8 @@ MIT
 ---
 
 Built by [ry-ops](https://github.com/ry-ops)
+
+<!-- org-footer -->
+---
+
+<p align="center"><sub>Part of <a href="https://github.com/ry-ops">ry-ops</a> · building the pipes between infrastructure, automation, and observability · built by <a href="https://github.com/ry-ops">ry-ops</a></sub></p>
