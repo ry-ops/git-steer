@@ -1,7 +1,8 @@
 {
   "name": "git-steer",
   "version": "0.3.0",
-  "description": "Self-hosting GitHub autonomy engine. The skid steer for your repos.",
+  "private": true,
+  "description": "GitHub fleet health, run entirely on GitHub (ADR-008).",
   "author": "ry-ops",
   "license": "MIT",
   "repository": {
@@ -11,21 +12,12 @@
   "keywords": [
     "github",
     "automation",
-    "mcp",
-    "model-context-protocol",
-    "cli"
+    "dependabot",
+    "fleet"
   ],
   "type": "module",
-  "bin": {
-    "git-steer": "./bin/cli.js"
-  },
-  "files": [
-    "bin/",
-    "dist/"
-  ],
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/index.ts",
     "lint": "eslint src/",
     "test": "vitest"
   },
@@ -35,16 +27,10 @@
     "@fastify/static": "^10.1.5",
     "@git-fabric/cve": "https://github.com/git-fabric/cve.git",
     "@git-fabric/gateway": "https://github.com/git-fabric/gateway.git",
-    "@modelcontextprotocol/sdk": "^1.26.0",
     "@octokit/plugin-retry": "^7.2.1",
     "@octokit/plugin-throttling": "^10.0.0",
-    "chalk": "^5.3.0",
-    "commander": "^14.0.3",
     "fastify": "^5.3.0",
-    "keytar": "^7.9.0",
     "octokit": "^4.0.0",
-    "open": "^11.0.0",
-    "ora": "^8.0.0",
     "p-limit": "^3.1.0",
     "redis": "^5.11.0",
     "yaml": "^2.3.0"
@@ -55,18 +41,11 @@
     "@typescript-eslint/eslint-plugin": "^8.54.0",
     "@typescript-eslint/parser": "^8.54.0",
     "eslint": "^9.39.2",
-    "tsx": "^4.7.0",
     "typescript": "^5.3.0",
     "typescript-eslint": "^8.54.0",
     "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=20.0.0"
-  },
-  "exports": {
-    ".": "./dist/index.js",
-    "./fabric": "./dist/fabric/app.js"
-  },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts"
+  }
 }

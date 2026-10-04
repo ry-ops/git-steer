@@ -225,6 +225,11 @@ constraints:
       remaining caller); and the write-capable MCP tools (repo_create,
       repo_delete, repo_commit, and the like). The equivalent workflow in
       ry-ops/git-steer-state is removed there.
+      Decided 2026-10-04: the MCP server and local CLI are removed as a whole,
+      not trimmed to read-only, since C-008-001 leaves them no runtime; and
+      deploy-web.yml with the web dashboard is retired, because it deploys to
+      a self-hosted k3s cluster rather than GitHub. Layer 2 is built as a
+      read-only GitHub Actions job.
     check: |
       none of the listed files/routes/tools exist on main
     violation: WARN
