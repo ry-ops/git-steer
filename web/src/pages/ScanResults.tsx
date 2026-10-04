@@ -6,9 +6,9 @@ import Button from '../components/Button';
 import SeverityIcon from '../components/SeverityIcon';
 import VexBadge from '../components/VexBadge';
 import { api } from '../lib/api';
-import type { ScanResult, CveEntry, FixAllResult, VexStatus, VexJustification, VexEntry } from '../lib/api';
+import type { ScanResult, CveEntry, VexStatus, VexJustification, VexEntry } from '../lib/api';
 
-type ScanPageStatus = 'idle' | 'scanning' | 'fixing' | 'verified';
+type ScanPageStatus = 'idle' | 'scanning';
 
 export default function ScanResults() {
   const { owner, repo } = useParams<{ owner: string; repo: string }>();
@@ -16,15 +16,10 @@ export default function ScanResults() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [fixing, setFixing] = useState<Set<string>>(new Set());
-  const [fixResults, setFixResults] = useState<Record<string, { prNumber: number; prUrl: string; merged: boolean; error?: string }>>({});
   const [vexOpen, setVexOpen] = useState<Set<string>>(new Set());
   const [vexMap, setVexMap] = useState<Record<string, VexEntry>>({});
 
-  // Fix All state
   const [pageStatus, setPageStatus] = useState<ScanPageStatus>('idle');
-  const [fixAllProgress, setFixAllProgress] = useState<string | null>(null);
-  const [fixAllResult, setFixAllResult] = useState<FixAllResult | null>(null);
 
   useEffect(() => {
     if (!owner || !repo) return;
@@ -102,71 +97,6 @@ export default function ScanResults() {
     });
   }
 
-  async function handleFix(cveId: string) {
-    if (!owner || !repo) return;
-    setFixing((prev) => new Set(prev).add(cveId));
-    try {
-      const res = await api.cve.fix(cveId, owner, repo);
-      setFixResults((prev) => ({
-        ...prev,
-        [cveId]: {
-          prNumber: res.prNumber ?? 0,
-          prUrl: res.prUrl ?? '',
-          merged: res.merged ?? false,
-          error: res.error,
-        },
-      }));
-    } catch (err) {
-      setFixResults((prev) => ({
-        ...prev,
-        [cveId]: { prNumber: 0, prUrl: '', merged: false, error: err instanceof Error ? err.message : 'Fix failed' },
-      }));
-    } finally {
-      setFixing((prev) => {
-        const next = new Set(prev);
-        next.delete(cveId);
-        return next;
-      });
-    }
-  }
-
-  async function handleFixAll() {
-    if (!owner || !repo) return;
-    setPageStatus('fixing');
-    setFixAllResult(null);
-    setFixAllProgress('Starting fix-all...');
-    try {
-      const totalFixable = result?.cves.filter((c) => c.fixed_version && !c.dismissed).length ?? 0;
-      setFixAllProgress(`Fixing 0 of ${totalFixable} vulnerabilities...`);
-      const res = await api.cve.fixAll(owner, repo);
-      setFixAllResult(res);
-      setFixAllProgress(null);
-      setPageStatus('idle');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Fix all failed');
-      setFixAllProgress(null);
-      setPageStatus('idle');
-    }
-  }
-
-  async function handleVerify() {
-    if (!owner || !repo) return;
-    setPageStatus('scanning');
-    try {
-      const res = await api.cve.verify(owner, repo);
-      if (res.status === 'verified') {
-        setPageStatus('verified');
-      } else {
-        setPageStatus('idle');
-      }
-      // Reload results to show the new scan
-      await loadResults();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Verify failed');
-      setPageStatus('idle');
-    }
-  }
-
   async function handleVexSave(cveId: string, status: VexStatus, justification?: VexJustification, detail?: string) {
     if (!owner || !repo) return;
     try {
@@ -200,59 +130,9 @@ export default function ScanResults() {
       {pageStatus === 'scanning' && (
         <div className="flex items-center gap-3 mb-6 px-5 py-3 rounded-xl bg-warning/15 border-2 border-dashed border-warning/40">
           <div className="w-5 h-5 border-2 border-warning border-t-transparent rounded-full animate-spin flex-shrink-0" />
-          <p className="text-sm font-semibold text-warning">Re-scanning to verify fixes...</p>
+          <p className="text-sm font-semibold text-warning">Re-scanning...</p>
         </div>
       )}
-      {pageStatus === 'fixing' && (
-        <div className="flex items-center gap-3 mb-6 px-5 py-3 rounded-xl bg-accent/15 border-2 border-dashed border-accent/40">
-          <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin flex-shrink-0" />
-          <p className="text-sm font-semibold text-accent">{fixAllProgress ?? 'Applying fixes...'}</p>
-        </div>
-      )}
-      {pageStatus === 'verified' && (
-        <div className="flex items-center gap-3 mb-6 px-5 py-3 rounded-xl bg-safe/15 border-2 border-dashed border-safe/40">
-          <svg className="w-5 h-5 text-safe flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <p className="text-sm font-semibold text-safe">All fixes verified</p>
-        </div>
-      )}
-
-      {/* Fix All result summary */}
-      {fixAllResult && (
-        <div className="mb-6 px-5 py-4 rounded-xl bg-card border-2 border-dashed border-border">
-          <p className="text-sm font-semibold text-contrast mb-3">Fix All Complete</p>
-          <div className="flex flex-wrap gap-3 text-xs mb-3">
-            <span className="text-safe font-semibold">{fixAllResult.fixed} fixed</span>
-            {(fixAllResult.no_fix ?? 0) > 0 && <span className="text-muted font-semibold">{fixAllResult.no_fix} no fix available</span>}
-            {fixAllResult.failed > 0 && <span className="text-critical font-semibold">{fixAllResult.failed} failed</span>}
-          </div>
-          {fixAllResult.prs && fixAllResult.prs.length > 0 && (
-            <div className="space-y-1.5">
-              {fixAllResult.prs.map((pr: any, i: number) => (
-                <div key={i} className="flex items-center gap-2 text-xs">
-                  {pr.merged ? (
-                    <span className="text-safe">✓</span>
-                  ) : pr.error ? (
-                    <span className="text-critical">✗</span>
-                  ) : (
-                    <span className="text-warning">○</span>
-                  )}
-                  <span className="font-mono text-contrast">{pr.package}</span>
-                  <span className="text-muted">{pr.severity}</span>
-                  {pr.prUrl && (
-                    <a href={pr.prUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:text-contrast">
-                      PR #{pr.prNumber} →
-                    </a>
-                  )}
-                  {pr.error && <span className="text-critical">{pr.error}</span>}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Header with actions */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
         <div>
@@ -267,25 +147,6 @@ export default function ScanResults() {
           )}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          {/* Fix All button */}
-          {result && result.cves.some((c) => c.fixed_version && !c.dismissed) && pageStatus !== 'fixing' && (
-            <Button
-              onClick={handleFixAll}
-              className="text-xs"
-            >
-              Fix All
-            </Button>
-          )}
-          {/* Verify button (shown after fixes) */}
-          {fixAllResult && pageStatus !== 'scanning' && (
-            <Button
-              variant="secondary"
-              onClick={handleVerify}
-              className="text-xs"
-            >
-              Verify
-            </Button>
-          )}
           <Button
             variant="secondary"
             onClick={() => {
@@ -344,12 +205,9 @@ export default function ScanResults() {
             key={cve.id}
             cve={cve}
             vex={vexMap[cve.id]}
-            fixResult={fixResults[cve.id]}
             isExpanded={expanded.has(cve.id)}
-            isFixing={fixing.has(cve.id)}
             isVexOpen={vexOpen.has(cve.id)}
             onToggle={() => toggleExpand(cve.id)}
-            onFix={() => handleFix(cve.id)}
             onVexToggle={() => toggleVex(cve.id)}
             onVexSave={(status, justification, detail) => handleVexSave(cve.id, status, justification, detail)}
           />
@@ -362,23 +220,17 @@ export default function ScanResults() {
 function CveRow({
   cve,
   vex,
-  fixResult,
   isExpanded,
-  isFixing,
   isVexOpen,
   onToggle,
-  onFix,
   onVexToggle,
   onVexSave,
 }: {
   cve: CveEntry;
   vex?: VexEntry;
-  fixResult?: { prNumber: number; prUrl: string; merged: boolean; error?: string };
   isExpanded: boolean;
-  isFixing: boolean;
   isVexOpen: boolean;
   onToggle: () => void;
-  onFix: () => void;
   onVexToggle: () => void;
   onVexSave: (status: VexStatus, justification?: VexJustification, detail?: string) => void;
 }) {
@@ -413,19 +265,6 @@ function CveRow({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {cve.fixed_version && !cve.dismissed && (
-            <Button
-              variant="primary"
-              className="text-xs py-2 px-4"
-              onClick={(e) => {
-                e.stopPropagation();
-                onFix();
-              }}
-              disabled={isFixing}
-            >
-              {isFixing ? 'Creating PR...' : 'Fix'}
-            </Button>
-          )}
           <Button
             variant="secondary"
             className="text-xs py-2 px-4"
@@ -459,33 +298,6 @@ function CveRow({
           <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
         </svg>
       </div>
-
-      {/* Fix result feedback */}
-      {fixResult && (
-        <div className="mt-2 pt-2 border-t border-dashed border-border" onClick={(e) => e.stopPropagation()}>
-          {fixResult.error ? (
-            <p className="text-xs text-critical font-mono">{fixResult.error}</p>
-          ) : fixResult.merged ? (
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-safe/15 text-safe text-xs font-semibold">
-                ✓ PR #{fixResult.prNumber} merged
-              </span>
-              <a href={fixResult.prUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:text-contrast">
-                View PR →
-              </a>
-            </div>
-          ) : fixResult.prNumber > 0 ? (
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-warning/15 text-warning text-xs font-semibold">
-                PR #{fixResult.prNumber} created
-              </span>
-              <a href={fixResult.prUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:text-contrast">
-                View PR →
-              </a>
-            </div>
-          ) : null}
-        </div>
-      )}
 
       {/* VEX inline form */}
       {isVexOpen && (

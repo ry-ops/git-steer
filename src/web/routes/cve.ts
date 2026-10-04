@@ -3,9 +3,6 @@
  *
  * POST /api/cve/scan                    — trigger CVE scan for a repo
  * GET  /api/cve/results/:owner/:repo    — get scan results
- * POST /api/cve/triage/:cveId           — triage a CVE
- * POST /api/cve/fix                     — create a fix PR (single)
- * POST /api/cve/fix-all                 — create fix PRs for ALL fixable CVEs
  * POST /api/cve/verify                  — verify fixes (body-based)
  * POST /api/cve/verify/:owner/:repo     — re-scan after fixes, compare to previous
  * GET  /api/cve/queue                   — get pending CVE queue
@@ -42,26 +39,6 @@ export interface ScanRecord {
   fixes_failed: number;
 }
 
-/** Result from fixing a single alert */
-interface FixResult {
-  alertNumber: number;
-  package: string;
-  cve: string | null;
-  severity: string;
-  prNumber: number;
-  prUrl: string;
-  merged: boolean;
-  error?: string;
-}
-
-/** Summary from fix-all operation */
-interface FixAllSummary {
-  total: number;
-  fixed: number;
-  failed: number;
-  prs: FixResult[];
-}
-
 /** Verification result after fixes */
 interface VerificationResult {
   previously: number;
@@ -74,19 +51,6 @@ interface VerificationResult {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Translate raw GitHub API errors into human-readable messages */
-function humanizeError(err: any): string {
-  const msg = err?.message ?? String(err);
-  if (msg.includes('Reference already exists')) return 'A previous fix attempt left a stale branch. Retrying with cleanup.';
-  if (msg.includes('Merge conflict')) return 'The fix has a merge conflict with the default branch. Manual resolution needed.';
-  if (msg.includes('Required status check')) return 'PR can\'t be merged — required CI checks haven\'t passed yet.';
-  if (msg.includes('rate limit')) return 'GitHub API rate limit reached. Try again in a few minutes.';
-  if (msg.includes('not found') || msg.includes('Not Found')) return 'Repository or resource not found. Check permissions.';
-  if (msg.includes('403')) return 'Permission denied. The GitHub token may not have write access to this repo.';
-  if (msg.includes('Package') && msg.includes('not found')) return 'Package not found in package.json. The vulnerability may be in a transitive dependency.';
-  return msg;
 }
 
 function emptyScanRecord(repo: string): ScanRecord {
@@ -155,73 +119,6 @@ async function recordTrend(scan: ScanRecord): Promise<void> {
   } catch (err) {
     console.warn('[redis] Failed to record trend:', (err as Error).message);
   }
-}
-
-/**
- * Create a security fix PR and merge it for a single alert.
- */
-async function fixAndMerge(
-  gh: TokenGitHubClient,
-  owner: string,
-  repo: string,
-  alert: SecurityAlert,
-): Promise<FixResult> {
-  try {
-    // 1. Create branch + PR
-    const { prNumber, prUrl } = await gh.createSecurityFixPR(owner, repo, alert);
-
-    // 2. Wait briefly for CI checks to register (if any)
-    await sleep(5000);
-
-    // 3. Merge the PR
-    const merged = await gh.mergePR(owner, repo, prNumber);
-
-    return {
-      alertNumber: alert.alertNumber,
-      package: alert.package,
-      cve: alert.cve,
-      severity: alert.severity,
-      prNumber,
-      prUrl,
-      merged,
-    };
-  } catch (err: any) {
-    return {
-      alertNumber: alert.alertNumber,
-      package: alert.package,
-      cve: alert.cve,
-      severity: alert.severity,
-      prNumber: 0,
-      prUrl: '',
-      merged: false,
-      error: humanizeError(err),
-    };
-  }
-}
-
-/**
- * Fix all fixable alerts: create PRs, merge them, return summary.
- */
-async function fixAll(
-  gh: TokenGitHubClient,
-  owner: string,
-  repo: string,
-  alerts: SecurityAlert[],
-): Promise<FixAllSummary> {
-  const fixable = alerts.filter((a) => a.fixVersion);
-  const results: FixResult[] = [];
-
-  for (const alert of fixable) {
-    const result = await fixAndMerge(gh, owner, repo, alert);
-    results.push(result);
-  }
-
-  return {
-    total: fixable.length,
-    fixed: results.filter((r) => r.merged).length,
-    failed: results.filter((r) => !r.merged).length,
-    prs: results,
-  };
 }
 
 /**
@@ -430,193 +327,6 @@ export async function registerCveRoutes(app: FastifyInstance, config: WebServerC
       return reply.send(JSON.parse(raw));
     } catch (err: any) {
       return reply.status(500).send({ error: `Failed to fetch scan: ${err.message}` });
-    }
-  });
-
-  // ── Triage ──────────────────────────────────────────────────────────
-
-  app.post<{
-    Params: { cveId: string };
-    Body: { action: 'confirm' | 'dismiss' | 'fix'; reason?: string; owner?: string; repo?: string };
-  }>('/api/cve/triage/:cveId', async (req, reply) => {
-    const { cveId } = req.params;
-    const { action, reason } = req.body;
-
-    if (!action || !['confirm', 'dismiss', 'fix'].includes(action)) {
-      return reply.status(400).send({ error: 'action must be: confirm, dismiss, or fix' });
-    }
-
-    if (gateway?.available) {
-      try {
-        const routeResult = await gateway.router.route('cve_triage', { cve_id: cveId, action, reason });
-        const result = typeof routeResult.result === 'string' ? JSON.parse(routeResult.result) : routeResult.result;
-        return reply.send(result);
-      } catch (err: any) {
-        return reply.status(500).send({ error: err.message, cveId });
-      }
-    }
-
-    return reply.status(501).send({
-      error: 'CVE triage requires the fabric gateway for full functionality',
-      cveId,
-      suggestion: 'Use the git-steer MCP security_dismiss tool with the alert number',
-    });
-  });
-
-  // ── Fix (single) ───────────────────────────────────────────────────
-
-  app.post<{
-    Body: { owner: string; repo: string; alertNumber?: number; severity?: string; dryRun?: boolean };
-  }>('/api/cve/fix', async (req, reply) => {
-    const { owner, repo, alertNumber, severity, dryRun } = req.body;
-
-    if (!owner || !repo) {
-      return reply.status(400).send({ error: 'owner and repo are required' });
-    }
-
-    const gh = github as unknown as TokenGitHubClient;
-
-    try {
-      const alerts: SecurityAlert[] = await gh.getSecurityAlertsDetailed(owner, repo);
-      const toFix = alerts.filter((a) => {
-        if (!a.fixVersion) return false;
-        if (alertNumber && a.alertNumber !== alertNumber) return false;
-        if (severity && severity !== 'all') {
-          const severityOrder = ['critical', 'high', 'medium', 'low'];
-          const minIdx = severityOrder.indexOf(severity.toLowerCase());
-          const alertIdx = severityOrder.indexOf(a.severity?.toLowerCase());
-          if (alertIdx < 0 || alertIdx > minIdx) return false;
-        }
-        return true;
-      });
-
-      if (toFix.length === 0) {
-        return reply.send({ message: 'No fixable vulnerabilities found', totalAlerts: alerts.length });
-      }
-
-      if (dryRun) {
-        return reply.send({
-          dryRun: true,
-          wouldFix: toFix.length,
-          vulnerabilities: toFix.map((a) => ({
-            package: a.package,
-            severity: a.severity,
-            cve: a.cve,
-            currentVersion: a.currentVersion,
-            fixVersion: a.fixVersion,
-          })),
-        });
-      }
-
-      // Fix a single alert if alertNumber specified, otherwise first match
-      const target = toFix[0];
-      const result = await fixAndMerge(gh, owner, repo, target);
-
-      audit({
-        action: 'web_cve_fix',
-        repo: `${owner}/${repo}`,
-        result: result.merged ? 'success' : 'failure',
-        details: { prNumber: result.prNumber, package: result.package, cve: result.cve },
-      });
-
-      return reply.send(result);
-    } catch (err: any) {
-      return reply.status(500).send({ error: err.message });
-    }
-  });
-
-  // ── Fix All with Redis tracking ─────────────────────────────────────
-
-  app.post<{
-    Body: { owner: string; repo: string; severity?: string; dryRun?: boolean; verify?: boolean };
-  }>('/api/cve/fix-all', async (req, reply) => {
-    const { owner, repo, severity, dryRun, verify } = req.body;
-
-    if (!owner || !repo) {
-      return reply.status(400).send({ error: 'owner and repo are required' });
-    }
-
-    const fullName = `${owner}/${repo}`;
-    const gh = github as unknown as TokenGitHubClient;
-
-    try {
-      const alerts: SecurityAlert[] = await gh.getSecurityAlertsDetailed(owner, repo);
-
-      // Filter to fixable alerts at or above severity threshold
-      const severityOrder = ['critical', 'high', 'medium', 'low'];
-      const minSevIdx = (severity && severity !== 'all')
-        ? severityOrder.indexOf(severity.toLowerCase())
-        : severityOrder.length;
-
-      const fixable = alerts.filter((a) => {
-        if (!a.fixVersion) return false;
-        const idx = severityOrder.indexOf(a.severity?.toLowerCase());
-        return idx >= 0 && idx <= minSevIdx;
-      });
-
-      if (fixable.length === 0) {
-        return reply.send({
-          message: 'No fixable vulnerabilities found',
-          totalAlerts: alerts.length,
-          total: 0,
-          fixed: 0,
-          failed: 0,
-          prs: [],
-        });
-      }
-
-      if (dryRun) {
-        return reply.send({
-          dryRun: true,
-          wouldFix: fixable.length,
-          vulnerabilities: fixable.map((a) => ({
-            alertNumber: a.alertNumber,
-            package: a.package,
-            severity: a.severity,
-            cve: a.cve,
-            currentVersion: a.currentVersion,
-            fixVersion: a.fixVersion,
-          })),
-        });
-      }
-
-      // Execute all fixes
-      const summary = await fixAll(gh, owner, repo, fixable);
-
-      // Update latest scan record with fix counts
-      try {
-        const redis = await getRedis();
-        const latestRaw = await redis.get(KEYS.scanLatest(fullName));
-        if (latestRaw) {
-          const latestScan: ScanRecord = JSON.parse(latestRaw);
-          latestScan.fixes_created = summary.total;
-          latestScan.fixes_merged = summary.fixed;
-          latestScan.fixes_failed = summary.failed;
-          latestScan.status = 'fixes_applied';
-          await redis.set(KEYS.scan(latestScan.scan_id), JSON.stringify(latestScan));
-          await redis.set(KEYS.scanLatest(fullName), JSON.stringify(latestScan));
-        }
-      } catch { /* non-fatal redis failure */ }
-
-      audit({
-        action: 'web_cve_fix_all',
-        repo: fullName,
-        result: summary.failed === 0 ? 'success' : 'partial',
-        details: { total: summary.total, fixed: summary.fixed, failed: summary.failed },
-      });
-
-      // Optionally run verification scan
-      let verification: VerificationResult | undefined;
-      if (verify && summary.fixed > 0) {
-        verification = await verifyFixScan(gh, owner, repo, alerts);
-      }
-
-      return reply.send({
-        ...summary,
-        ...(verification ? { verification } : {}),
-      });
-    } catch (err: any) {
-      return reply.status(500).send({ error: err.message });
     }
   });
 
