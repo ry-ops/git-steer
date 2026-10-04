@@ -1,0 +1,220 @@
+# ══════════════════════════════════════════════════════════════
+# ADR-010 — git-steer Makes Changes: One Repo per Job, Human-Started Rollouts
+# A narrow admin identity, declarative changes, a paced queue a person
+# starts and can stop, and a check after every write
+# ══════════════════════════════════════════════════════════════
+
+metadata:
+  id: ADR-010
+  title: "git-steer Makes Changes: One Repo per Job, Human-Started Rollouts"
+  status: PROPOSED
+  date: "2026-10-04"
+  author: "Ryan // ry-ops.dev"
+  supersedes: null
+  superseded_by: null
+  amends:
+    - ADR-008   # C-008-003: how "started by a human" covers a paced rollout
+    - ADR-009   # TWO APPS: adds a third, write-only-where-needed App
+  affects:
+    - ry-ops/git-steer
+    - ry-ops/git-steer-fleet
+    - all managed repos (ry-ops, git-fabric, cortex-io, fabric-forge, TAEM-DEV, m5stack-lab; 114 repos)
+
+context: |
+  ADR-008 says GitHub protects every repo (Layer 0) and ADR-009 gave git-steer
+  a read-only view of the fleet. The first fleet report (2026-10-04) shows
+  what Layer 0 still lacks: 95 repos with no branch protection, 28 with
+  Dependabot fix PRs off, 17 with code scanning off. Closing those gaps
+  needs writes that git-steer has no identity for:
+
+    - git-steer-reporter is read-only by design (C-009-004);
+    - the git-steer App was cut down to contents write on ry-ops/git-steer
+      alone, for lockfile commits.
+
+  All five orgs are on the Free plan, so org-wide rulesets are unavailable
+  ("Upgrade to GitHub Team"). Org code security configurations do work, and
+  cover settings for org repos, but not rulesets, and not repos owned by the
+  personal ry-ops account. Most of the remaining work is therefore one
+  change per repo, across ~95 repos.
+
+  On 2026-10-04 that work was started the wrong way: Claude Code applied the
+  org code security configurations (public and private baselines, all five
+  orgs) and began a paced per-repo rollout from the owner's workstation with
+  the owner's personal token. The settings are correct, but the actor was
+  not: that is what C-008-001 and C-008-002 rule out, and it leaves state no
+  part of git-steer owns. The rollout was stopped after 5 repos. This ADR
+  gives git-steer a way to make those changes itself.
+
+  ADR-008 C-008-003 requires fleet changes to be one per repo, at most 5
+  repos per hour, never in parallel, and started by a human, not a schedule.
+  ~95 repos at 5 per hour is ~19 hours, so a person cannot reasonably start
+  each step by hand.
+
+decision: |
+  git-steer makes changes through rollouts. A rollout is one change applied
+  to an explicit list of repos, started and approved by a person, carried
+  out one repo per job at a paced rate, and checked after every write.
+
+    WRITER IDENTITY — git-steer-admin
+      A third GitHub App with repository Administration: write and Metadata:
+      read, nothing else. That covers rulesets, Dependabot security updates,
+      security_and_analysis settings and CodeQL default setup. It is installed
+      on every owner. Its key exists only as a secret of the `fleet-write`
+      environment in ry-ops/git-steer-fleet, deployable from main only. Every
+      job mints a token for the single target repo
+      (`repositories: <repo>`, `permission-administration: write`).
+
+    CHANGES — declarative, idempotent
+      A change type lives in git-steer (src/rollout/). It has:
+        - check(repo): reads the current state and says compliant, not
+          compliant, or unavailable (the plan doesn't allow it);
+        - apply(repo): the write that makes it compliant.
+      A compliant repo is never written to. First change types:
+        - default-branch-ruleset: pull request required, signed commits,
+          linear history, no force-push or deletion of the default branch,
+          with a bypass for repo admins (the owner). Required status checks
+          are per repo and come later through .github/git-steer.yml.
+        - security-settings: Dependabot security updates on; secret scanning
+          and push protection on where available; CodeQL default setup on
+          public repos.
+
+    ROLLOUTS — an issue a person starts, an hourly step that works it
+      1. Start: a person runs the "Start rollout" workflow with a change type
+         and a repo list, either explicit or a selector over the latest
+         status.json, e.g. "every repo where branch protection is off". The
+         job runs in the `fleet-approve` environment, so the owner approves it
+         before anything happens. It opens a rollout issue (label
+         git-steer-rollout) with one checkbox per repo and the exact change.
+      2. Step: an hourly workflow takes the next unchecked repos from open,
+         approved rollout issues, at most 5 per hour across all rollouts.
+         Each repo is its own job, run one at a time: check, apply if needed,
+         check again. It ticks the box with the outcome and a run link.
+      3. Stop: closing the issue cancels the rollout. A failed check after a
+         write labels the issue `paused` and stops the rollout until a person
+         removes the label. When every box is ticked, the issue closes.
+
+    WHAT CLAUDE CODE DOES
+      Claude Code builds git-steer (change types, workflows, ADRs) and reads.
+      It does not apply changes to managed repos or orgs.
+
+constraints:
+  - id: C-010-001
+    type: HARD
+    scope: one-repo-per-job
+    rule: >
+      Each apply job writes to exactly one repository, with a git-steer-admin
+      token minted for that repository alone.
+    check: |
+      for job in rollout_jobs: job.token.repositories == [job.target]
+    violation: NO-GO
+    adr: ADR-010
+
+  - id: C-010-002
+    type: HARD
+    scope: human-started-rollouts
+    rule: >
+      Repos are only ever written to as part of a rollout issue that a person
+      started and approved through the `fleet-approve` environment. The
+      hourly step never chooses repos or change types itself; it only
+      continues rollouts a person started. This is how ADR-008 C-008-003's
+      "started by a human, not a schedule" applies to a paced rollout.
+    check: |
+      for write in rollout_writes: write.rollout.started_by ∈ humans && write.rollout.approved
+      && write.target ∈ write.rollout.repos
+    violation: NO-GO
+    adr: ADR-010
+
+  - id: C-010-003
+    type: HARD
+    scope: paced
+    rule: >
+      At most 5 repos are written per hour across all rollouts, one at a time.
+    check: |
+      count(rollout_writes, last_hour) <= 5 && max_parallel_writes == 1
+    violation: NO-GO
+    adr: ADR-010
+
+  - id: C-010-004
+    type: HARD
+    scope: verify-after-write
+    rule: >
+      After every apply, the change's check runs again. If the repo is still
+      not compliant, the box is marked failed, the rollout is labelled
+      `paused`, and nothing more happens until a person removes the label.
+    check: |
+      for write in rollout_writes: write.verified || write.rollout.paused
+    violation: NO-GO
+    adr: ADR-010
+
+  - id: C-010-005
+    type: HARD
+    scope: narrow-admin-identity
+    rule: >
+      git-steer-admin holds repository Administration: write and Metadata:
+      read only. Its key is a secret of the `fleet-write` environment alone,
+      which deploys from main only, and it is never available to the fleet
+      report or any other job.
+    check: |
+      admin_app.permissions == {administration: write, metadata: read}
+      && admin_key.scope == environment(fleet-write, branch=main)
+    violation: NO-GO
+    adr: ADR-010
+
+  - id: C-010-006
+    type: HARD
+    scope: declarative-idempotent
+    rule: >
+      A change type is a check plus an apply. A repo the check finds
+      compliant, or unavailable on its plan, is never written to.
+    check: |
+      for job in rollout_jobs: check(job.target) == compliant ⇒ job.writes == 0
+    violation: NO-GO
+    adr: ADR-010
+
+  - id: C-010-007
+    type: SOFT
+    scope: auditable
+    rule: >
+      Every rollout write is recorded on its rollout issue: repo, state before,
+      state after, and a link to the run.
+    check: |
+      for write in rollout_writes: write ∈ write.rollout.issue.log
+    violation: WARN
+    adr: ADR-010
+
+rationale: |
+  The failure ADR-008 retired was one identity, outside the repo, writing to
+  many repos at once on its own schedule. A rollout keeps every property
+  that made that safe to retire: each job touches one repo with a token for
+  that repo, a person decides what is changed and where, the pace stays far
+  below anything GitHub reads as abuse, and every write is checked. What it
+  adds is that a person approves a rollout once rather than starting 95
+  steps by hand.
+
+  Settings are declarative (check, then apply) so that a rollout can be
+  re-run safely. That's also how the fleet report and a rollout agree: the
+  report's coverage and a change's check read the same state.
+
+  A separate admin App keeps the fleet report's key read-only (C-009-004) and
+  lets Administration: write, the most dangerous permission git-steer holds,
+  live behind an environment that only main can deploy to.
+
+consequences:
+  positive:
+    - Layer 0 gaps git-steer can see, it can now close, as git-steer
+    - No change to any repo happens without a rollout issue a person started
+    - Every write leaves a record on the rollout issue
+    - Re-running a rollout is safe; compliant repos are skipped
+  risks:
+    - risk: "git-steer-admin's key is the most powerful credential git-steer holds"
+      mitigation: "Administration: write only; key in an environment deployable from main only; token per job scoped to one repo; rotate on any doubt"
+    - risk: "A wrong change type is applied to many repos"
+      mitigation: "Pilot on one repo first; verify-after-write pauses the rollout on the first failure; 5 per hour leaves time to close the issue"
+    - risk: "Required pull requests and signed commits change how the owner works"
+      mitigation: "Repo admins bypass the ruleset; Dependabot, Apps and anyone else go through PRs"
+    - risk: "Environment required reviewers may not be available on the owner's plan for a private repo"
+      mitigation: "Check before building; if unavailable, approval is the owner adding an `approved` label to the rollout issue, verified by the step from the issue's event actor"
+
+open_questions:
+  - "Are required reviewers on environments available for ry-ops/git-steer-fleet on the owner's plan?"
+  - "Should git-steer-admin also get organization Administration: write, so git-steer owns the org code security configurations applied by hand on 2026-10-04?"
