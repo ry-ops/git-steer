@@ -4,7 +4,7 @@
  */
 
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { ToolDeps, ToolResult } from './types.js';
+import type { ToolDeps } from './types.js';
 
 export function getTools(): Tool[] {
   return [

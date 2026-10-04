@@ -159,8 +159,6 @@ export function createApp(opts: { octokit: Octokit }): FabricApp {
       },
       execute: async (a) => {
         const res = await octokit.rest.repos.listBranches({ owner: a.owner as string, repo: a.repo as string, per_page: 100 });
-        const staleDays = (a.stale_days as number) ?? 30;
-        const staleDate = new Date(Date.now() - staleDays * 86400000);
         return res.data.map((b) => ({
           name: b.name, sha: b.commit.sha, protected: b.protected,
         }));

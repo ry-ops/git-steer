@@ -15,14 +15,6 @@ export interface DashboardData {
   dateRange?: { start: string; end: string };
 }
 
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 export function generateDashboardHtml(data: DashboardData): string {
   const { metrics, rfcs, quality } = data;
 
