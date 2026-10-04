@@ -16,7 +16,7 @@ metadata:
     - ADR-008   # keeps all of its HARD constraints; settles Layer 2's design, its output target, and per-repo config/state
   affects:
     - ry-ops/git-steer
-    - ry-ops/git-steer-state
+    - ry-ops/git-steer-fleet   # new private repo: runs the report, holds its output
     - all managed repos (ry-ops, git-fabric, cortex-io, fabric-forge, TAEM-DEV, m5stack-lab; ~113 repos)
 
 context: |
@@ -86,8 +86,12 @@ decision: |
       artifacts or org custom properties, never in commits to a default
       branch, and only through a new ADR.
 
-    FLEET REPORT — a scheduled, read-only workflow in git-steer
-      1. Discover the fleet from the git-steer App's installations. No
+    FLEET REPORT — a scheduled, read-only workflow in the private fleet repo
+      The code lives in git-steer; the workflow that runs it lives in the
+      private fleet repo (ry-ops/git-steer-fleet) and checks git-steer out.
+      Actions logs, job summaries and artifacts of a public repo are public,
+      so a report run in git-steer itself would publish fleet data.
+      1. Discover the fleet from the reporter App's installations. No
          hand-maintained repo list; archived repos are listed but not scored.
       2. For each repo, record coverage first: Dependabot alerts, Dependabot
          security updates, dependency graph, CodeQL, secret scanning and push
@@ -102,8 +106,9 @@ decision: |
       5. Produce status.json (versioned schema) and the dashboard from it.
 
     OUTPUT — private by default
-      Fleet data is written to one private output repo, ry-ops/git-steer-state
-      by default, set by a repository variable so forks can choose their own.
+      Fleet data stays in the private fleet repo the report runs in,
+      ry-ops/git-steer-fleet (decided 2026-10-04; git-steer-state is not
+      reused). Forks use their own private repo.
         - The dashboard is a single issue in that repo, updated in place:
           a fleet table, the coverage gaps, and the human-decision list from
           C-008-008. It is never closed while it serves as the dashboard; the
@@ -114,10 +119,21 @@ decision: |
       carries aggregate counts only, with no repo names or alert details for
       private repos, and needs its own ADR.
 
+    TWO APPS (decided 2026-10-04)
+      - git-steer-reporter: read-only. It is installed on every owner and
+        used only by the fleet report. Its key cannot change anything.
+      - git-steer (the existing App): cut down to the writes Layer 1 needs,
+        today contents write for lockfile commits, always minted for one
+        repository (C-008-002).
+      The existing App held write access to administration, secrets,
+      workflows, actions, Pages and more across the fleet; asking for less
+      at mint time does not shrink what a leaked key can do, so the
+      permissions themselves are reduced.
+
     FORKABLE
-      Owners, orgs, the output repo and the App are configuration (repository
-      variables and secrets), not code. A fork plus an App installation plus
-      those settings is a working git-steer.
+      Owners, orgs, the fleet repo and the Apps are configuration (repository
+      variables and secrets), not code. A fork plus a private fleet repo plus
+      an App installation is a working git-steer.
 
 constraints:
   - id: C-009-001
@@ -151,27 +167,30 @@ constraints:
     scope: private-fleet-data
     rule: >
       Fleet data (repo names, alert details, coverage gaps) goes only to the
-      configured private output repo and to workflow artifacts. It is never
-      published to the public git-steer repo, to GitHub Pages, or to any
-      public location. The report job fails if the output repo is not private.
+      private fleet repo, as issues and workflow artifacts. Every job that
+      handles fleet data runs in that repo, since its logs and summaries are
+      fleet data too. Nothing is published to the public git-steer repo, to
+      GitHub Pages, or to any public location. Report code refuses to run
+      unless the repo running it is private.
     check: |
-      output_repo.visibility == private
+      fleet_repo.visibility == private
+      && runs_handling_fleet_data ⊆ fleet_repo
       && public_outputs(fleet_report) == ∅
     violation: NO-GO
     adr: ADR-009
 
   - id: C-009-004
     type: HARD
-    scope: read-only-report-token
+    scope: read-only-reporter
     rule: >
-      The fleet report reads managed repos with a git-steer App token minted
-      with read permissions only. Writing the dashboard issue and artifacts
-      uses a separate token minted for the output repo alone, with issues
-      write and nothing else.
+      The fleet report reads managed repos only through the git-steer-reporter
+      App, whose permissions are all read. It writes only to the fleet repo
+      it runs in, with that repo's own GITHUB_TOKEN (issues write, nothing
+      else). No write-capable App key is available to the report job.
     check: |
-      report_token.permissions ⊆ read
-      && output_token.repositories == [output_repo]
-      && output_token.permissions == {issues: write}
+      reporter_app.permissions ⊆ read
+      && report_job.writes ⊆ {fleet_repo: issues}
+      && report_job.secrets ∌ writer_app_key
     violation: NO-GO
     adr: ADR-009
 
@@ -179,11 +198,11 @@ constraints:
     type: HARD
     scope: discovered-fleet
     rule: >
-      The fleet is the set of repos the git-steer App is installed on. No
-      repo list is maintained by hand, and the report does not depend on any
-      file in the output repo to know what to read.
+      The fleet is the set of repos the git-steer-reporter App is installed
+      on. No repo list is maintained by hand, and the report does not depend
+      on any file in the fleet repo to know what to read.
     check: |
-      fleet == ⋃ installations(app).repositories
+      fleet == ⋃ installations(reporter_app).repositories
     violation: WARN
     adr: ADR-009
 
@@ -229,6 +248,9 @@ rationale: |
   can be read from a phone. If it outgrows an issue, the status.json schema
   is what the next view is built on.
 
+  The reporter is its own App so that the key the report holds can only
+  read. A leaked reporter key exposes data but changes nothing.
+
   Discovering the fleet from App installations means installing the App is
   how a repo joins, and uninstalling is how it leaves, so the list can't
   drift from what git-steer can actually read.
@@ -241,16 +263,20 @@ consequences:
     - VEX needs no separate store; dismissals are the record
     - A fork is configuration, not code changes
   risks:
-    - risk: "The output repo, git-steer-state, does not work today"
-      mitigation: "The report needs only an issue and artifacts there, none of its old files or workflows; if it can't be repaired, a new private repo is set by variable"
+    - risk: "The fleet repo is made public by mistake"
+      mitigation: "Report code checks the running repo is private and refuses to run otherwise (C-009-003)"
+    - risk: "The reporter App's key leaks"
+      mitigation: "It can read alert data but change nothing; rotate the key, and the fleet is unaffected"
     - risk: "An issue body is limited to 65,536 characters"
       mitigation: "The issue shows repos with something to act on plus a one-line count of clean repos; the full table is in status.json"
-    - risk: "The App's installed permissions may not cover every read"
+    - risk: "The reporter App's permissions may not cover every read"
       mitigation: "Missing permissions show as UNKNOWN under C-009-001, with the permission named, so the gap is visible rather than silent"
     - risk: "Reads across ~113 repos could hit rate limits"
       mitigation: "Org-wide endpoints for the five orgs, ETag caching and concurrency caps from src/github/client.ts, one scheduled run per day"
 
+resolved_questions:
+  - "Output repo: a new private repo, ry-ops/git-steer-fleet; git-steer-state is not reused (2026-10-04)."
+  - "App permissions: the existing App is write-heavy everywhere, so a read-only git-steer-reporter App is added and the existing one is cut down (2026-10-04). The per-repo audit runs from git-steer-fleet (scripts/app-audit.mjs)."
+
 open_questions:
-  - "Is git-steer-state repaired as the output repo, or replaced by a new private repo?"
-  - "Which permissions does the installed git-steer App have today, per org, and do they cover the coverage checks?"
   - "Does changelog.yml (personal access token, writes to fabric-forge/blog) stay, change, or go under ADR-008 and this ADR?"
