@@ -21,15 +21,9 @@
  */
 
 import { App, Octokit } from 'octokit';
-import { writeFileSync } from 'node:fs';
+import { realpathSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
-const { APP_ID, APP_PRIVATE_KEY } = process.env;
-if (!APP_ID || !APP_PRIVATE_KEY) {
-  console.error('APP_ID and APP_PRIVATE_KEY are required.');
-  process.exit(1);
-}
-
-const app = new App({ appId: APP_ID, privateKey: APP_PRIVATE_KEY });
 
 // ===== Probes =====
 
@@ -47,6 +41,9 @@ async function probe(octokit, route, params, classify) {
   }
 }
 
+/** GitHub's answers when a feature needs a paid plan, not a setting change. */
+const planLimited = (message) => /upgrade to github pro|advanced security must be enabled/i.test(message);
+
 const dependabot = (status, message) => {
   if (status === 200) return 'on';
   if (status === 403 && /disabled/i.test(message)) return 'off';
@@ -56,7 +53,7 @@ const dependabot = (status, message) => {
 const codeScanning = (status, message) => {
   if (status === 200) return 'on';
   if (status === 404) return 'off'; // no analysis found
-  if (status === 403 && /advanced security|code security/i.test(message)) return 'unavailable';
+  if (status === 403 && (planLimited(message) || /code security/i.test(message))) return 'unavailable';
   if (status === 403 && /disabled|not enabled/i.test(message)) return 'off';
   return `error:${status}`;
 };
@@ -86,12 +83,20 @@ async function auditRepo(octokit, repo) {
   // Rulesets that apply to the default branch (readable with metadata only).
   row.branchRules = await probe(
     octokit, 'GET /repos/{owner}/{repo}/rules/branches/{branch}', { owner, repo: name, branch },
-    (status, _m, data) => (status === 200 ? (data.length ? data.map((r) => r.type).sort().join(',') : 'none') : `error:${status}`),
+    (status, message, data) => {
+      if (status === 200) return data.length ? data.map((r) => r.type).sort().join(',') : 'none';
+      return status === 403 && planLimited(message) ? 'unavailable' : `error:${status}`;
+    },
   );
   row.classicProtection = await probe(
     octokit, 'GET /repos/{owner}/{repo}/branches/{branch}/protection', { owner, repo: name, branch },
-    (status) => (status === 200 ? 'present' : status === 404 ? 'absent' : `error:${status}`),
+    (status, message) => {
+      if (status === 200) return 'present';
+      if (status === 404) return 'absent';
+      return status === 403 && planLimited(message) ? 'unavailable' : `error:${status}`;
+    },
   );
+  row.branchProtection = branchProtection(row);
 
   // security_and_analysis is only returned with administration read.
   row.securitySettings = await probe(
@@ -104,11 +109,32 @@ async function auditRepo(octokit, repo) {
     },
   );
 
+  // Dependabot security updates (the fix PRs) and push protection are only
+  // visible in security_and_analysis; GitHub omits it for some private repos.
+  const sa = typeof row.securitySettings === 'object' ? row.securitySettings : null;
+  row.dependabotSecurityUpdates = sa ? onOff(sa.dependabot_security_updates) : 'not-visible';
+  row.pushProtection = sa ? onOff(sa.secret_scanning_push_protection) : 'not-visible';
+
   row.config = await probe(
     octokit, 'GET /repos/{owner}/{repo}/contents/{path}', { owner, repo: name, path: '.github/git-steer.yml' },
     present,
   );
   return row;
+}
+
+export function onOff(status) {
+  if (status === 'enabled') return 'on';
+  if (status === 'disabled') return 'off';
+  return status ?? 'unknown';
+}
+
+/** Combined view of rulesets and classic protection on the default branch. */
+export function branchProtection(row) {
+  const rules = String(row.branchRules ?? '');
+  if (row.classicProtection === 'present' || (rules && rules !== 'none' && !rules.startsWith('error') && rules !== 'unavailable')) return 'on';
+  if (row.classicProtection === 'unavailable' || rules === 'unavailable') return 'unavailable';
+  if (row.classicProtection === 'absent' && rules === 'none') return 'off';
+  return 'unknown';
 }
 
 // ===== Main =====
@@ -134,6 +160,13 @@ async function assertRunningInPrivateRepo() {
 
 async function main() {
   await assertRunningInPrivateRepo();
+
+  const { APP_ID, APP_PRIVATE_KEY } = process.env;
+  if (!APP_ID || !APP_PRIVATE_KEY) {
+    console.error('APP_ID and APP_PRIVATE_KEY are required.');
+    process.exit(1);
+  }
+  const app = new App({ appId: APP_ID, privateKey: APP_PRIVATE_KEY });
   const { data: appInfo } = await app.octokit.request('GET /app');
   const report = {
     generatedAt: new Date().toISOString(),
@@ -174,38 +207,65 @@ async function main() {
 
 // ===== Summary =====
 
+const CHECKS = [
+  ['dependabotAlerts', 'Dependabot alerts'],
+  ['dependabotSecurityUpdates', 'Dependabot security updates (fix PRs)'],
+  ['codeScanning', 'Code scanning'],
+  ['secretScanning', 'Secret scanning'],
+  ['pushProtection', 'Push protection'],
+  ['branchProtection', 'Branch protection (rules or classic)'],
+  ['config', '.github/git-steer.yml'],
+];
+
 function count(rows, key) {
   const out = {};
-  for (const r of rows) {
-    const v = typeof r[key] === 'object' ? 'visible' : r[key];
-    out[v] = (out[v] || 0) + 1;
-  }
-  return Object.entries(out).map(([k, n]) => `${k} ${n}`).join(' · ');
+  for (const r of rows) out[r[key] ?? 'n/a'] = (out[r[key] ?? 'n/a'] || 0) + 1;
+  return Object.entries(out).sort().map(([k, n]) => `${k} ${n}`).join(' · ') || '–';
 }
 
-function toMarkdown(report) {
+export function toMarkdown(report) {
   const lines = [`## App audit: ${report.app.slug}`, '', `Generated ${report.generatedAt}`, ''];
   lines.push('| Account | Selection | Repos | Write permissions |', '|---|---|---|---|');
   for (const i of report.installations) {
     lines.push(`| ${i.account}${i.suspended ? ' (suspended)' : ''} | ${i.repositorySelection} | ${i.repos.length} | ${i.writePermissions.length ? i.writePermissions.join(', ') : 'none'} |`);
   }
   const rows = report.installations.flatMap((i) => i.repos).filter((r) => !r.archived);
-  lines.push('', `### Coverage across ${rows.length} active repos`, '');
-  lines.push('| Check | Results |', '|---|---|');
-  for (const key of ['dependabotAlerts', 'codeScanning', 'secretScanning', 'classicProtection', 'securitySettings', 'config']) {
-    lines.push(`| ${key} | ${count(rows, key)} |`);
-  }
-  lines.push(`| branchRules | ${rows.filter((r) => r.branchRules && r.branchRules !== 'none' && !String(r.branchRules).startsWith('error')).length} with rules · ${rows.filter((r) => r.branchRules === 'none').length} none |`);
+  const pub = rows.filter((r) => !r.private);
+  const priv = rows.filter((r) => r.private);
 
-  const gaps = rows.filter((r) => r.dependabotAlerts !== 'on' || r.secretScanning !== 'on' || r.codeScanning !== 'on');
+  lines.push('', `### Coverage across ${rows.length} active repos (${pub.length} public, ${priv.length} private)`, '');
+  lines.push('"unavailable": GitHub says the repo\'s plan doesn\'t include it. "off": GitHub reports it disabled (on public repos all of these are free to turn on). "not-visible": GitHub doesn\'t return the setting for this repo.', '');
+  lines.push('| Check | Public | Private |', '|---|---|---|');
+  for (const [key, label] of CHECKS) lines.push(`| ${label} | ${count(pub, key)} | ${count(priv, key)} |`);
+
+  // Everything below is free on public repos, so each gap is a setting.
+  const free = [
+    ['dependabotSecurityUpdates', 'Dependabot security updates off'],
+    ['codeScanning', 'Code scanning off'],
+    ['secretScanning', 'Secret scanning off'],
+    ['pushProtection', 'Push protection off'],
+    ['branchProtection', 'No branch protection'],
+  ];
+  lines.push('', '### Free to fix on public repos', '', '| Gap | Repos |', '|---|---|');
+  for (const [key, label] of free) lines.push(`| ${label} | ${pub.filter((r) => r[key] === 'off').length} |`);
+
+  const short = { on: '✅', off: '❌', unavailable: '—', 'not-visible': '?', 'no-permission': '🔒' };
+  const cell = (v) => short[v] ?? String(v ?? '?');
+  const gaps = rows.filter((r) => CHECKS.slice(0, 6).some(([k]) => r[k] === 'off'));
   if (gaps.length) {
-    lines.push('', '### Repos with a detector not on', '', '| Repo | Dependabot | Code scanning | Secret scanning |', '|---|---|---|---|');
-    for (const r of gaps) lines.push(`| ${r.repo} | ${r.dependabotAlerts} | ${r.codeScanning} | ${r.secretScanning} |`);
+    lines.push('', `### Repos with something turned off (${gaps.length})`, '');
+    lines.push('✅ on · ❌ off · — not on this plan · ? not visible', '');
+    lines.push('| Repo | Vis | Alerts | Fix PRs | Code | Secrets | Push prot. | Branch |', '|---|---|---|---|---|---|---|---|');
+    for (const r of gaps) {
+      lines.push(`| ${r.repo} | ${r.private ? 'private' : 'public'} | ${CHECKS.slice(0, 6).map(([k]) => cell(r[k])).join(' | ')} |`);
+    }
   }
   return lines.join('\n') + '\n';
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
