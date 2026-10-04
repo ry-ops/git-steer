@@ -8,9 +8,14 @@ Git-Steer looks after a fleet of GitHub repositories and runs only on GitHub (AD
 - `src/github/client.ts` - Rate-limit-hardened GitHub API client (throttle/retry, ETag cache, concurrency caps)
 - `src/state/manager.ts` - Reads/writes the `git-steer-state` repo
 - `src/fleet/` - Fleet report (ADR-009 Layer 2): `collect.ts` reads the fleet through the read-only reporter App, `render.ts` builds the dashboard issue from `status.json`
+- `src/rollout/` - Rollouts (ADR-010): change types in `changes/` (check + apply), the rollout issue format, the hourly plan, check/apply/check per target
 - `src/dashboard/` - Old dashboard HTML, used by `scripts/ci-dashboard.mjs` (retired design)
-- `scripts/` - `fleet-report.mjs` (runs `src/fleet` from the private `git-steer-fleet` repo), `app-audit.mjs` (App permissions audit; runs only from the private `git-steer-fleet` repo), `ci-dashboard.mjs` (Layer 2 building block), `ci-changelog.mjs`
+- `scripts/` - `rollout-{start,plan,apply,record}.mjs` (run by the rollout workflows in `git-steer-fleet`), `fleet-report.mjs` (runs `src/fleet` from the private `git-steer-fleet` repo), `app-audit.mjs` (App permissions audit; runs only from the private `git-steer-fleet` repo), `ci-dashboard.mjs` (Layer 2 building block), `ci-changelog.mjs`
 - `.github/workflows/` - `ci.yml`, `lockfiles.yml` (Layer 1 prototype), others
+
+## Working rule
+
+Claude Code builds git-steer (code, workflows, ADRs, PRs) and reads. Changes to managed repos and orgs are made by git-steer on GitHub through rollouts (ADR-010), never from a workstation with a personal login.
 
 ## Development
 
