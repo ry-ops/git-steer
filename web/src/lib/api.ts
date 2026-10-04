@@ -39,10 +39,7 @@ export const api = {
   cve: {
     scan: (owner: string, repo: string) => post<ScanResult>('/api/cve/scan', { owner, repo }),
     results: (owner: string, repo: string) => get<CveResultsResponse>(`/api/cve/results/${owner}/${repo}`),
-    fix: (cveId: string, owner: string, repo: string) =>
-      post<FixResult>('/api/cve/fix', { cve_id: cveId, owner, repo }),
     queue: () => get<QueueItem[]>('/api/cve/queue'),
-    fixAll: (owner: string, repo: string) => post<FixAllResult>('/api/cve/fix-all', { owner, repo }),
     verify: (owner: string, repo: string) => post<VerifyResult>(`/api/cve/verify/${owner}/${repo}`),
   },
   scans: {
@@ -129,25 +126,6 @@ export interface CveResultsResponse {
   repo: string;
   totalAlerts: number;
   alerts: unknown[];
-}
-
-export interface FixResult {
-  alertNumber: number;
-  package: string;
-  cve: string | null;
-  severity: string;
-  prNumber: number;
-  prUrl: string;
-  merged: boolean;
-  error?: string;
-}
-
-export interface FixAllResult {
-  total: number;
-  fixed: number;
-  failed: number;
-  no_fix?: number;
-  prs: FixResult[];
 }
 
 export interface VerifyResult {
