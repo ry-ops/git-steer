@@ -78,7 +78,7 @@ Each item below is removed in its own PR (ADR-008, C-008-009). The scheduled and
 | Item | What it did |
 |---|---|
 | ~~`cve-scan.yml`~~ | Ran `npm audit fix` and force-pushed. **Removed.** |
-| `heartbeat.yml`, `event-remediate.yml` | Fleet sweep and event triggers for central remediation |
+| ~~`heartbeat.yml`, `event-remediate.yml`~~ | Fleet sweep and event triggers for central remediation. **Removed**, with the scripts only they called (`escalate-remediate`, `ci-pr-followup`, `ci-compact`). `ci-dashboard.mjs` is kept for Layer 2. |
 | `security-fix-worker.yml`, `verify-functional-form.yml`, `scripts/gate/` | Central fix, gate and merge pipeline |
 | `lock-regen.yml` | Regenerated lockfiles in other repos |
 | `code-quality.yml` | Ran linters in other repos and opened issues there |
