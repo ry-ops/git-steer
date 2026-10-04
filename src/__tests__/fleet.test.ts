@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   addSeverity, ageInDays, branchProtectionState, codeScanningState, dependabotAlertsState,
-  emptyCounts, isPlanLimited, secretScanningState, settingState,
+  emptyCounts, isPlanLimited, secretScanningState, securityUpdatesState, settingState,
 } from '../fleet/classify.js';
 import { decisionCounts, MAX_BODY, renderDashboard } from '../fleet/render.js';
 import { SCHEMA } from '../fleet/types.js';
@@ -23,6 +23,20 @@ describe('classify', () => {
     expect(codeScanningState(404, 'no analysis found')).toBe('off');
     expect(secretScanningState(404, 'Secret scanning is disabled on this repository.')).toBe('off');
     expect(dependabotAlertsState(500, 'boom')).toBe('unknown');
+  });
+
+  it('counts code scanning as on when default setup is configured but no analysis exists yet', () => {
+    expect(codeScanningState(404, 'no analysis found', 'configured')).toBe('on');
+    expect(codeScanningState(404, 'no analysis found', 'not-configured')).toBe('off');
+    expect(codeScanningState(404, 'no analysis found')).toBe('off');
+  });
+
+  it('reads fix PRs from automated-security-fixes, falling back to security_and_analysis', () => {
+    expect(securityUpdatesState({ status: 200, data: { enabled: true, paused: false } }, undefined)).toBe('on');
+    expect(securityUpdatesState({ status: 200, data: { enabled: true, paused: true } }, 'enabled')).toBe('off');
+    expect(securityUpdatesState({ status: 200, data: { enabled: false, paused: false } }, undefined)).toBe('off');
+    expect(securityUpdatesState({ status: 403, data: null }, 'enabled')).toBe('on');
+    expect(securityUpdatesState({ status: 403, data: null }, undefined)).toBe('unknown');
   });
 
   it('maps security_and_analysis statuses, treating absent as unknown', () => {

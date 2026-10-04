@@ -11,7 +11,7 @@ import { App, Octokit } from 'octokit';
 import pLimit from 'p-limit';
 import {
   addSeverity, ageInDays, branchProtectionState, codeScanningState, dependabotAlertsState,
-  emptyCounts, secretScanningState, settingState,
+  emptyCounts, secretScanningState, securityUpdatesState, settingState,
 } from './classify.js';
 import { SCHEMA } from './types.js';
 import type { Coverage, FleetStatus, Findings, RepoStatus } from './types.js';
@@ -50,30 +50,37 @@ async function get<T>(octokit: Octokit, route: string, params: Record<string, un
   }
 }
 
-/** A paginated GET that never throws; null on failure. */
-async function getAll<T>(octokit: Octokit, route: string, params: Record<string, unknown>): Promise<T[] | null> {
+/** A paginated GET that never throws: null on failure, or [] on a 404 when `emptyOn404` is set. */
+async function getAll<T>(
+  octokit: Octokit, route: string, params: Record<string, unknown>, emptyOn404 = false,
+): Promise<T[] | null> {
   try {
     return (await octokit.paginate(route, { per_page: 100, ...params })) as T[];
-  } catch {
-    return null;
+  } catch (err) {
+    return emptyOn404 && errorOf(err).status === 404 ? [] : null;
   }
 }
 
 async function readCoverage(octokit: Octokit, owner: string, repo: string, branch: string): Promise<Coverage> {
   const p = { owner, repo, per_page: 1 };
-  const [dep, code, secret, info, rules, classic] = await Promise.all([
+  const [dep, code, secret, info, rules, classic, fixes] = await Promise.all([
     get(octokit, 'GET /repos/{owner}/{repo}/dependabot/alerts', p),
     get(octokit, 'GET /repos/{owner}/{repo}/code-scanning/alerts', p),
     get(octokit, 'GET /repos/{owner}/{repo}/secret-scanning/alerts', p),
     get<{ security_and_analysis?: Record<string, { status?: string } | undefined> }>(octokit, 'GET /repos/{owner}/{repo}', { owner, repo }),
     get<unknown[]>(octokit, 'GET /repos/{owner}/{repo}/rules/branches/{branch}', { owner, repo, branch }),
     get(octokit, 'GET /repos/{owner}/{repo}/branches/{branch}/protection', { owner, repo, branch }),
+    get<{ enabled?: boolean; paused?: boolean }>(octokit, 'GET /repos/{owner}/{repo}/automated-security-fixes', { owner, repo }),
   ]);
+  // No analysis yet: is CodeQL default setup configured (scan pending, or nothing to scan)?
+  const setup = code.status === 404
+    ? await get<{ state?: string }>(octokit, 'GET /repos/{owner}/{repo}/code-scanning/default-setup', { owner, repo })
+    : null;
   const sa = info.data?.security_and_analysis;
   return {
     dependabotAlerts: dependabotAlertsState(dep.status, dep.message),
-    dependabotSecurityUpdates: settingState(sa?.dependabot_security_updates?.status),
-    codeScanning: codeScanningState(code.status, code.message),
+    dependabotSecurityUpdates: securityUpdatesState(fixes, sa?.dependabot_security_updates?.status),
+    codeScanning: codeScanningState(code.status, code.message, setup?.data?.state),
     secretScanning: secretScanningState(secret.status, secret.message),
     pushProtection: settingState(sa?.secret_scanning_push_protection?.status),
     branchProtection: branchProtectionState(
@@ -128,7 +135,7 @@ async function readFindings(
 
   if (coverage.codeScanning === 'on') {
     const open = await getAll<{ rule?: { security_severity_level?: string | null; severity?: string | null } }>(
-      octokit, 'GET /repos/{owner}/{repo}/code-scanning/alerts', { owner, repo, state: 'open' });
+      octokit, 'GET /repos/{owner}/{repo}/code-scanning/alerts', { owner, repo, state: 'open' }, true); // 404 = no analysis yet
     if (open) {
       findings.codeScanning = emptyCounts();
       for (const a of open) addSeverity(findings.codeScanning, a.rule?.security_severity_level ?? a.rule?.severity);

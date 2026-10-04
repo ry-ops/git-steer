@@ -19,10 +19,17 @@ export function dependabotAlertsState(status: number, message: string): Coverage
   return 'unknown';
 }
 
-export function codeScanningState(status: number, message: string): CoverageState {
+/**
+ * @param defaultSetup  the code-scanning default-setup state, when known. A
+ *   repo with default setup "configured" but no analysis yet (first scan
+ *   pending, or no language CodeQL supports) counts as on: there's nothing to
+ *   turn on.
+ */
+export function codeScanningState(status: number, message: string, defaultSetup?: string): CoverageState {
   if (status === 200) return 'on';
   if (status === 403 && (isPlanLimited(message) || /code security/i.test(message))) return 'unavailable';
-  if (status === 404) return 'off'; // no analysis found
+  if (status === 404 && defaultSetup === 'configured') return 'on';
+  if (status === 404) return 'off'; // no analysis found, and default setup isn't configured
   if (status === 403 && /disabled|not enabled/i.test(message)) return 'off';
   return 'unknown';
 }
@@ -33,6 +40,19 @@ export function secretScanningState(status: number, message: string): CoverageSt
   if (status === 403 && isPlanLimited(message)) return 'unavailable';
   if (status === 403 && /disabled|not enabled/i.test(message)) return 'off';
   return 'unknown';
+}
+
+/**
+ * Dependabot security updates (fix PRs), from GET .../automated-security-fixes,
+ * which answers for private repos too. Paused counts as off: no PRs are opened.
+ * Falls back to security_and_analysis when that endpoint can't be read.
+ */
+export function securityUpdatesState(
+  answer: { status: number; data: { enabled?: boolean; paused?: boolean } | null },
+  fallback: string | undefined,
+): CoverageState {
+  if (answer.status === 200 && answer.data) return answer.data.enabled && !answer.data.paused ? 'on' : 'off';
+  return settingState(fallback);
 }
 
 /** security_and_analysis.<feature>.status → coverage. Absent means GitHub didn't show it. */
