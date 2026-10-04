@@ -1141,7 +1141,6 @@ export function generateDashboardHtml(data: DashboardData): string {
       <h2>Links</h2>
       <ul>
         <li><a href="https://github.com/ry-ops/git-steer" target="_blank" rel="noopener">git-steer on GitHub</a></li>
-        <li><a href="https://github.com/ry-ops/git-steer/actions/workflows/heartbeat.yml" target="_blank" rel="noopener">Heartbeat Workflow (daily scans)</a></li>
         <li><a href="https://github.com/ry-ops/git-steer-state" target="_blank" rel="noopener">State Repository</a></li>
       </ul>
     </div>
