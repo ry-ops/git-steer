@@ -7,8 +7,9 @@ Git-Steer looks after a fleet of GitHub repositories and runs only on GitHub (AD
 - `adr/` - Architecture decisions; ADR-008 is current
 - `src/github/client.ts` - Rate-limit-hardened GitHub API client (throttle/retry, ETag cache, concurrency caps)
 - `src/state/manager.ts` - Reads/writes the `git-steer-state` repo
-- `src/dashboard/` - Dashboard HTML, used by `scripts/ci-dashboard.mjs`
-- `scripts/` - `app-audit.mjs` (App permissions audit; runs only from the private `git-steer-fleet` repo), `ci-dashboard.mjs` (Layer 2 building block), `ci-changelog.mjs`
+- `src/fleet/` - Fleet report (ADR-009 Layer 2): `collect.ts` reads the fleet through the read-only reporter App, `render.ts` builds the dashboard issue from `status.json`
+- `src/dashboard/` - Old dashboard HTML, used by `scripts/ci-dashboard.mjs` (retired design)
+- `scripts/` - `fleet-report.mjs` (runs `src/fleet` from the private `git-steer-fleet` repo), `app-audit.mjs` (App permissions audit; runs only from the private `git-steer-fleet` repo), `ci-dashboard.mjs` (Layer 2 building block), `ci-changelog.mjs`
 - `.github/workflows/` - `ci.yml`, `lockfiles.yml` (Layer 1 prototype), others
 
 ## Development
