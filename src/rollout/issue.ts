@@ -13,6 +13,15 @@ export interface RolloutItem {
   target: string;
   done: boolean;
   note: string;
+  /** When git-steer wrote to this target (applied, or failed after trying), from the recorded note. */
+  wroteAt: Date | null;
+}
+
+const WROTE = /^(✅ applied|❌ failed).*\((\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC\)/;
+
+function wroteAt(note: string): Date | null {
+  const m = note.match(WROTE);
+  return m ? new Date(`${m[2].replace(' ', 'T')}:00Z`) : null;
 }
 
 export interface Rollout {
@@ -62,7 +71,7 @@ export function parseRolloutIssue(body: string): Rollout | null {
   const items: RolloutItem[] = [];
   for (const line of body.split('\n')) {
     const it = line.match(ITEM);
-    if (it) items.push({ target: it[2], done: it[1] === 'x', note: it[3] ?? '' });
+    if (it) items.push({ target: it[2], done: it[1] === 'x', note: it[3] ?? '', wroteAt: wroteAt(it[3] ?? '') });
   }
   return { change, items };
 }

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { Octokit } from 'octokit';
 import { desiredRuleset, evaluateRuleset } from '../rollout/changes/default-branch-ruleset.js';
 import { parseRolloutIssue, recordResult, remaining, renderRolloutIssue } from '../rollout/issue.js';
-import { planStep } from '../rollout/plan.js';
+import { planStep, recentWrites } from '../rollout/plan.js';
 import type { RolloutIssue } from '../rollout/plan.js';
 import { applyToTarget } from '../rollout/apply.js';
 import type { Change, CheckResult } from '../rollout/types.js';
@@ -38,7 +38,7 @@ describe('rollout issue', () => {
 
 describe('planStep', () => {
   const issue = (n: number, targets: string[], over: Partial<RolloutIssue> = {}): RolloutIssue => ({
-    number: n, body: body(targets), labels: ['git-steer-rollout', 'approved'], openedByGitSteer: true, approvedByOwner: true, ...over,
+    number: n, open: true, body: body(targets), labels: ['git-steer-rollout', 'approved'], openedByGitSteer: true, approvedByOwner: true, ...over,
   });
   const known = ['default-branch-ruleset'];
 
@@ -56,6 +56,29 @@ describe('planStep', () => {
     ], known);
     expect(items.map((i) => i.target)).toEqual(['d/1']);
     expect(skipped.map((s) => s.reason)).toEqual(['waiting for approval', 'paused', 'not opened by the start workflow']);
+  });
+
+  it('counts writes from the last hour against the budget, from any rollout (C-010-003)', () => {
+    const now = new Date('2026-10-04T19:00:00Z');
+    let done = body(['x/1', 'x/2', 'x/3', 'x/4']);
+    for (const [t, at] of [['x/1', '2026-10-04T18:20:00Z'], ['x/2', '2026-10-04T18:21:00Z'], ['x/3', '2026-10-04T17:30:00Z']] as const) {
+      done = recordResult(done, { issue: 1, change: 'x', target: t, outcome: 'applied', before: 'a', after: 'b', at });
+    }
+    done = recordResult(done, { issue: 1, change: 'x', target: 'x/4', outcome: 'already-compliant', before: 'ok', after: 'ok', at: '2026-10-04T18:30:00Z' });
+    const closed = { ...issue(1, []), body: done, open: false };
+    expect(recentWrites([closed], now)).toBe(2); // x/3 is over an hour old; x/4 wasn't a write
+    const { items, budget } = planStep([closed, issue(2, ['a/1', 'a/2', 'a/3', 'a/4', 'a/5'])], known, now);
+    expect(budget).toBe(3);
+    expect(items.map((i) => i.target)).toEqual(['a/1', 'a/2', 'a/3']);
+  });
+
+  it('plans nothing once 5 writes landed this hour, however often it runs', () => {
+    const now = new Date('2026-10-04T19:00:00Z');
+    let b = body(['a/1', 'a/2', 'a/3', 'a/4', 'a/5', 'a/6']);
+    for (let i = 1; i <= 5; i++) b = recordResult(b, { issue: 1, change: 'x', target: `a/${i}`, outcome: i === 5 ? 'failed' : 'applied', before: 'a', after: 'b', at: '2026-10-04T18:45:00Z' });
+    const { items, budget } = planStep([{ ...issue(1, []), body: b }], known, now);
+    expect(budget).toBe(0);
+    expect(items).toEqual([]);
   });
 
   it('skips unknown change types', () => {
