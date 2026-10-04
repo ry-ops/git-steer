@@ -8,24 +8,20 @@
  * .github/git-steer.yml.
  *
  * The output names repos and says which have detectors off, so it is fleet
- * data (C-009-003): this script refuses to run unless the workflow that runs
- * it is in a private repo.
+ * data (C-009-003): before anything else, the script asks GitHub whether the
+ * repo running it is private, and refuses to run if it isn't.
+ *
+ * Writes app-audit.json and app-audit.md (a summary) to the working directory.
  *
  * Env vars:
- *   APP_ID           - GitHub App ID
- *   APP_PRIVATE_KEY  - GitHub App private key (PEM)
- *   REPO_PRIVATE     - "true" when the running repo is private (required)
- *   OUT_FILE         - JSON output path (default: app-audit.json)
- *   GITHUB_STEP_SUMMARY - set by Actions; a markdown summary is appended
+ *   APP_ID            - GitHub App ID
+ *   APP_PRIVATE_KEY   - GitHub App private key (PEM)
+ *   GITHUB_TOKEN      - the running repo's token, used only to read its visibility
+ *   GITHUB_REPOSITORY - set by Actions
  */
 
-import { App } from 'octokit';
-import { appendFileSync, writeFileSync } from 'node:fs';
-
-if (process.env.REPO_PRIVATE !== 'true') {
-  console.error('Refusing to run: the audit names repos and their gaps, so it must run in a private repo (ADR-009 C-009-003).');
-  process.exit(1);
-}
+import { App, Octokit } from 'octokit';
+import { writeFileSync } from 'node:fs';
 
 const { APP_ID, APP_PRIVATE_KEY } = process.env;
 if (!APP_ID || !APP_PRIVATE_KEY) {
@@ -33,7 +29,6 @@ if (!APP_ID || !APP_PRIVATE_KEY) {
   process.exit(1);
 }
 
-const OUT_FILE = process.env.OUT_FILE || 'app-audit.json';
 const app = new App({ appId: APP_ID, privateKey: APP_PRIVATE_KEY });
 
 // ===== Probes =====
@@ -118,7 +113,27 @@ async function auditRepo(octokit, repo) {
 
 // ===== Main =====
 
+/** C-009-003: the output is fleet data, so only a private repo may produce it. */
+async function assertRunningInPrivateRepo() {
+  const { GITHUB_TOKEN, GITHUB_REPOSITORY } = process.env;
+  const [owner, repo] = (GITHUB_REPOSITORY || '').split('/');
+  let isPrivate = false;
+  if (GITHUB_TOKEN && owner && repo) {
+    try {
+      const { data } = await new Octokit({ auth: GITHUB_TOKEN }).request('GET /repos/{owner}/{repo}', { owner, repo });
+      isPrivate = data.private === true;
+    } catch {
+      isPrivate = false;
+    }
+  }
+  if (!isPrivate) {
+    console.error('Refusing to run: the audit names repos and their gaps, so it must run in a private repo (ADR-009 C-009-003).');
+    process.exit(1);
+  }
+}
+
 async function main() {
+  await assertRunningInPrivateRepo();
   const { data: appInfo } = await app.octokit.request('GET /app');
   const report = {
     generatedAt: new Date().toISOString(),
@@ -152,9 +167,9 @@ async function main() {
     report.installations.push(entry);
   }
 
-  writeFileSync(OUT_FILE, JSON.stringify(report, null, 2));
-  console.log(`Wrote ${OUT_FILE}`);
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, toMarkdown(report));
+  writeFileSync('app-audit.json', JSON.stringify(report, null, 2));
+  writeFileSync('app-audit.md', toMarkdown(report));
+  console.log('Wrote app-audit.json and app-audit.md');
 }
 
 // ===== Summary =====
