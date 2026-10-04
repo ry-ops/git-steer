@@ -297,17 +297,13 @@ function main() {
 // appending to wherever it points.
 function writeStepOutputs({ verdict, dims, perPackage, report }) {
   const runnerTemp = process.env.RUNNER_TEMP;
-  if (!runnerTemp) {
-    console.error('run-gate: GITHUB_OUTPUT is set but RUNNER_TEMP is not; refusing to write outputs');
-    process.exit(2);
-  }
-  const allowedRoot = resolve(runnerTemp) + sep;
+  const allowedRoot = runnerTemp ? resolve(runnerTemp) + sep : '';
   const gho = resolve(process.env.GITHUB_OUTPUT);
   // `report` embeds raw build/test output from the target repo. A fixed
   // heredoc delimiter would let that output close the block early and append
   // its own `verdict=GO` line, so use a random one it can't predict.
   const eof = `GATE_REPORT_${randomBytes(16).toString('hex')}`;
-  if (gho.startsWith(allowedRoot)) {
+  if (allowedRoot && gho.startsWith(allowedRoot)) {
     appendFileSync(gho, [
       `verdict=${verdict}`,
       `dimensions=${JSON.stringify(dims)}`,
@@ -315,8 +311,7 @@ function writeStepOutputs({ verdict, dims, perPackage, report }) {
       `report<<${eof}`, report, eof, '',
     ].join('\n'));
   } else {
-    console.error(`run-gate: GITHUB_OUTPUT is outside RUNNER_TEMP: ${gho}`);
-    process.exit(2);
+    throw new Error(`run-gate: refusing to write GITHUB_OUTPUT outside RUNNER_TEMP (${gho})`);
   }
 }
 
