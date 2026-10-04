@@ -1,0 +1,271 @@
+# ══════════════════════════════════════════════════════════════
+# ADR-008 — Native Protection, Self-Healing Repos, Read-Only Fleet
+# GitHub protects, each repo heals itself, git-steer only watches
+# ══════════════════════════════════════════════════════════════
+
+metadata:
+  id: ADR-008
+  title: "Native Protection, Self-Healing Repos, Read-Only Fleet"
+  status: ACCEPTED
+  date: "2026-10-04"
+  author: "Ryan // ry-ops.dev"
+  supersedes:
+    - ADR-007   # the central remediation control plane is retired
+  superseded_by: null
+  amends:
+    - ADR-005   # the functional-integrity gate is no longer a merge authority; each repo's own required checks are
+    - ADR-006   # the autonomous escalation ladder is retired with the central worker it drove
+  affects:
+    - ry-ops/git-steer
+    - ry-ops/git-steer-state
+    - all managed repos (ry-ops, git-fabric, cortex-io, fabric-forge, TAEM-DEV, m5stack-lab; ~113 repos)
+
+context: |
+  ADR-007 consolidated remediation into ONE central control plane: a heartbeat
+  sweep plus an event path drove a single worker that, from git-steer, opened,
+  gated and merged dependency fixes in every managed repo. The automation was
+  shelved on 2026-06-27 because it neither resolved issues nor stayed safe:
+
+    1. It did not fix things. 21 of 25 gate verdicts were NO-GO, and the bulk
+       "patch 30 vulnerabilities" PRs never merged. Central fixes ran against
+       repos whose builds, tests and conventions the worker could not see, so
+       the gate (correctly) refused most of them and the backlog stood still.
+
+    2. Its writes did damage. Found while repairing this repo (2026-10):
+         - a lock-regen run (0758a5d) deleted the root package-lock.json and
+           merged it — the destructive pattern C-007-003 was written to stop;
+         - an override pinned react-router to 6.30.4, holding the app ON the
+           vulnerable line Dependabot was flagging;
+         - an esbuild override (0.28.1) broke `vite build` for web/;
+         - the gate's GITHUB_OUTPUT heredoc used a fixed delimiter, so a target
+           repo's build output could forge `verdict=GO` and auto-merge itself.
+
+    3. It was the riskiest thing on the account. Fleet-wide automated writes
+       from one identity set off GitHub security alerts that locked the
+       owner's account. A tool that can write to ~113 repos at once is an
+       incident waiting for a trigger.
+
+  The lesson is architectural, not a bug list: the place that knows how to
+  build and test a repo is that repo's own CI, and the platform that already
+  watches advisories is GitHub. A central writer duplicates both, badly, and
+  concentrates blast radius in one credential.
+
+  Disabled as of this ADR: Heartbeat, git-steer CVE Scan, Event Remediate
+  (ry-ops/git-steer) and CVE Scan and Create Alert PR (ry-ops/git-steer-state).
+
+decision: |
+  Replace the central control plane with three layers. Responsibility moves
+  DOWN to the platform and to each repository; git-steer moves UP to a
+  read-only observer.
+
+    LAYER 0 — GitHub-native protection (configured once per org)
+      Org security configurations apply, to every repo:
+        - Dependabot alerts ON and Dependabot security updates ON. This
+          retires ADR-007's "git-steer is the only fixer" (C-007-001):
+          Dependabot is now the primary fixer.
+        - CodeQL default setup.
+        - Secret scanning with push protection.
+      Org rulesets on default branches: pull request required, required status
+      checks, signed commits, linear history, enforced for admins, with an
+      explicit bypass for the owner only (break-glass, logged).
+
+    LAYER 1 — Each repo heals itself
+      git-steer publishes a reusable workflow, heal.yml (consumed at @v1).
+      Each repo opts in with a ~5-line caller. It runs on Dependabot pull
+      requests and on a schedule staggered by repo name, and only ever acts
+      on the repo it runs in. It:
+        - auto-merges green Dependabot patch/minor PRs, via `gh pr merge
+          --auto`, so the repo's own required checks decide, never heal.yml;
+        - regenerates lockfiles on non-Dependabot PRs that change a manifest
+          (prototype: .github/workflows/lockfiles.yml in this repo);
+        - keeps the SBOM current (GitHub dependency-graph SBOM export);
+        - records VEX: dismissed Dependabot alerts become OpenVEX statements,
+          carrying the dismissal reason as the justification.
+      Tokens: the repo's GITHUB_TOKEN wherever it suffices. Verified on
+      2026-10-04: GITHUB_TOKEN with `permissions: vulnerability-alerts: read`
+      lists Dependabot alerts (HTTP 200), and without it gets 403. So reading
+      alerts needs no App token. The git-steer App token is used only where
+      GITHUB_TOKEN cannot do the job, namely commits that must re-trigger CI
+      (lockfile regeneration), and is always minted for that one repository
+      with the minimum permissions.
+
+    LAYER 2 — Fleet git-steer reads and reports
+      git-steer's fleet view uses read APIs only (alerts, PRs, check runs,
+      rulesets, workflow presence). It writes NOTHING to managed repos: no
+      branches, commits, PRs, issues, labels or workflow dispatches. Its one
+      output is a single summary issue in ry-ops/git-steer-state listing only
+      the decisions a machine cannot make. The issue is updated in place and
+      closes itself when that list is empty.
+
+constraints:
+  - id: C-008-001
+    type: HARD
+    scope: github-only-execution
+    rule: >
+      git-steer runs only on GitHub (Actions runners, or GitHub-hosted
+      services acting as the git-steer App). It is never installed, run or
+      kept on the owner's workstation, and no workflow or tool stores
+      git-steer credentials there (no local CLI login, no keychain secret,
+      no local MCP server with write access).
+    check: |
+      no_local_install_docs && no_keychain_credential_path_in_use
+    violation: NO-GO
+    adr: ADR-008
+
+  - id: C-008-002
+    type: HARD
+    scope: no-personal-credentials
+    rule: >
+      Automation never acts as the owner's personal account: no PATs, and no
+      user-to-server tokens. It uses the running repo's GITHUB_TOKEN, or a
+      git-steer App installation token minted with `repositories:` set to
+      that single repository and only the permissions the step needs.
+    check: |
+      every token in workflows ∈ {github.token, app_token(repositories=[self])}
+    violation: NO-GO
+    adr: ADR-008
+
+  - id: C-008-003
+    type: HARD
+    scope: no-fan-out-writes
+    rule: >
+      No workflow run, tool call or service request writes to more than one
+      repository. Central code never writes to managed repos at all (Layer 2
+      is read-only). Anything that must touch many repos, such as rolling out
+      the heal.yml caller or changing org configuration, is done as one
+      reviewed PR or change per repo, paced (at most 5 repos per hour, never
+      in parallel), and is started by a human, not a schedule.
+    check: |
+      max(distinct_repos_written per run) <= 1
+      && fleet_view.write_calls == 0
+      && rollout.rate <= 5/hour
+    violation: NO-GO
+    adr: ADR-008
+
+  - id: C-008-004
+    type: HARD
+    scope: github-native-first
+    rule: >
+      Detection and first-line fixing belong to GitHub: Dependabot alerts and
+      security updates, CodeQL default setup and push protection stay ON for
+      every managed repo through org security configurations. git-steer does
+      not disable, replace or duplicate them. This reverses ADR-007's
+      single-remediation-path rule (C-007-001) and the heartbeat's
+      enforcement that turned Dependabot security updates OFF.
+    check: |
+      for repo in fleet: dependabot_security_updates(repo) == enabled
+    violation: NO-GO
+    adr: ADR-008
+
+  - id: C-008-005
+    type: HARD
+    scope: repo-owns-its-gate
+    rule: >
+      A merge is decided by the repository's own required status checks and
+      rulesets, not by git-steer. heal.yml only ever enables auto-merge on
+      Dependabot PRs whose update type is patch or minor; GitHub merges them
+      once the repo's required checks pass. Major updates, and anything
+      without required checks, are left for a human and listed by Layer 2.
+    check: |
+      heal.merges == 'gh pr merge --auto' only
+      && heal.merge_scope == dependabot && update_type in {patch, minor}
+    violation: NO-GO
+    adr: ADR-008
+
+  - id: C-008-006
+    type: HARD
+    scope: signed-changes-via-pr
+    rule: >
+      Every change lands through a pull request, and every commit on a default
+      branch is signed and verified. Automation commits through the GitHub API
+      (createCommitOnBranch), which GitHub signs, never by pushing unsigned
+      commits, and never by force-pushing a shared branch.
+    check: |
+      default_branch.rules ⊇ {pull_request, required_signatures, linear_history}
+    violation: NO-GO
+    adr: ADR-008
+
+  - id: C-008-007
+    type: HARD
+    scope: staggered-schedule
+    rule: >
+      Scheduled heal.yml runs are spread across the day by a stable hash of
+      the repository name (minute and hour derived from it), so the fleet
+      never wakes up at once and API use stays far below secondary rate
+      limits.
+    check: |
+      caller.cron == stagger(hash(repo.full_name))
+    violation: WARN
+    adr: ADR-008
+
+  - id: C-008-008
+    type: HARD
+    scope: humans-only-for-human-decisions
+    rule: >
+      The Layer 2 summary lists only items a machine cannot decide: a major
+      update failing checks, an alert with no patched version, a Dependabot
+      PR open beyond 14 days, a repo missing required checks or the heal.yml
+      caller, a dismissed alert with no VEX justification. Anything a machine
+      can resolve is not listed. With nothing to list, the issue closes.
+    check: |
+      summary.items ⊆ human_decisions && (summary.items == [] ⇒ issue.closed)
+    violation: WARN
+    adr: ADR-008
+
+  - id: C-008-009
+    type: SOFT
+    scope: retire-central-writers
+    rule: >
+      The central-write surface is removed from git-steer, one PR per item, in
+      this order: cve-scan.yml (with this ADR); then heartbeat.yml,
+      event-remediate.yml, security-fix-worker.yml, lock-regen.yml,
+      code-quality.yml (dispatches into target repos and opens issues there);
+      the /api/cve/fix and /api/cve/fix-all routes and fabric_cve_triage (they
+      open and merge PRs); verify-functional-form.yml with scripts/gate (no
+      remaining caller); and the write-capable MCP tools (repo_create,
+      repo_delete, repo_commit, and the like). The equivalent workflow in
+      ry-ops/git-steer-state is removed there.
+    check: |
+      none of the listed files/routes/tools exist on main
+    violation: WARN
+    adr: ADR-008
+
+rationale: |
+  Every failure behind ADR-007's shelving traces back to one shape: a single
+  identity, outside the repo, writing into many repos. That shape is why
+  verification failed (the worker could not run each repo's real checks), why
+  damage spread (one bad pattern was applied fleet-wide), and why the account
+  was locked (the platform correctly read fleet-wide writes from one identity
+  as abuse).
+
+  The layers remove that shape instead of hardening it. GitHub already
+  watches advisories and opens minimal, per-repo fixes. Each repo's CI is the
+  only thing that knows whether a fix is safe. Each repo's token can only
+  hurt that repo. What is left for git-steer is the one thing nothing else
+  does, which is seeing the fleet whole, and that needs no write access.
+
+  Auto-merging only patch and minor Dependabot updates through native
+  auto-merge keeps the decision with the repo's required checks. A
+  regression is caught exactly where it would be caught for a human PR. Majors
+  stay human because a major is a decision, not a fix, and listing it costs
+  one line in one issue.
+
+consequences:
+  positive:
+    - No credential can write to more than one repo; blast radius per incident is one repo
+    - Fixes are verified by each repo's own CI, not by a central approximation of it
+    - Dependabot's per-package PRs replace bulk PRs that never merged
+    - git-steer cannot trip account-level abuse detection, because it does not write
+    - The human queue is one self-closing issue of genuine decisions
+    - Most of git-steer's remediation code (worker, gate, ladder, sweep) can be deleted
+  risks:
+    - risk: "Repos without real tests get green Dependabot PRs auto-merged on a build alone"
+      mitigation: "Only patch/minor; Layer 2 lists repos with no required checks so a human can add them, or leave heal.yml's auto-merge off for that repo"
+    - risk: "heal.yml@v1 becomes a supply-chain point for every caller"
+      mitigation: "Callers pin a version; v1 changes go through this repo's PR + required checks; the workflow holds no secrets of its own and gets only the caller's token"
+    - risk: "Org-level settings drift from what this ADR says"
+      mitigation: "Layer 2 reads org security configurations and rulesets and lists any repo that drifts"
+    - risk: "Rolling the caller out to ~113 repos is itself a fleet-wide change"
+      mitigation: "C-008-003: one PR per repo, at most 5 per hour, started by a human"
+    - risk: "Dependabot-triggered runs get a read-only GITHUB_TOKEN and Dependabot-scoped secrets"
+      mitigation: "heal.yml requests contents/pull-requests write explicitly (honored for Dependabot runs); any App-token step reads its key from Dependabot secrets, or is skipped on Dependabot PRs, which carry their own lockfiles"
