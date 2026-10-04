@@ -56,13 +56,18 @@ decision: |
   out one repo per job at a paced rate, and checked after every write.
 
     WRITER IDENTITY — git-steer-admin
-      A third GitHub App with repository Administration: write and Metadata:
-      read, nothing else. That covers rulesets, Dependabot security updates,
-      security_and_analysis settings and CodeQL default setup. It is installed
-      on every owner. Its key exists only as a secret of the `fleet-write`
-      environment in ry-ops/git-steer-fleet, deployable from main only. Every
-      job mints a token for the single target repo
-      (`repositories: <repo>`, `permission-administration: write`).
+      A third GitHub App with repository Administration: write, organization
+      Administration: write (decided 2026-10-04) and Metadata: read, nothing
+      else. Repository Administration covers rulesets, Dependabot security
+      updates, security_and_analysis settings and CodeQL default setup;
+      organization Administration covers the org code security
+      configurations, so git-steer owns them rather than leaving them as
+      settings applied once by hand. It is installed on every owner. Its key
+      exists only as a secret of the `fleet-write` environment in
+      ry-ops/git-steer-fleet, deployable from main only. Every job mints a
+      token for its single target: one repo (`repositories: <repo>`,
+      `permission-administration: write`), or one org
+      (`permission-organization-administration: write`, no repository access).
 
     CHANGES — declarative, idempotent
       A change type lives in git-steer (src/rollout/). It has:
@@ -77,6 +82,11 @@ decision: |
         - security-settings: Dependabot security updates on; secret scanning
           and push protection on where available; CodeQL default setup on
           public repos.
+        - org-security-configurations (target: an org): the public and
+          private baselines exist with the ADR-008 settings, are attached to
+          the org's public and private repos, and are the defaults for new
+          repos. First run adopts the configurations applied by hand on
+          2026-10-04 (git-steer-baseline, git-steer-baseline-private).
 
     ROLLOUTS — an issue a person starts, an hourly step that works it
       1. Start: a person runs the "Start rollout" workflow with a change type
@@ -85,10 +95,11 @@ decision: |
          job runs in the `fleet-approve` environment, so the owner approves it
          before anything happens. It opens a rollout issue (label
          git-steer-rollout) with one checkbox per repo and the exact change.
-      2. Step: an hourly workflow takes the next unchecked repos from open,
-         approved rollout issues, at most 5 per hour across all rollouts.
-         Each repo is its own job, run one at a time: check, apply if needed,
-         check again. It ticks the box with the outcome and a run link.
+      2. Step: an hourly workflow takes the next unchecked targets (repos or
+         orgs) from open, approved rollout issues, at most 5 per hour across
+         all rollouts. Each target is its own job, run one at a time: check,
+         apply if needed, check again. It ticks the box with the outcome and
+         a run link.
       3. Stop: closing the issue cancels the rollout. A failed check after a
          write labels the issue `paused` and stops the rollout until a person
          removes the label. When every box is ticked, the issue closes.
@@ -100,12 +111,14 @@ decision: |
 constraints:
   - id: C-010-001
     type: HARD
-    scope: one-repo-per-job
+    scope: one-target-per-job
     rule: >
-      Each apply job writes to exactly one repository, with a git-steer-admin
-      token minted for that repository alone.
+      Each apply job writes to exactly one target, a repository or an
+      organization, with a git-steer-admin token minted for that target alone.
+      A repo job's token has no organization permissions; an org job's token
+      has no repository access.
     check: |
-      for job in rollout_jobs: job.token.repositories == [job.target]
+      for job in rollout_jobs: job.token.scope == [job.target]
     violation: NO-GO
     adr: ADR-010
 
@@ -128,7 +141,8 @@ constraints:
     type: HARD
     scope: paced
     rule: >
-      At most 5 repos are written per hour across all rollouts, one at a time.
+      At most 5 targets (repos or orgs) are written per hour across all
+      rollouts, one at a time.
     check: |
       count(rollout_writes, last_hour) <= 5 && max_parallel_writes == 1
     violation: NO-GO
@@ -150,12 +164,13 @@ constraints:
     type: HARD
     scope: narrow-admin-identity
     rule: >
-      git-steer-admin holds repository Administration: write and Metadata:
-      read only. Its key is a secret of the `fleet-write` environment alone,
+      git-steer-admin holds repository Administration: write, organization
+      Administration: write and Metadata: read only. Its key is a secret of
+      the `fleet-write` environment alone,
       which deploys from main only, and it is never available to the fleet
       report or any other job.
     check: |
-      admin_app.permissions == {administration: write, metadata: read}
+      admin_app.permissions == {administration: write, organization_administration: write, metadata: read}
       && admin_key.scope == environment(fleet-write, branch=main)
     violation: NO-GO
     adr: ADR-010
@@ -206,8 +221,8 @@ consequences:
     - Every write leaves a record on the rollout issue
     - Re-running a rollout is safe; compliant repos are skipped
   risks:
-    - risk: "git-steer-admin's key is the most powerful credential git-steer holds"
-      mitigation: "Administration: write only; key in an environment deployable from main only; token per job scoped to one repo; rotate on any doubt"
+    - risk: "git-steer-admin's key is the most powerful credential git-steer holds, at org level too"
+      mitigation: "Administration (repo and org) only; key in an environment deployable from main only; each job's token scoped to one repo or one org; rotate on any doubt"
     - risk: "A wrong change type is applied to many repos"
       mitigation: "Pilot on one repo first; verify-after-write pauses the rollout on the first failure; 5 per hour leaves time to close the issue"
     - risk: "Required pull requests and signed commits change how the owner works"
@@ -215,6 +230,8 @@ consequences:
     - risk: "Environment required reviewers may not be available on the owner's plan for a private repo"
       mitigation: "Check before building; if unavailable, approval is the owner adding an `approved` label to the rollout issue, verified by the step from the issue's event actor"
 
+resolved_questions:
+  - "git-steer-admin gets organization Administration: write, and git-steer owns the org code security configurations (owner, 2026-10-04)."
+
 open_questions:
   - "Are required reviewers on environments available for ry-ops/git-steer-fleet on the owner's plan?"
-  - "Should git-steer-admin also get organization Administration: write, so git-steer owns the org code security configurations applied by hand on 2026-10-04?"
