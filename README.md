@@ -2,326 +2,126 @@
 <img src="git-steer.png" width="100%">
 <img src="git-steer-banner.svg" width="100%">
 
-**Self-hosting GitHub autonomy engine.** A skid steer for your repos.
+**GitHub fleet health, run entirely on GitHub.** A skid steer for your repos.
 
-git-steer gives you autonomous control over your GitHub account through a Model Context Protocol (MCP) server. Manage repos, branches, security, Actions -- everything -- through natural language. Rate-limit-hardened from the ground up: ETag caching, GraphQL batching, concurrency caps, and chunked execution keep it well inside GitHub's API guardrails at any fleet size.
+git-steer looks after a fleet of about 113 repositories across ry-ops, git-fabric, cortex-io, fabric-forge, TAEM-DEV and m5stack-lab. Since [ADR-008](adr/ADR-008.yaml) it does this by letting GitHub protect each repo, letting each repo fix itself, and keeping the fleet-wide view read-only.
 
-Passed [TAEM Phase 04 gate review](https://github.com/TAEM-DEV/missions/blob/main/git-steer.md) after two remediation cycles covering security, architecture, and test coverage.
+> **Status: in transition.** The central auto-remediation that git-steer used to run (ADR-002 to ADR-007) was shelved on 2026-06-27 and is being removed. Read [Why it changed](#why-it-changed) for the reasons, and [What's being retired](#whats-being-retired) for what is left to remove.
 
-## Philosophy: Zero Footprint
-
-**Your machine steers. GitHub does everything else.**
-
-Nothing lives locally -- no cloned repos, no config files, no build artifacts. git-steer treats your PC or Mac as a thin control plane and GitHub as the entire runtime.
-
-- **Zero local code**: No repos cloned, no `node_modules`, no lock files
-- **Keychain only**: GitHub App credentials in macOS Keychain -- nothing else on disk
-- **Git as database**: All config, state, and audit logs live in a private GitHub repo
-- **Actions as compute**: Dependency fixes, linting, and PRs happen in ephemeral cloud runners
-- **Rate-limit-hardened**: Throttle/retry plugins, ETag caching, GraphQL batching, concurrency caps -- safe at any fleet size
+## How it works
 
 ```
-+-----------------------------------------------------------------+
-|                        YOUR PC or MAC                           |
-|                                                                 |
-|   Keychain:                                                     |
-|     - GitHub App private key                                    |
-|     - App ID / Installation ID                                  |
-|                                                                 |
-|   $ npx git-steer                  (stdio -> Claude Desktop)    |
-|   $ npx git-steer --http           (portal -> localhost:3333)   |
-|         |                                                       |
-|         +-> Pulls itself from ry-ops/git-steer                  |
-|         +-> Pulls state from ry-ops/git-steer-state             |
-|         +-> Runs MCP server in-memory (rate-limit-aware)        |
-|         +-> Commits state changes back on shutdown              |
-|                                                                 |
-+-----------------------------------------------------------------+
-                               |
-                    Throttled, ETag-cached,
-                    GraphQL-batched API calls
-                               |
-                               v
-+-----------------------------------------------------------------+
-|                         GITHUB                                  |
-|                                                                 |
-|   ry-ops/git-steer              (source of truth for code)      |
-|   |                                                             |
-|   ry-ops/git-steer-state        (private repo)                  |
-|   +-- config/                                                   |
-|   |   +-- policies.yaml         (branch protection templates)   |
-|   |   +-- schedules.yaml        (job definitions)               |
-|   |   +-- managed-repos.yaml    (what git-steer controls)       |
-|   +-- state/                                                    |
-|   |   +-- jobs.jsonl            (job history, append-only)      |
-|   |   +-- audit.jsonl           (action log + rate telemetry)   |
-|   |   +-- rfcs.jsonl            (RFC lifecycle tracking)        |
-|   |   +-- quality.jsonl         (linter/SAST results)           |
-|   |   +-- cache.json            (ETag map + sweep cursor)       |
-|   +-- .github/workflows/                                        |
-|       +-- heartbeat.yml         (scheduled triggers)            |
-|                                                                 |
-+-----------------------------------------------------------------+
+ LAYER 2  git-steer (fleet)        reads only ──► one self-closing summary issue
+          ─────────────────────────────────────────────────────────────────────
+ LAYER 1  each repo heals itself   heal.yml@v1 caller, repo-scoped token only
+          ─────────────────────────────────────────────────────────────────────
+ LAYER 0  GitHub-native            Dependabot · CodeQL · push protection · rulesets
 ```
 
-## Architecture
+### Layer 0: GitHub protects every repo
+Settings are applied once per organization, through org security configurations and org rulesets:
 
-### Tool Module System
+- **Dependabot alerts and Dependabot security updates on.** Dependabot is the first-line fixer.
+- **CodeQL** default setup.
+- **Secret scanning** with push protection.
+- **Rulesets** on default branches: pull request required, required status checks, signed commits, linear history, enforced for admins, with an owner-only bypass.
 
-The MCP server is split into per-domain tool modules under `src/mcp/tools/`. Each module exports `getTools()` (tool definitions) and `handleCall()` (tool execution). The server collects tools from all modules at startup and dispatches via a name-to-handler map.
+### Layer 1: each repo heals itself
+Each repo opts in with a short caller of a reusable workflow published here, `heal.yml@v1` (coming next). It runs on Dependabot pull requests and on a daily schedule staggered by repo name. It only ever acts on the repo it runs in:
+
+- **Auto-merge.** It enables GitHub's native auto-merge on green Dependabot **patch and minor** PRs, so the repo's own required checks decide. Majors are left to a human.
+- **Lockfiles.** It regenerates lockfiles when a PR changes a manifest.
+- **SBOM.** It keeps the repo's SBOM current.
+- **VEX.** It records dismissed Dependabot alerts as VEX statements.
+
+**Tokens.** heal.yml uses the repo's own `GITHUB_TOKEN`, which can read Dependabot alerts with `permissions: vulnerability-alerts: read` (checked on a real runner). The git-steer App token is used only where `GITHUB_TOKEN` can't do the job, and is always scoped to that single repository.
+
+**Working prototype.** This repo's [`lockfiles.yml`](.github/workflows/lockfiles.yml) regenerates `package-lock.json` on PRs and commits it through the GitHub API, so the commit is signed by GitHub.
+
+### Layer 2: git-steer reads and reports
+The fleet view uses read APIs only and writes nothing to managed repos. Its single output is one summary issue in `ry-ops/git-steer-state`, listing only decisions a machine can't make:
+
+- a major update that fails checks;
+- an alert with no patched version;
+- a Dependabot PR that has stayed open too long;
+- a repo missing required checks.
+
+When the list is empty, the issue closes itself.
+
+## Ground rules
+
+These are hard constraints from ADR-008:
+
+- **Runs only on GitHub.** git-steer is never installed, run or kept on a workstation.
+- **No personal credentials.** Automation uses a repo's `GITHUB_TOKEN`, or a git-steer App token minted for one repository.
+- **No fan-out writes.** No run writes to more than one repo. Anything that must touch many repos is done one reviewed PR at a time, at most 5 repos per hour, and is started by a person.
+- **Everything through pull requests.** Default branches require signed commits and linear history.
+
+## Why it changed
+
+The central control plane opened, gated and merged dependency fixes in every managed repo from one place. It was shelved because:
+
+- **It didn't fix things.** 21 of 25 gate verdicts were NO-GO, and the bulk "patch 30 vulnerabilities" PRs never merged.
+- **Its writes caused damage.** Examples found while repairing this repo:
+  - it deleted the root `package-lock.json`;
+  - it pinned `react-router` to a vulnerable version;
+  - an esbuild override it added broke the web build;
+  - its gate's output could be spoofed by a repo's own build log.
+- **It was the biggest risk on the account.** Fleet-wide automated writes from one identity set off GitHub security alerts that locked the owner's account.
+
+The full reasoning is in [ADR-008](adr/ADR-008.yaml), which supersedes [ADR-007](adr/ADR-007.yaml).
+
+## What's being retired
+
+Each item below is removed in its own PR (ADR-008, C-008-009). The scheduled and event-driven workflows are already disabled.
+
+| Item | What it did |
+|---|---|
+| ~~`cve-scan.yml`~~ | Ran `npm audit fix` and force-pushed. **Removed.** |
+| `heartbeat.yml`, `event-remediate.yml` | Fleet sweep and event triggers for central remediation |
+| `security-fix-worker.yml`, `verify-functional-form.yml`, `scripts/gate/` | Central fix, gate and merge pipeline |
+| `lock-regen.yml` | Regenerated lockfiles in other repos |
+| `code-quality.yml` | Ran linters in other repos and opened issues there |
+| `/api/cve/fix`, `/api/cve/fix-all`, `fabric_cve_triage` | Opened PRs and merged them seconds later |
+| Write-capable MCP tools (`repo_create`, `repo_delete`, `repo_commit`, `security_sweep`, `security_fix_pr`, `branch_reap`, the `fabric_git_*` write tools, …) | Wrote to repos on request from a local MCP session |
+| Local CLI and Keychain setup (`git-steer init`, `npx git-steer`) | Ran git-steer on a workstation |
+
+The MCP server's code is still in `src/mcp/`, along with its rate-limit hardening (throttle and retry, ETag caching, GraphQL batching, concurrency caps). The read-only parts are the starting point for the Layer 2 fleet view.
+
+## Repository layout
 
 ```
-src/mcp/
-+-- server.ts            # MCP protocol, transport init, tool dispatch (~600 lines)
-+-- permissions.ts       # Destructive tool registry, dry-run defaults
-+-- tools/
-    +-- index.ts         # Re-exports all domain modules
-    +-- types.ts         # Shared ToolDeps interface
-    +-- repos.ts         # Repository management (8 tools)
-    +-- branches.ts      # Branch operations (3 tools)
-    +-- prs.ts           # Pull request workflows (3 tools -- was 5 with dedup)
-    +-- security.ts      # Security scanning and sweeps (7 tools)
-    +-- actions.ts       # GitHub Actions (3 tools)
-    +-- ops.ts           # Observability, config, reports (8 tools)
-    +-- k8s.ts           # Kubernetes ops (4 tools, conditional)
-    +-- misc.ts          # Slack, code review, quality (5 tools)
+adr/                     Architecture decisions (ADR-008 is current)
+src/                     TypeScript: MCP server, GitHub client, web API (src/web)
+web/                     React dashboard (React Router 7, Vite)
+scripts/                 Legacy remediation scripts (being retired)
+.github/workflows/
+  ci.yml                 Build, lint and test the root package and web/ on every PR
+  lockfiles.yml          Regenerate lockfiles on PRs; GitHub-signed commits
+  deploy-web.yml         Build and deploy the web dashboard
+  changelog.yml          Daily changelog sync to the blog repo (one repo written per run; under review against ADR-008)
+  …                      Legacy workflows listed above (disabled)
 ```
 
-Fabric tools (CVE pipeline and git operations) are defined in `server.ts` and delegated to `@git-fabric/cve` and the `FabricGitHubAdapter` at runtime.
+## Development
 
-All modules receive a `ToolDeps` bag containing the GitHub client, state manager, gateway handle, rate limit helpers, and concurrency limiters -- no direct imports of shared state.
-
-## MCP Tools
-
-42 core tools + 20 fabric tools, organized by domain.
-
-### Repos (repos.ts)
-
-| Tool | Description |
-|------|-------------|
-| `repo_list` | List all accessible repositories |
-| `repo_create` | Create new repo (optionally from template) |
-| `repo_archive` | Archive a repository *(destructive)* |
-| `repo_delete` | Permanently delete a repository *(destructive)* |
-| `repo_scrub_history` | Rewrite repo history to remove sensitive data *(destructive)* |
-| `repo_settings` | Update repo settings (visibility, features, merge options) |
-| `repo_commit` | Commit files directly via GitHub API (no local clone) |
-| `repo_read_file` | Read a file from a repository *(ETag-cached)* |
-| `repo_list_files` | List files in a directory |
-
-### Branches (branches.ts)
-
-| Tool | Description |
-|------|-------------|
-| `branch_list` | List branches with staleness info *(GraphQL-batched)* |
-| `branch_protect` | Apply protection rules |
-| `branch_reap` | Delete stale/merged branches *(destructive, dry-run default)* |
-
-### Pull Requests (prs.ts)
-
-| Tool | Description |
-|------|-------------|
-| `pr_dedup_check` | Check if a PR already exists for a branch |
-| `pr_dedup_create` | Create PR only if one doesn't already exist |
-
-### Security (security.ts)
-
-| Tool | Description |
-|------|-------------|
-| `security_scan` | Scan repos for vulnerabilities with fix info |
-| `security_alerts` | List Dependabot/code scanning alerts |
-| `security_digest` | Summary across all managed repos |
-| `security_sweep` | Full autonomous pipeline: scan, RFC, fix PR, track *(dry-run default)* |
-| `security_fix_pr` | Dispatch workflow to fix vulnerabilities *(dry-run default)* |
-| `security_dismiss` | Dismiss alert with reason *(destructive)* |
-| `security_enforce` | Ensure Dependabot alerts + automated fixes are enabled |
-
-### Actions (actions.ts)
-
-| Tool | Description |
-|------|-------------|
-| `actions_workflows` | List workflows |
-| `actions_trigger` | Manually trigger a workflow |
-| `actions_secrets` | Manage Actions secrets |
-
-### Ops and Observability (ops.ts)
-
-| Tool | Description |
-|------|-------------|
-| `config_show` | Display current config |
-| `config_add_repo` | Add repo to managed list (auto-enables Dependabot) |
-| `config_remove_repo` | Remove from managed list |
-| `steer_status` | Health check with full rate limit budget |
-| `steer_sync` | Force save state to GitHub |
-| `steer_logs` | View audit log with rate limit telemetry |
-| `ops_metrics` | Operational metrics and statistics |
-| `dashboard_generate` | Interactive security dashboard, deployed to GitHub Pages |
-| `report_generate` | Compliance reports (executive summary, change records, vulnerability, full audit) |
-
-### Kubernetes (k8s.ts) -- conditional
-
-Only registered when `kubectl` is on PATH. Not visible in `ListTools` otherwise.
-
-| Tool | Description |
-|------|-------------|
-| `oomkill_detect` | Detect OOMKill events in the cluster |
-| `oomkill_remediate` | Adjust resource limits for OOMKilled pods *(dry-run default)* |
-| `cert_check` | Check TLS certificate expiry |
-| `cert_renew` | Renew TLS certificates *(destructive)* |
-
-### Misc (misc.ts) -- partially conditional
-
-`code_review` only registered when the `cr` (CodeRabbit) binary is on PATH.
-
-| Tool | Description |
-|------|-------------|
-| `slack_notify` | Send a Slack notification |
-| `slack_configure` | Configure default Slack webhook |
-| `code_quality_sweep` | Run linters/SAST via GitHub Actions |
-| `code_review` | AI-powered code review via CodeRabbit CLI *(conditional)* |
-| `workflow_status` | Check status of dispatched workflows |
-
-### Fabric CVE (via @git-fabric/cve)
-
-| Tool | Description |
-|------|-------------|
-| `fabric_cve_scan` | Scan managed repos against GitHub Advisory Database |
-| `fabric_cve_enrich` | Fetch enriched CVE details from NVD |
-| `fabric_cve_triage` | Process pending CVE queue: apply policy, open PRs |
-| `fabric_cve_queue` | List CVE queue entries by status/severity |
-| `fabric_cve_stats` | CVE queue health dashboard |
-| `fabric_cve_compact` | Compact resolved entries from the queue |
-
-### Fabric Git (via FabricGitHubAdapter)
-
-14 tools for direct GitHub operations (`fabric_git_list_repos`, `fabric_git_get_file`, `fabric_git_commit_files`, `fabric_git_list_commits`, `fabric_git_get_commit`, `fabric_git_compare_commits`, `fabric_git_list_branches`, `fabric_git_create_branch`, `fabric_git_delete_branch`, `fabric_git_list_files`, `fabric_git_list_pull_requests`, `fabric_git_get_pull_request`, `fabric_git_create_pull_request`, `fabric_git_merge_pull_request`).
-
-## Security Model
-
-### Destructive tool confirmation
-
-Tools classified as destructive require an explicit `confirm` parameter set to `CONFIRM_<TOOL_NAME>` (e.g., `CONFIRM_REPO_DELETE`). Without it, the tool returns a warning and takes no action. Destructive tools: `repo_delete`, `repo_archive`, `repo_scrub_history`, `branch_reap`, `cert_renew`, `security_dismiss`.
-
-### Dry-run defaults
-
-Sweep and remediation tools default to `dry_run: true` when the caller does not set it explicitly. This means an LLM cannot accidentally trigger writes without intent. Affected tools: `security_sweep`, `security_fix_pr`, `branch_reap`, `oomkill_remediate`.
-
-### Token isolation
-
-The `FabricGitHubAdapter` interface exposes a `headers()` method that returns pre-built Authorization headers. The raw token is never visible to callers -- it stays private inside the adapter implementation. The gateway no longer writes tokens to `process.env`.
-
-### Slack webhook allowlist
-
-Slack webhook URLs are validated against an allowlist (`hooks.slack.com`, `hooks.slack-gov.com`). Arbitrary URLs are rejected.
-
-### Conditional tool registration
-
-K8s tools (`oomkill_detect`, `oomkill_remediate`, `cert_check`, `cert_renew`) are only registered when `kubectl` is found on PATH. `code_review` is only registered when the `cr` binary is available. Tools that cannot execute are not advertised.
-
-## Quick Start
+All checks run in CI on every pull request (`.github/workflows/ci.yml`, Node 24):
 
 ```bash
-# First time setup
-npx git-steer init
+npm ci
+npm run build          # tsc
+npm run lint           # eslint src/
+npm test -- --run      # vitest: 45 tests across 8 files
 
-# This will:
-# 1. Create a GitHub App with required permissions
-# 2. Install it to your account
-# 3. Create a private git-steer-state repo
-# 4. Store credentials in macOS Keychain
-
-# Start the MCP server
-npx git-steer
+cd web && npm ci && npm run build   # tsc -b && vite build
 ```
 
-## Claude Desktop Integration
+Don't edit lockfiles by hand. Change `package.json` in a PR and the **Lockfiles** workflow commits the matching `package-lock.json` to the branch. To force a fresh resolution, delete the lockfile in the PR.
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+## History
 
-```json
-{
-  "mcpServers": {
-    "git-steer": {
-      "command": "npx",
-      "args": ["git-steer"]
-    }
-  }
-}
-```
-
-Or use a local checkout:
-
-```json
-{
-  "mcpServers": {
-    "git-steer": {
-      "command": "node",
-      "args": ["/path/to/git-steer/bin/cli.js", "start", "--stdio"]
-    }
-  }
-}
-```
-
-## Local Portal
-
-git-steer includes an HTTP/SSE transport mode that exposes the MCP server as a local web portal:
-
-```bash
-git-steer start --http               # Default port 3333
-git-steer start --http --port 8080   # Custom port
-```
-
-Endpoints: `/dashboard` (live security dashboard), `/mcp` (Streamable HTTP, protocol 2025-11), `/sse` + `/messages` (legacy SSE, protocol 2024-11), `/health` (JSON status).
-
-The portal uses the same Keychain credentials, same state repo, and same rate-limit-hardened API stack as stdio mode.
-
-## Rate-Limit Hardening
-
-Seven-layer API safety stack:
-
-1. **Throttle/Retry** -- Primary (429) auto-retry up to 4x, secondary (403) always back off, transient 5xx exponential backoff
-2. **Concurrency caps** -- Writes max 2, reads max 8, search serial (via p-limit)
-3. **ETag caching** -- Contents API sends If-None-Match, 304 avoids rate cost, persisted across restarts
-4. **GraphQL batching** -- Owner resolution, branch listing, Dependabot alerts batched into single calls
-5. **Rate budget visibility** -- `steer_status` shows all buckets with % remaining, warns below 15%
-6. **Audit telemetry** -- Every action logged with rate_remaining, retry_count, backoff_ms
-7. **Chunked sweep** -- `security_sweep(chunkSize: 10)` processes in batches, cursor persisted for `resume: true`
-
-## Testing
-
-42 tests passing across 7 test files. Vitest with v8 coverage provider, 60% floor on lines/functions/statements, 50% on branches.
-
-```bash
-npm test              # Run all tests
-npm test -- --coverage # Run with coverage report
-```
-
-## GitHub App Permissions Required
-
-- **Repository**: Read & Write (contents, metadata)
-- **Pull Requests**: Read & Write
-- **Issues**: Read & Write (for RFC tracking)
-- **Actions**: Read & Write (for workflow dispatch)
-- **Dependabot alerts**: Read & Write
-- **Code scanning alerts**: Read
-- **Secrets**: Read & Write (for Actions secrets)
-- **Administration**: Read & Write (for repo settings)
-- **Pages**: Read & Write (for dashboard deployment)
-
-## Commands
-
-```bash
-git-steer init                       # First-time setup
-git-steer                            # Start MCP server via stdio (Claude Desktop)
-git-steer start --http               # Start local portal on port 3333
-git-steer start --http --port 8080   # Start portal on custom port
-git-steer scan                       # Run security scan across all repos
-git-steer scan --repo owner/name     # Scan a specific repo
-git-steer scan --severity critical   # Filter by severity
-git-steer status                     # Show status + rate limit budget
-git-steer sync                       # Force sync state to GitHub
-git-steer reset                      # Remove local credentials
-```
+- ADR-001 to ADR-007 describe the earlier designs: a zero-footprint MCP server, steered from a workstation, that ran an autonomous remediation loop. They are kept in [`adr/`](adr/) for the record.
+- git-steer passed the [TAEM Phase 04 gate review](https://github.com/TAEM-DEV/missions/blob/main/git-steer.md) under that earlier design.
 
 ## License
 
