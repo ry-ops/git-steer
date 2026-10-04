@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" width="960" height="540" role="img" aria-labelledby="t d">
+  <title id="t">The git-steer fleet dashboard (example data)</title>
+  <desc id="d">A mock of the pinned dashboard issue git-steer keeps in your private fleet repo. It lists only what needs a human, shows open alerts per owner, and shows coverage per check, where a repo with a detector off counts as unknown, never clean. All names and numbers are examples.</desc>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; fill: #e6ebf5; }
+    .muted { fill: #8b96ad; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .sec { font-size: 15px; font-weight: 700; }
+    .row { font-size: 13px; }
+    .r1 { animation: in 10s 0.4s infinite both; } .r2 { animation: in 10s 0.9s infinite both; }
+    .r3 { animation: in 10s 1.4s infinite both; } .r4 { animation: in 10s 1.9s infinite both; }
+    @keyframes in { 0% { opacity: 0; transform: translateX(-12px); } 6%,92% { opacity: 1; transform: translateX(0); } 100% { opacity: 0; } }
+    .bar { transform-box: fill-box; transform-origin: left center; animation: grow 10s infinite both; }
+    .b2 { animation-delay: .3s; } .b3 { animation-delay: .6s; }
+    @keyframes grow { 0%,8% { transform: scaleX(0); } 22%,92% { transform: scaleX(1); } 100% { transform: scaleX(0); } }
+    .meter { transform-box: fill-box; transform-origin: left center; animation: fill 10s infinite both; }
+    .m2 { animation-delay: .2s; } .m3 { animation-delay: .4s; } .m4 { animation-delay: .6s; }
+    @keyframes fill { 0%,25% { transform: scaleX(0); } 45%,92% { transform: scaleX(1); } 100% { transform: scaleX(0); } }
+    .pulse { animation: pulse 2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .r1,.r2,.r3,.r4,.bar,.meter,.pulse { animation: none; } }
+  </style>
+
+  <rect width="960" height="540" rx="20" fill="#0f1420"/>
+
+  <!-- Window chrome -->
+  <rect x="30" y="26" width="900" height="488" rx="14" fill="#161d2b" stroke="#2c3750"/>
+  <path d="M30 40 a14 14 0 0 1 14 -14 h872 a14 14 0 0 1 14 14 v26 h-900 z" fill="#1d2536"/>
+  <circle cx="54" cy="46" r="6" fill="#ff5f57"/><circle cx="74" cy="46" r="6" fill="#febc2e"/><circle cx="94" cy="46" r="6" fill="#28c840"/>
+  <text x="480" y="51" text-anchor="middle" font-size="12" class="muted mono">your-name/git-steer-fleet · issues · 🔒 private</text>
+  <rect x="804" y="36" width="114" height="20" rx="10" fill="#2d2512" stroke="#ffb02e"/>
+  <text x="861" y="50" text-anchor="middle" font-size="11" font-weight="700" style="fill:#ffd88a">EXAMPLE DATA</text>
+
+  <!-- Issue header -->
+  <text x="56" y="100" font-size="22" font-weight="800">git-steer fleet dashboard <tspan class="muted" font-weight="400">#4</tspan></text>
+  <rect x="56" y="112" width="58" height="22" rx="11" fill="#238636"/><text x="85" y="127" text-anchor="middle" font-size="12" font-weight="700">Open</text>
+  <text x="124" y="127" font-size="12" class="muted">📌 pinned · updated daily 06:17 UTC by git-steer-reporter · 48 repos (40 public, 8 private)</text>
+
+  <!-- Needs you -->
+  <text x="56" y="168" class="sec">Needs you (4)</text>
+  <circle class="pulse" cx="170" cy="163" r="5" fill="#ff5c8a"/>
+  <g class="r1"><rect x="56" y="180" width="420" height="30" rx="8" fill="#1d2536"/><circle cx="74" cy="195" r="5" fill="#ffb02e"/><text x="88" y="200" class="row"><tspan font-weight="700">shop-api</tspan> · major bump fails checks</text></g>
+  <g class="r2"><rect x="56" y="216" width="420" height="30" rx="8" fill="#1d2536"/><circle cx="74" cy="231" r="5" fill="#ff5c8a"/><text x="88" y="236" class="row"><tspan font-weight="700">docs-site</tspan> · Dependabot PR open 21 days</text></g>
+  <g class="r3"><rect x="56" y="252" width="420" height="30" rx="8" fill="#1d2536"/><circle cx="74" cy="267" r="5" fill="#8b96ad"/><text x="88" y="272" class="row"><tspan font-weight="700">cli-tool</tspan> · alert with no fix · <tspan class="mono">GHSA-xxxx</tspan></text></g>
+  <g class="r4"><rect x="56" y="288" width="420" height="30" rx="8" fill="#1d2536"/><circle cx="74" cy="303" r="5" fill="#3ec7ff"/><text x="88" y="308" class="row"><tspan font-weight="700">old-blog</tspan> · code scanning is off</text></g>
+  <text x="56" y="342" font-size="12" class="muted">Only what a machine can't decide. The rest, the fleet fixes itself.</text>
+
+  <!-- Fleet at a glance -->
+  <text x="510" y="168" class="sec">Fleet at a glance · open alerts</text>
+  <text x="510" y="198" font-size="13" font-weight="600">acme-labs</text>
+  <g transform="translate(610 186)"><g class="bar"><rect width="18" height="16" fill="#ff5c8a"/><rect x="18" width="70" height="16" fill="#ffb02e"/><rect x="88" width="110" height="16" fill="#3ec7ff"/><rect x="198" width="40" height="16" rx="0" fill="#8b96ad"/></g></g>
+  <text x="510" y="230" font-size="13" font-weight="600">acme-oss</text>
+  <g transform="translate(610 218)"><g class="bar b2"><rect width="6" height="16" fill="#ff5c8a"/><rect x="6" width="34" height="16" fill="#ffb02e"/><rect x="40" width="60" height="16" fill="#3ec7ff"/><rect x="100" width="22" height="16" fill="#8b96ad"/></g></g>
+  <text x="510" y="262" font-size="13" font-weight="600">side-projects</text>
+  <g transform="translate(610 250)"><g class="bar b3"><rect width="2" height="16" fill="#ff5c8a"/><rect x="2" width="12" height="16" fill="#ffb02e"/><rect x="14" width="26" height="16" fill="#3ec7ff"/><rect x="40" width="10" height="16" fill="#8b96ad"/></g></g>
+  <g font-size="11" class="muted">
+    <rect x="610" y="282" width="10" height="10" fill="#ff5c8a"/><text x="624" y="291">critical</text>
+    <rect x="680" y="282" width="10" height="10" fill="#ffb02e"/><text x="694" y="291">high</text>
+    <rect x="734" y="282" width="10" height="10" fill="#3ec7ff"/><text x="748" y="291">medium</text>
+    <rect x="806" y="282" width="10" height="10" fill="#8b96ad"/><text x="820" y="291">low</text>
+  </g>
+  <text x="510" y="320" font-size="12" class="muted">Counts only include tools that are on.</text>
+
+  <!-- Coverage -->
+  <line x1="56" y1="364" x2="904" y2="364" stroke="#2c3750"/>
+  <text x="56" y="394" class="sec">Coverage · coverage before findings</text>
+  <g font-size="13">
+    <text x="56" y="428">Dependabot alerts</text>
+    <rect x="230" y="417" width="220" height="14" rx="7" fill="#232c3f"/><rect class="meter" x="230" y="417" width="220" height="14" rx="7" fill="#3ddc84"/>
+    <text x="462" y="428" class="muted">48 / 48</text>
+    <text x="56" y="458">Dependabot fix PRs</text>
+    <rect x="230" y="447" width="220" height="14" rx="7" fill="#232c3f"/><rect class="meter m2" x="230" y="447" width="211" height="14" rx="7" fill="#3ddc84"/>
+    <text x="462" y="458" class="muted">46 / 48</text>
+    <text x="530" y="428">Code scanning</text>
+    <rect x="680" y="417" width="160" height="14" rx="7" fill="#232c3f"/><rect class="meter m3" x="680" y="417" width="137" height="14" rx="7" fill="#3ec7ff"/>
+    <text x="850" y="428" class="muted">41 · 7 —</text>
+    <text x="530" y="458">Branch protection</text>
+    <rect x="680" y="447" width="160" height="14" rx="7" fill="#232c3f"/><rect class="meter m4" x="680" y="447" width="157" height="14" rx="7" fill="#b58cff"/>
+    <text x="850" y="458" class="muted">47 / 48</text>
+  </g>
+  <text x="56" y="494" font-size="12" class="muted">— = not on this plan · a detector that's off is "unknown", never counted as clean</text>
+</svg>

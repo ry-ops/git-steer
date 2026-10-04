@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 380" width="960" height="380" role="img" aria-labelledby="t d">
+  <title id="t">git-steer: a skid steer for your repo army</title>
+  <desc id="d">A skid steer loads grey repos onto a conveyor belt. As each repo passes git-steer's scanner it comes out the other side with a bright candy shell: protected by GitHub, healing itself, and visible on one fleet dashboard.</desc>
+  <defs>
+    <linearGradient id="title" x1="0" x2="1">
+      <stop offset="0" stop-color="#ff5c8a"/>
+      <stop offset="0.35" stop-color="#ffb02e"/>
+      <stop offset="0.7" stop-color="#3ec7ff"/>
+      <stop offset="1" stop-color="#b58cff"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="0" x2="1">
+      <stop offset="0" stop-color="#3ec7ff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#3ec7ff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#3ec7ff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="after"><rect x="560" y="0" width="372" height="380"/></clipPath>
+    <clipPath id="before"><rect x="236" y="0" width="324" height="380"/></clipPath>
+    <!-- one candy, grey and coloured variants -->
+    <g id="grey">
+      <circle r="21" fill="#2a2f3d" stroke="#4a5163" stroke-width="7"/>
+      <rect x="-8" y="-2" width="16" height="4" rx="2" fill="#4a5163"/>
+    </g>
+  </defs>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; fill: #e6ebf5; }
+    .muted { fill: #8b96ad; }
+    .belt { animation: belt 12s linear infinite; }
+    @keyframes belt { from { transform: translateX(-480px); } to { transform: translateX(0); } }
+    .arm { transform-box: view-box; transform-origin: 196px 262px; animation: arm 2s ease-in-out infinite; }
+    @keyframes arm { 0%,100% { transform: rotate(8deg); } 50% { transform: rotate(-16deg); } }
+    .wheel { transform-box: fill-box; transform-origin: center; animation: spin 1.2s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .bob { animation: bob 0.6s ease-in-out infinite alternate; }
+    @keyframes bob { to { transform: translateY(-2px); } }
+    .scan { animation: scan 1.6s ease-in-out infinite; }
+    @keyframes scan { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+    .ticks text { font-size: 13px; font-weight: 600; }
+    .t1 { animation: tick 6s infinite; } .t2 { animation: tick 6s 2s infinite; } .t3 { animation: tick 6s 4s infinite; }
+    @keyframes tick { 0%,8% { opacity: 0; transform: translateY(6px); } 15%,30% { opacity: 1; transform: translateY(0); } 40%,100% { opacity: 0; transform: translateY(-6px); } }
+    @media (prefers-reduced-motion: reduce) { .belt,.arm,.wheel,.bob,.scan,.t1,.t2,.t3 { animation: none; } .t2,.t3 { opacity: 0; } }
+  </style>
+
+  <rect width="960" height="380" rx="20" fill="#0f1420"/>
+
+  <!-- Title -->
+  <text x="48" y="96" font-size="72" font-weight="800" style="fill:url(#title)">git-steer</text>
+  <text x="50" y="134" font-size="22" font-weight="600">A skid steer for your repo army.</text>
+  <text x="50" y="164" font-size="15" class="muted">GitHub protects every repo · every repo heals itself · git-steer sees the whole fleet</text>
+
+  <!-- Status ticker -->
+  <g class="ticks">
+    <g class="t1"><rect x="640" y="62" width="268" height="30" rx="15" fill="#123322" stroke="#3ddc84"/><text x="774" y="82" text-anchor="middle" style="fill:#9ff0c4">✓ ruleset applied · checked</text></g>
+    <g class="t2"><rect x="640" y="62" width="268" height="30" rx="15" fill="#1a2233" stroke="#3ec7ff"/><text x="774" y="82" text-anchor="middle" style="fill:#a8e4ff">👁 every repo read · none written</text></g>
+    <g class="t3"><rect x="640" y="62" width="268" height="30" rx="15" fill="#2d2512" stroke="#ffb02e"/><text x="774" y="82" text-anchor="middle" style="fill:#ffd88a">⏱ 5 repos an hour · you approve</text></g>
+  </g>
+
+  <!-- Belt -->
+  <rect x="150" y="296" width="790" height="12" rx="6" fill="#1a2233"/>
+  <g fill="#2c3750">
+    <circle cx="168" cy="302" r="4"/><circle cx="400" cy="302" r="4"/><circle cx="640" cy="302" r="4"/><circle cx="920" cy="302" r="4"/>
+  </g>
+
+  <!-- Candies before the scanner: grey -->
+  <g clip-path="url(#before)">
+    <g class="belt">
+      <use href="#grey" x="-470" y="272"/>
+      <use href="#grey" x="-390" y="272"/>
+      <use href="#grey" x="-310" y="272"/>
+      <use href="#grey" x="-230" y="272"/>
+      <use href="#grey" x="-150" y="272"/>
+      <use href="#grey" x="-70" y="272"/>
+      <use href="#grey" x="10" y="272"/>
+      <use href="#grey" x="90" y="272"/>
+      <use href="#grey" x="170" y="272"/>
+      <use href="#grey" x="250" y="272"/>
+      <use href="#grey" x="330" y="272"/>
+      <use href="#grey" x="410" y="272"/>
+      <use href="#grey" x="490" y="272"/>
+      <use href="#grey" x="570" y="272"/>
+      <use href="#grey" x="650" y="272"/>
+      <use href="#grey" x="730" y="272"/>
+      <use href="#grey" x="810" y="272"/>
+      <use href="#grey" x="890" y="272"/>
+      <use href="#grey" x="970" y="272"/>
+      <use href="#grey" x="1050" y="272"/>
+      <use href="#grey" x="1130" y="272"/>
+      <use href="#grey" x="1210" y="272"/>
+      <use href="#grey" x="1290" y="272"/>
+      <use href="#grey" x="1370" y="272"/>
+    </g>
+  </g>
+
+  <!-- Candies after the scanner: coloured shells -->
+  <g clip-path="url(#after)">
+    <g class="belt">
+      <g transform="translate(-470 272)"><circle r="21" fill="#3b2a22" stroke="#ff5c8a" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(-390 272)"><circle r="21" fill="#3b2a22" stroke="#ffb02e" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(-310 272)"><circle r="21" fill="#3b2a22" stroke="#3ec7ff" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(-230 272)"><circle r="21" fill="#3b2a22" stroke="#b58cff" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(-150 272)"><circle r="21" fill="#3b2a22" stroke="#3ddc84" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(-70 272)"><circle r="21" fill="#3b2a22" stroke="#ff5c8a" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(10 272)"><circle r="21" fill="#3b2a22" stroke="#ffb02e" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(90 272)"><circle r="21" fill="#3b2a22" stroke="#3ec7ff" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(170 272)"><circle r="21" fill="#3b2a22" stroke="#b58cff" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(250 272)"><circle r="21" fill="#3b2a22" stroke="#3ddc84" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(330 272)"><circle r="21" fill="#3b2a22" stroke="#ff5c8a" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(410 272)"><circle r="21" fill="#3b2a22" stroke="#ffb02e" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(490 272)"><circle r="21" fill="#3b2a22" stroke="#3ec7ff" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(570 272)"><circle r="21" fill="#3b2a22" stroke="#b58cff" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(650 272)"><circle r="21" fill="#3b2a22" stroke="#3ddc84" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(730 272)"><circle r="21" fill="#3b2a22" stroke="#ff5c8a" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(810 272)"><circle r="21" fill="#3b2a22" stroke="#ffb02e" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(890 272)"><circle r="21" fill="#3b2a22" stroke="#3ec7ff" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(970 272)"><circle r="21" fill="#3b2a22" stroke="#b58cff" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(1050 272)"><circle r="21" fill="#3b2a22" stroke="#3ddc84" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(1130 272)"><circle r="21" fill="#3b2a22" stroke="#ff5c8a" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(1210 272)"><circle r="21" fill="#3b2a22" stroke="#ffb02e" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(1290 272)"><circle r="21" fill="#3b2a22" stroke="#3ec7ff" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+      <g transform="translate(1370 272)"><circle r="21" fill="#3b2a22" stroke="#b58cff" stroke-width="7"/><path d="M-7 0 l5 5 l9 -10" stroke="#9ff0c4" stroke-width="3" fill="none"/></g>
+    </g>
+  </g>
+
+  <!-- Scanner -->
+  <g class="scan">
+    <rect x="540" y="196" width="40" height="112" fill="url(#beam)"/>
+  </g>
+  <rect x="530" y="184" width="60" height="16" rx="8" fill="#1a2233" stroke="#3ec7ff" stroke-width="2"/>
+  <text x="560" y="224" text-anchor="middle" font-size="11" font-weight="700" style="fill:#3ec7ff">GIT-STEER</text>
+  <text x="560" y="342" text-anchor="middle" font-size="12" class="muted">scanner: reads every repo</text>
+  <text x="300" y="342" text-anchor="middle" font-size="12" class="muted">unprotected</text>
+  <text x="790" y="342" text-anchor="middle" font-size="12" class="muted">shelled · healing · on the dashboard</text>
+
+  <!-- Skid steer -->
+  <g class="bob">
+    <!-- arm + bucket -->
+    <g class="arm">
+      <path d="M196 262 L246 250" stroke="#ffb02e" stroke-width="10" stroke-linecap="round"/>
+      <path d="M240 236 L268 236 L272 266 L238 266 Z" fill="#c98a1f"/>
+      <g transform="translate(256 226)"><circle r="9" fill="#2a2f3d" stroke="#4a5163" stroke-width="4"/></g>
+    </g>
+    <!-- body -->
+    <rect x="84" y="242" width="124" height="42" rx="8" fill="#ffb02e"/>
+    <rect x="112" y="204" width="62" height="42" rx="6" fill="#2a2f3d" stroke="#ffb02e" stroke-width="4"/>
+    <rect x="120" y="212" width="46" height="24" rx="3" fill="#3ec7ff" opacity="0.35"/>
+    <rect x="92" y="254" width="40" height="6" rx="3" fill="#0f1420" opacity="0.5"/>
+    <text x="164" y="270" text-anchor="middle" font-size="10" font-weight="800" style="fill:#0f1420">GS</text>
+    <!-- wheels -->
+    <g class="wheel"><circle cx="112" cy="290" r="18" fill="#1a1f2b" stroke="#4a5163" stroke-width="5"/><path d="M112 274 V306 M96 290 H128" stroke="#4a5163" stroke-width="3"/></g>
+    <g class="wheel"><circle cx="182" cy="290" r="18" fill="#1a1f2b" stroke="#4a5163" stroke-width="5"/><path d="M182 274 V306 M166 290 H198" stroke="#4a5163" stroke-width="3"/></g>
+  </g>
+</svg>

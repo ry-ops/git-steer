@@ -1,0 +1,77 @@
+name: Start rollout
+
+# Opens a rollout issue (ADR-010): one change, an explicit list of targets.
+# Nothing is changed until the repo owner adds the `approved` label; the
+# hourly "Rollout step" workflow then works through it, at most 5 targets per
+# hour, one per job, checking after every write.
+
+on:
+  workflow_dispatch:
+    inputs:
+      change:
+        description: Change type
+        type: choice
+        required: true
+        options:
+          - default-branch-ruleset
+      targets:
+        description: 'Targets: owner/repo, comma-separated, or a selector over the latest fleet report, e.g. coverage:branchProtection=off'
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  start:
+    # Never run if this repo is ever made public.
+    if: github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out git-steer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.GIT_STEER_REPO || 'ry-ops/git-steer' }}
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install and build
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      - name: Get the latest fleet report (for selectors)
+        if: startsWith(inputs.targets, 'coverage:')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list -R "$GITHUB_REPOSITORY" -w fleet-report.yml --status success -L 1 --json databaseId --jq '.[0].databaseId')
+          gh run download "$id" -R "$GITHUB_REPOSITORY" -n fleet-status -D fleet-status
+
+      - name: Render the rollout
+        env:
+          CHANGE: ${{ inputs.change }}
+          TARGETS: ${{ inputs.targets }}
+          STARTED_BY: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/rollout-start.mjs
+
+      - name: Open the rollout issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create git-steer-rollout --repo "$REPO" --color 0e8a16 --description "git-steer rollout (ADR-010)" 2>/dev/null || true
+          gh label create approved --repo "$REPO" --color 1d76db --description "Owner approval: git-steer may work this rollout" 2>/dev/null || true
+          gh label create paused --repo "$REPO" --color fbca04 --description "Rollout paused; remove to resume" 2>/dev/null || true
+          url=$(gh issue create --repo "$REPO" --title "$(cat rollout-title.txt)" --label git-steer-rollout --body-file rollout-body.md)
+          echo "Rollout opened: $url. Add the \`approved\` label to start it." >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,64 @@
+name: App audit
+
+# Read-only audit of a git-steer GitHub App across all of its installations,
+# using scripts/app-audit.mjs from git-steer. It runs here, not in git-steer,
+# because its summary and artifact name private repos and their gaps, and a
+# public repo's Actions output is public (ADR-009 C-009-003).
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: Which App to audit
+        type: choice
+        default: reporter
+        options:
+          - reporter   # git-steer-reporter (read-only)
+          - legacy     # the existing git-steer App
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    # Never run if this repo is ever made public.
+    if: github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out git-steer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.GIT_STEER_REPO || 'ry-ops/git-steer' }}
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Audit
+        env:
+          APP_ID: ${{ inputs.app == 'legacy' && secrets.GIT_STEER_APP_ID || secrets.REPORTER_APP_ID }}
+          APP_PRIVATE_KEY: ${{ inputs.app == 'legacy' && secrets.GIT_STEER_PRIVATE_KEY || secrets.REPORTER_PRIVATE_KEY }}
+          # Only used by the script to confirm this repo is private.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/app-audit.mjs
+
+      - name: Add summary to the job page
+        run: cat app-audit.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: app-audit-${{ inputs.app }}
+          path: |
+            app-audit.json
+            app-audit.md
+          retention-days: 30

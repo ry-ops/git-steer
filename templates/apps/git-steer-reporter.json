@@ -1,0 +1,26 @@
+{
+  "name": "git-steer-reporter",
+  "url": "https://github.com/ry-ops/git-steer",
+  "description": "Read-only fleet reporter for git-steer (ADR-009). Reads alerts, rules and settings; changes nothing.",
+  "public": true,
+  "redirect_url": "https://github.com/YOUR-NAME/git-steer-fleet",
+  "hook_attributes": {
+    "url": "https://github.com/ry-ops/git-steer",
+    "active": false
+  },
+  "default_permissions": {
+    "metadata": "read",
+    "contents": "read",
+    "administration": "read",
+    "actions": "read",
+    "checks": "read",
+    "pull_requests": "read",
+    "vulnerability_alerts": "read",
+    "security_events": "read",
+    "secret_scanning_alerts": "read",
+    "repository_custom_properties": "read",
+    "organization_administration": "read",
+    "organization_custom_properties": "read"
+  },
+  "default_events": []
+}

@@ -1,0 +1,17 @@
+{
+  "name": "git-steer-admin",
+  "url": "https://github.com/ry-ops/git-steer",
+  "description": "git-steer rollouts (ADR-010): applies rulesets and security settings, one repo or org per job, only for rollouts the owner approved.",
+  "public": true,
+  "redirect_url": "https://github.com/YOUR-NAME/git-steer-fleet",
+  "hook_attributes": {
+    "url": "https://github.com/ry-ops/git-steer",
+    "active": false
+  },
+  "default_permissions": {
+    "metadata": "read",
+    "administration": "write",
+    "organization_administration": "write"
+  },
+  "default_events": []
+}
