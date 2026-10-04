@@ -2,19 +2,20 @@
  * The hourly step's plan (ADR-010). Reads open rollout issues in this repo,
  * checks each was opened by the start workflow and approved by the repo
  * owner (from the issue's label events), and writes the targets for this
- * hour, at most 5, to GITHUB_OUTPUT as `matrix` (JSON) and `count`.
+ * hour, at most 5, to plan.json as { include: [...] }. The workflow passes
+ * it on as the apply job's matrix.
  *
  * Refuses to run outside a private repo: rollout issues name repos (C-009-003).
  *
- * Env vars: GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT (set by Actions)
+ * Env vars: GITHUB_TOKEN, GITHUB_REPOSITORY (set by Actions)
  */
 
 import { Octokit } from 'octokit';
-import { appendFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { isRunningInPrivateRepo } from '../dist/fleet/index.js';
 import { CHANGES, planStep } from '../dist/rollout/index.js';
 
-const { GITHUB_TOKEN, GITHUB_REPOSITORY = '', GITHUB_OUTPUT } = process.env;
+const { GITHUB_TOKEN, GITHUB_REPOSITORY = '' } = process.env;
 if (!(await isRunningInPrivateRepo(GITHUB_TOKEN, GITHUB_REPOSITORY))) {
   console.error('Refusing to run: rollouts name repos, so they must run in a private repo (ADR-009 C-009-003).');
   process.exit(1);
@@ -43,4 +44,4 @@ const matrix = items.map((it, n) => {
   return { ...it, owner: o, repo: r ?? '', key: `${n}` };
 });
 for (const m of matrix) console.log(`#${m.issue}: ${m.change} → ${m.target}`);
-if (GITHUB_OUTPUT) appendFileSync(GITHUB_OUTPUT, `matrix=${JSON.stringify({ include: matrix })}\ncount=${matrix.length}\n`);
+writeFileSync('plan.json', JSON.stringify({ include: matrix }));

@@ -1,6 +1,7 @@
 /**
  * Start a rollout (ADR-010). Writes rollout-title.txt and rollout-body.md;
- * the workflow opens the issue. Nothing is changed until the repo owner adds
+ * the workflow opens the issue. A selector reads fleet-status/status.json,
+ * the latest fleet report, which the workflow downloads. Nothing is changed until the repo owner adds
  * the `approved` label.
  *
  * Env vars:
@@ -9,14 +10,13 @@
  *                  or an org for org changes), or a selector over the latest
  *                  fleet report: "coverage:<check>=<state>", e.g.
  *                  "coverage:branchProtection=off"
- *   STATUS_FILE  - path to status.json, needed for a selector
  *   STARTED_BY, RUN_URL - who started it, and the run (set by the workflow)
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { CHANGES, renderRolloutIssue } from '../dist/rollout/index.js';
 
-const { CHANGE = '', TARGETS = '', STATUS_FILE, STARTED_BY = 'unknown', RUN_URL } = process.env;
+const { CHANGE = '', TARGETS = '', STARTED_BY = 'unknown', RUN_URL } = process.env;
 
 const change = CHANGES[CHANGE];
 if (!change) {
@@ -28,8 +28,7 @@ let targets;
 let selector;
 const sel = TARGETS.trim().match(/^coverage:([A-Za-z]+)=([a-z]+)$/);
 if (sel) {
-  if (!STATUS_FILE) { console.error('A selector needs STATUS_FILE (the latest fleet report).'); process.exit(1); }
-  const status = JSON.parse(readFileSync(STATUS_FILE, 'utf8'));
+  const status = JSON.parse(readFileSync('fleet-status/status.json', 'utf8'));
   targets = status.repos.filter((r) => r.coverage?.[sel[1]] === sel[2]).map((r) => r.repo);
   selector = TARGETS.trim();
 } else {

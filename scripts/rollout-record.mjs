@@ -5,7 +5,8 @@
  *
  * Env vars:
  *   GITHUB_TOKEN, GITHUB_REPOSITORY - this repo's token (issues: write)
- *   RESULTS_DIR                     - directory holding result.json files
+ *
+ * Reads every result.json under ./results (the downloaded artifacts).
  */
 
 import { Octokit } from 'octokit';
@@ -13,7 +14,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseRolloutIssue, recordResult, remaining } from '../dist/rollout/index.js';
 
-const { GITHUB_TOKEN, GITHUB_REPOSITORY = '', RESULTS_DIR = 'results' } = process.env;
+const { GITHUB_TOKEN, GITHUB_REPOSITORY = '' } = process.env;
 const [owner, repo] = GITHUB_REPOSITORY.split('/');
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
@@ -24,7 +25,7 @@ const files = [];
     if (statSync(p).isDirectory()) walk(p);
     else if (f === 'result.json') files.push(p);
   }
-})(RESULTS_DIR);
+})('results');
 
 const byIssue = new Map();
 for (const f of files) {
