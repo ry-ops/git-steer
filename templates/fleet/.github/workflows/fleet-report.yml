@@ -1,0 +1,86 @@
+name: Fleet report
+
+# git-steer's fleet view (ADR-009 Layer 2). Reads every repo the read-only
+# git-steer-reporter App is installed on, writes status.json, and keeps one
+# dashboard issue in this repo up to date. The report code lives in
+# git-steer (src/fleet, scripts/fleet-report.mjs); it runs here because its
+# output names private repos and their gaps (C-009-003). The only write is
+# the dashboard issue, made with this repo's own GITHUB_TOKEN (C-009-004).
+
+on:
+  schedule:
+    - cron: '17 6 * * *'   # daily, 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: fleet-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    # Never run if this repo is ever made public.
+    if: github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out git-steer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.GIT_STEER_REPO || 'ry-ops/git-steer' }}
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install and build
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      - name: Collect the fleet
+        env:
+          APP_ID: ${{ secrets.REPORTER_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.REPORTER_PRIVATE_KEY }}
+          # Only used by the script to confirm this repo is private.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/fleet-report.mjs
+
+      - name: Update the dashboard issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          label=git-steer-dashboard
+          gh label create "$label" --repo "$REPO" --color 5319e7 \
+            --description "git-steer fleet dashboard (ADR-009)" 2>/dev/null || true
+          n=$(gh issue list --repo "$REPO" --label "$label" --state all --limit 1 --json number --jq '.[0].number // empty')
+          if [ -z "$n" ]; then
+            url=$(gh issue create --repo "$REPO" --title "git-steer fleet dashboard" --label "$label" --body-file dashboard.md)
+            n="${url##*/}"
+            gh issue pin "$n" --repo "$REPO" || true
+          else
+            gh issue edit "$n" --repo "$REPO" --body-file dashboard.md
+            # The dashboard is never closed (ADR-009); reopen it if someone did.
+            if [ "$(gh issue view "$n" --repo "$REPO" --json state --jq .state)" = "CLOSED" ]; then
+              gh issue reopen "$n" --repo "$REPO"
+            fi
+          fi
+          echo "Dashboard: $GITHUB_SERVER_URL/$REPO/issues/$n" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload status.json
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fleet-status
+          path: |
+            status.json
+            dashboard.md
+          retention-days: 30

@@ -1,0 +1,147 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 500" width="960" height="500" role="img" aria-labelledby="t d">
+  <title id="t">How a git-steer rollout works</title>
+  <desc id="d">You start a rollout and git-steer opens an issue with one checkbox per repo. Nothing happens until you add the approved label. Then, every hour, git-steer works through at most five repos, one job at a time: it mints a token for that one repo, checks it, applies the change only if needed, and checks again before ticking the box. A failed check pauses the rollout; closing the issue cancels it.</desc>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; fill: #e6ebf5; }
+    .muted { fill: #8b96ad; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    @keyframes k0 { 0%,14.94% { opacity: 0; transform: scale(.4); } 16.56%,96.25% { opacity: 1; transform: scale(1); } 98.75%,100% { opacity: 0; } }
+    .k0 { animation: k0 16.0s infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes n0 { 0%,15.62% { opacity: 0; } 17.50%,96.25% { opacity: 1; } 98.75%,100% { opacity: 0; } }
+    .n0 { animation: n0 16.0s infinite; }
+    @keyframes k1 { 0%,21.19% { opacity: 0; transform: scale(.4); } 22.81%,96.25% { opacity: 1; transform: scale(1); } 98.75%,100% { opacity: 0; } }
+    .k1 { animation: k1 16.0s infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes n1 { 0%,21.88% { opacity: 0; } 23.75%,96.25% { opacity: 1; } 98.75%,100% { opacity: 0; } }
+    .n1 { animation: n1 16.0s infinite; }
+    @keyframes k2 { 0%,27.44% { opacity: 0; transform: scale(.4); } 29.06%,96.25% { opacity: 1; transform: scale(1); } 98.75%,100% { opacity: 0; } }
+    .k2 { animation: k2 16.0s infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes n2 { 0%,28.12% { opacity: 0; } 30.00%,96.25% { opacity: 1; } 98.75%,100% { opacity: 0; } }
+    .n2 { animation: n2 16.0s infinite; }
+    @keyframes k3 { 0%,33.69% { opacity: 0; transform: scale(.4); } 35.31%,96.25% { opacity: 1; transform: scale(1); } 98.75%,100% { opacity: 0; } }
+    .k3 { animation: k3 16.0s infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes n3 { 0%,34.38% { opacity: 0; } 36.25%,96.25% { opacity: 1; } 98.75%,100% { opacity: 0; } }
+    .n3 { animation: n3 16.0s infinite; }
+    @keyframes k4 { 0%,39.94% { opacity: 0; transform: scale(.4); } 41.56%,96.25% { opacity: 1; transform: scale(1); } 98.75%,100% { opacity: 0; } }
+    .k4 { animation: k4 16.0s infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes n4 { 0%,40.62% { opacity: 0; } 42.50%,96.25% { opacity: 1; } 98.75%,100% { opacity: 0; } }
+    .n4 { animation: n4 16.0s infinite; }
+    @keyframes k5 { 0%,53.69% { opacity: 0; transform: scale(.4); } 55.31%,96.25% { opacity: 1; transform: scale(1); } 98.75%,100% { opacity: 0; } }
+    .k5 { animation: k5 16.0s infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes n5 { 0%,54.37% { opacity: 0; } 56.25%,96.25% { opacity: 1; } 98.75%,100% { opacity: 0; } }
+    .n5 { animation: n5 16.0s infinite; }
+    @keyframes k6 { 0%,59.94% { opacity: 0; transform: scale(.4); } 61.56%,96.25% { opacity: 1; transform: scale(1); } 98.75%,100% { opacity: 0; } }
+    .k6 { animation: k6 16.0s infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes n6 { 0%,60.62% { opacity: 0; } 62.50%,96.25% { opacity: 1; } 98.75%,100% { opacity: 0; } }
+    .n6 { animation: n6 16.0s infinite; }
+    @keyframes k7 { 0%,66.19% { opacity: 0; transform: scale(.4); } 67.81%,96.25% { opacity: 1; transform: scale(1); } 98.75%,100% { opacity: 0; } }
+    .k7 { animation: k7 16.0s infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes n7 { 0%,66.88% { opacity: 0; } 68.75%,96.25% { opacity: 1; } 98.75%,100% { opacity: 0; } }
+    .n7 { animation: n7 16.0s infinite; }
+    @keyframes k8 { 0%,72.44% { opacity: 0; transform: scale(.4); } 74.06%,96.25% { opacity: 1; transform: scale(1); } 98.75%,100% { opacity: 0; } }
+    .k8 { animation: k8 16.0s infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes n8 { 0%,73.12% { opacity: 0; } 75.00%,96.25% { opacity: 1; } 98.75%,100% { opacity: 0; } }
+    .n8 { animation: n8 16.0s infinite; }
+    @keyframes k9 { 0%,78.69% { opacity: 0; transform: scale(.4); } 80.31%,96.25% { opacity: 1; transform: scale(1); } 98.75%,100% { opacity: 0; } }
+    .k9 { animation: k9 16.0s infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes n9 { 0%,79.38% { opacity: 0; } 81.25%,96.25% { opacity: 1; } 98.75%,100% { opacity: 0; } }
+    .n9 { animation: n9 16.0s infinite; }
+    @keyframes h1 { 0%,11.88% { opacity: 0; } 13.75%,50.00% { opacity: 1; } 51.88%,100% { opacity: 0; } } .h1 { animation: h1 16.0s infinite; }
+    @keyframes h2 { 0%,51.88% { opacity: 0; } 53.75%,85.62% { opacity: 1; } 87.50%,100% { opacity: 0; } } .h2 { animation: h2 16.0s infinite; }
+    @keyframes done { 0%,86.25% { opacity: 0; } 88.13%,97.50% { opacity: 1; } 99.38%,100% { opacity: 0; } } .done { animation: done 16.0s infinite; }
+    @keyframes appr { 0%,2.50% { opacity: 0; transform: translateY(-18px); } 6.25%,96.25% { opacity: 1; transform: translateY(0); } 98.75%,100% { opacity: 0; } } .appr { animation: appr 16.0s infinite; }
+    @keyframes closed { 0%,87.50% { opacity: 0; } 89.38%,97.50% { opacity: 1; } 99.38%,100% { opacity: 0; } } .closed { animation: closed 16.0s infinite; }
+    .flow { animation: flow 2.4s linear infinite; }
+    @keyframes flow { 0% { transform: translateX(0); opacity: 0; } 5% { opacity: 1; } 95% { opacity: 1; } 100% { transform: translateX(300px); opacity: 0; } }
+    .node1 { animation: node 2.4s infinite; } .node2 { animation: node 2.4s .8s infinite; } .node3 { animation: node 2.4s 1.6s infinite; }
+    @keyframes node { 0%,100% { stroke-width: 2; } 10%,25% { stroke-width: 5; } }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+  </style>
+
+  <rect width="960" height="500" rx="20" fill="#0f1420"/>
+  <text x="40" y="52" font-size="28" font-weight="800">Rollouts: change the fleet, one repo at a time</text>
+  <text x="40" y="78" font-size="15" class="muted">You start it and approve it. git-steer does the rest, 5 repos an hour, and checks every write.</text>
+
+  <!-- Rollout issue -->
+  <rect x="30" y="100" width="460" height="376" rx="14" fill="#161d2b" stroke="#2c3750"/>
+  <text x="54" y="132" font-size="16" font-weight="700">Rollout: default-branch-ruleset <tspan class="muted" font-weight="400">(10 targets)</tspan></text>
+  <rect x="54" y="144" width="122" height="20" rx="10" fill="#0e3a1f" stroke="#3ddc84"/><text x="115" y="158" text-anchor="middle" font-size="11" font-weight="700" style="fill:#9ff0c4">git-steer-rollout</text>
+  <g class="appr"><rect x="184" y="144" width="78" height="20" rx="10" fill="#1d76db"/><text x="223" y="158" text-anchor="middle" font-size="11" font-weight="700">approved</text></g>
+  <text x="272" y="158" font-size="11" class="muted">← added by you</text>
+  <g class="closed"><rect x="388" y="112" width="84" height="22" rx="11" fill="#8957e5"/><text x="430" y="127" text-anchor="middle" font-size="12" font-weight="700">✓ Closed</text></g>
+  <rect x="58" y="183" width="16" height="16" rx="4" fill="none" stroke="#4a5163" stroke-width="2"/>
+  <g class="k0"><rect x="58" y="183" width="16" height="16" rx="4" fill="#238636"/><path d="M61.5 191 l3.5 3.5 l6 -7" stroke="#fff" stroke-width="2.2" fill="none"/></g>
+  <text x="84" y="196" font-size="13" class="mono">repo-01</text>
+  <text class="n0" x="170" y="196" font-size="12" style="fill:#9ff0c4">✅ applied · checked</text>
+  <rect x="58" y="210" width="16" height="16" rx="4" fill="none" stroke="#4a5163" stroke-width="2"/>
+  <g class="k1"><rect x="58" y="210" width="16" height="16" rx="4" fill="#238636"/><path d="M61.5 218 l3.5 3.5 l6 -7" stroke="#fff" stroke-width="2.2" fill="none"/></g>
+  <text x="84" y="223" font-size="13" class="mono">repo-02</text>
+  <text class="n1" x="170" y="223" font-size="12" style="fill:#9ff0c4">✅ applied · checked</text>
+  <rect x="58" y="237" width="16" height="16" rx="4" fill="none" stroke="#4a5163" stroke-width="2"/>
+  <g class="k2"><rect x="58" y="237" width="16" height="16" rx="4" fill="#238636"/><path d="M61.5 245 l3.5 3.5 l6 -7" stroke="#fff" stroke-width="2.2" fill="none"/></g>
+  <text x="84" y="250" font-size="13" class="mono">repo-03</text>
+  <text class="n2" x="170" y="250" font-size="12" style="fill:#9ff0c4">✅ applied · checked</text>
+  <rect x="58" y="264" width="16" height="16" rx="4" fill="none" stroke="#4a5163" stroke-width="2"/>
+  <g class="k3"><rect x="58" y="264" width="16" height="16" rx="4" fill="#238636"/><path d="M61.5 272 l3.5 3.5 l6 -7" stroke="#fff" stroke-width="2.2" fill="none"/></g>
+  <text x="84" y="277" font-size="13" class="mono">repo-04</text>
+  <text class="n3" x="170" y="277" font-size="12" style="fill:#9ff0c4">✅ applied · checked</text>
+  <rect x="58" y="291" width="16" height="16" rx="4" fill="none" stroke="#4a5163" stroke-width="2"/>
+  <g class="k4"><rect x="58" y="291" width="16" height="16" rx="4" fill="#238636"/><path d="M61.5 299 l3.5 3.5 l6 -7" stroke="#fff" stroke-width="2.2" fill="none"/></g>
+  <text x="84" y="304" font-size="13" class="mono">repo-05</text>
+  <text class="n4" x="170" y="304" font-size="12" style="fill:#9ff0c4">✅ applied · checked</text>
+  <rect x="58" y="318" width="16" height="16" rx="4" fill="none" stroke="#4a5163" stroke-width="2"/>
+  <g class="k5"><rect x="58" y="318" width="16" height="16" rx="4" fill="#238636"/><path d="M61.5 326 l3.5 3.5 l6 -7" stroke="#fff" stroke-width="2.2" fill="none"/></g>
+  <text x="84" y="331" font-size="13" class="mono">repo-06</text>
+  <text class="n5" x="170" y="331" font-size="12" style="fill:#9ff0c4">✅ applied · checked</text>
+  <rect x="58" y="345" width="16" height="16" rx="4" fill="none" stroke="#4a5163" stroke-width="2"/>
+  <g class="k6"><rect x="58" y="345" width="16" height="16" rx="4" fill="#238636"/><path d="M61.5 353 l3.5 3.5 l6 -7" stroke="#fff" stroke-width="2.2" fill="none"/></g>
+  <text x="84" y="358" font-size="13" class="mono">repo-07</text>
+  <text class="n6" x="170" y="358" font-size="12" style="fill:#9ff0c4">✅ applied · checked</text>
+  <rect x="58" y="372" width="16" height="16" rx="4" fill="none" stroke="#4a5163" stroke-width="2"/>
+  <g class="k7"><rect x="58" y="372" width="16" height="16" rx="4" fill="#238636"/><path d="M61.5 380 l3.5 3.5 l6 -7" stroke="#fff" stroke-width="2.2" fill="none"/></g>
+  <text x="84" y="385" font-size="13" class="mono">repo-08</text>
+  <text class="n7" x="170" y="385" font-size="12" style="fill:#9ff0c4">✅ applied · checked</text>
+  <rect x="58" y="399" width="16" height="16" rx="4" fill="none" stroke="#4a5163" stroke-width="2"/>
+  <g class="k8"><rect x="58" y="399" width="16" height="16" rx="4" fill="#238636"/><path d="M61.5 407 l3.5 3.5 l6 -7" stroke="#fff" stroke-width="2.2" fill="none"/></g>
+  <text x="84" y="412" font-size="13" class="mono">repo-09</text>
+  <text class="n8" x="170" y="412" font-size="12" style="fill:#9ff0c4">✅ applied · checked</text>
+  <rect x="58" y="426" width="16" height="16" rx="4" fill="none" stroke="#4a5163" stroke-width="2"/>
+  <g class="k9"><rect x="58" y="426" width="16" height="16" rx="4" fill="#238636"/><path d="M61.5 434 l3.5 3.5 l6 -7" stroke="#fff" stroke-width="2.2" fill="none"/></g>
+  <text x="84" y="439" font-size="13" class="mono">repo-10</text>
+  <text class="n9" x="170" y="439" font-size="12" style="fill:#9ff0c4">✅ applied · checked</text>
+  <text x="54" y="462" font-size="12" class="muted">Failed check → <tspan style="fill:#fbca04">paused</tspan>, with the reason. Close the issue → cancelled.</text>
+
+  <!-- Clock -->
+  <g transform="translate(400 300)">
+    <circle r="34" fill="#1d2536" stroke="#ffb02e" stroke-width="3"/>
+    <text class="h1" y="-2" text-anchor="middle" font-size="15" font-weight="800" style="fill:#ffd88a">hour 1</text>
+    <text class="h2" y="-2" text-anchor="middle" font-size="15" font-weight="800" style="fill:#ffd88a">hour 2</text>
+    <text class="done" y="-2" text-anchor="middle" font-size="15" font-weight="800" style="fill:#9ff0c4">done</text>
+    <text y="16" text-anchor="middle" font-size="11" class="muted">5 per hour</text>
+  </g>
+
+  <!-- One job -->
+  <text x="530" y="132" font-size="16" font-weight="700">Inside one job</text>
+  <text x="530" y="154" font-size="13" class="muted">One repo, one token, one write at most.</text>
+  <g transform="translate(530 176)">
+    <rect width="400" height="58" rx="12" fill="#1d2536"/>
+    <circle cx="30" cy="29" r="9" fill="none" stroke="#ffb02e" stroke-width="3"/><path d="M39 29 h18 m-5 0 v6 m-7 -6 v5" stroke="#ffb02e" stroke-width="3" fill="none"/>
+    <text x="70" y="25" font-size="13" font-weight="700">Mint a git-steer-admin token</text>
+    <text x="70" y="43" font-size="12" class="muted mono">repositories: repo-04 · admin: write</text>
+  </g>
+  <g transform="translate(530 262)">
+    <line x1="60" y1="40" x2="340" y2="40" stroke="#2c3750" stroke-width="3"/>
+    <circle class="flow" cx="60" cy="40" r="6" fill="#3ec7ff"/>
+    <circle class="node1" cx="60" cy="40" r="26" fill="#10283a" stroke="#3ec7ff" stroke-width="2"/><text x="60" y="45" text-anchor="middle" font-size="13" font-weight="700">check</text>
+    <circle class="node2" cx="200" cy="40" r="26" fill="#2d2512" stroke="#ffb02e" stroke-width="2"/><text x="200" y="45" text-anchor="middle" font-size="13" font-weight="700">apply</text>
+    <circle class="node3" cx="340" cy="40" r="26" fill="#123322" stroke="#3ddc84" stroke-width="2"/><text x="340" y="45" text-anchor="middle" font-size="13" font-weight="700">check</text>
+    <text x="60" y="92" text-anchor="middle" font-size="12" class="muted">already right?</text><text x="60" y="108" text-anchor="middle" font-size="12" class="muted">skip, no write</text>
+    <text x="200" y="92" text-anchor="middle" font-size="12" class="muted">only if needed</text>
+    <text x="340" y="92" text-anchor="middle" font-size="12" class="muted">verify, then</text><text x="340" y="108" text-anchor="middle" font-size="12" class="muted">tick the box</text>
+  </g>
+  <g transform="translate(530 398)">
+    <rect width="400" height="62" rx="12" fill="#161d2b" stroke="#2c3750"/>
+    <text x="18" y="26" font-size="13" font-weight="700">Never written to:</text>
+    <text x="138" y="26" font-size="12" class="muted">repos that are already right,</text>
+    <text x="18" y="46" font-size="12" class="muted">features the plan doesn't include, or anything git-steer can't read.</text>
+  </g>
+</svg>

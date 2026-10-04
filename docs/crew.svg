@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" width="960" height="440" role="img" aria-labelledby="t d">
+  <title id="t">Meet the crew: git-steer's three GitHub Apps</title>
+  <desc id="d">git-steer-reporter is the eyes: it reads every repo and writes nothing. git-steer-admin is the hands: it changes rulesets and security settings, one repo per job, only after the owner adds the approved label. git-steer is the pen: it commits lockfiles, signed by GitHub, to one repo. Every token is minted per job for one target, and the keys live only in a private repo.</desc>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; fill: #e6ebf5; }
+    .muted { fill: #8b96ad; }
+    .h { font-size: 19px; font-weight: 700; }
+    .role { font-size: 12px; font-weight: 700; letter-spacing: .12em; }
+    .li { font-size: 13.5px; }
+    .chip { font-size: 12px; font-weight: 600; }
+    .glow1 { animation: glow 9s infinite; } .glow2 { animation: glow 9s 3s infinite; } .glow3 { animation: glow 9s 6s infinite; }
+    @keyframes glow { 0%,30%,100% { stroke-opacity: .35; stroke-width: 2; } 8%,22% { stroke-opacity: 1; stroke-width: 3; } }
+    .pupil { animation: look 3s ease-in-out infinite; }
+    @keyframes look { 0%,100% { transform: translateX(-7px); } 50% { transform: translateX(7px); } }
+    .scanline { animation: scanline 3s linear infinite; }
+    @keyframes scanline { from { transform: translateY(0); opacity: 0; } 10%,90% { opacity: 1; } to { transform: translateY(190px); opacity: 0; } }
+    .label { animation: drop 6s infinite; }
+    @keyframes drop { 0%,10% { transform: translateY(-26px); opacity: 0; } 22%,85% { transform: translateY(0); opacity: 1; } 95%,100% { opacity: 0; } }
+    .shackle { transform-box: fill-box; transform-origin: 100% 100%; animation: unlock 6s infinite; }
+    @keyframes unlock { 0%,28% { transform: rotate(0); } 36%,85% { transform: rotate(-35deg); } 95%,100% { transform: rotate(0); } }
+    .nib { animation: write 2.4s ease-in-out infinite; }
+    @keyframes write { 0%,100% { transform: translate(0,0); } 50% { transform: translate(14px,-4px); } }
+    .ink { stroke-dasharray: 60; animation: ink 2.4s ease-in-out infinite; }
+    @keyframes ink { 0% { stroke-dashoffset: 60; } 50%,100% { stroke-dashoffset: 0; } }
+    .key { animation: travel 5s ease-in-out infinite; }
+    @keyframes travel { 0%,10% { transform: translateX(0); opacity: 0; } 18% { opacity: 1; } 70% { transform: translateX(560px); opacity: 1; } 80%,100% { transform: translateX(560px); opacity: 0; } }
+    .target { animation: hit 5s infinite; transform-box: fill-box; transform-origin: center; }
+    @keyframes hit { 0%,66% { transform: scale(1); } 72% { transform: scale(1.15); } 80%,100% { transform: scale(1); } }
+    @media (prefers-reduced-motion: reduce) { .glow1,.glow2,.glow3,.pupil,.scanline,.label,.shackle,.nib,.ink,.key,.target { animation: none; } }
+  </style>
+
+  <rect width="960" height="440" rx="20" fill="#0f1420"/>
+  <text x="40" y="52" font-size="28" font-weight="800">Meet the crew</text>
+  <text x="40" y="78" font-size="15" class="muted">Three GitHub Apps. Each one can do exactly one kind of thing, and nothing else.</text>
+
+  <!-- Reporter -->
+  <rect class="glow1" x="40" y="100" width="280" height="250" rx="16" fill="#151c2a" stroke="#3ec7ff"/>
+  <clipPath id="c1"><rect x="40" y="100" width="280" height="250" rx="16"/></clipPath>
+  <defs><linearGradient id="band" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3ec7ff" stop-opacity="0"/><stop offset=".5" stop-color="#3ec7ff" stop-opacity=".16"/><stop offset="1" stop-color="#3ec7ff" stop-opacity="0"/></linearGradient></defs>
+  <g clip-path="url(#c1)"><rect class="scanline" x="40" y="130" width="280" height="44" fill="url(#band)"/></g>
+  <path d="M68 140 Q92 118 116 140 Q92 162 68 140 Z" fill="none" stroke="#e6ebf5" stroke-width="3"/>
+  <g class="pupil"><circle cx="92" cy="140" r="7" fill="#3ec7ff"/></g>
+  <text x="132" y="134" class="role" style="fill:#3ec7ff">THE EYES</text>
+  <text x="132" y="154" class="h">git-steer-reporter</text>
+  <text x="62" y="196" class="li">👁  Reads every repo, every day</text>
+  <text x="62" y="222" class="li">✋  Writes nothing, anywhere</text>
+  <text x="62" y="248" class="li">📋  Builds the fleet dashboard</text>
+  <rect x="62" y="298" width="236" height="28" rx="14" fill="#10283a" stroke="#3ec7ff"/>
+  <text x="180" y="317" text-anchor="middle" class="chip" style="fill:#a8e4ff">12 permissions · all read-only</text>
+
+  <!-- Admin -->
+  <rect class="glow2" x="340" y="100" width="280" height="250" rx="16" fill="#151c2a" stroke="#ffb02e"/>
+  <g transform="translate(368 122)">
+    <path class="shackle" d="M8 18 V10 a12 12 0 0 1 24 0 V18" fill="none" stroke="#ffb02e" stroke-width="4"/>
+    <rect x="2" y="18" width="36" height="26" rx="5" fill="#ffb02e"/>
+    <circle cx="20" cy="30" r="4" fill="#0f1420"/>
+  </g>
+  <text x="420" y="134" class="role" style="fill:#ffb02e">THE HANDS</text>
+  <text x="420" y="154" class="h">git-steer-admin</text>
+  <text x="362" y="196" class="li">🔧  Rulesets &amp; security settings</text>
+  <text x="362" y="222" class="li">1️⃣  One repo per job · 5 an hour</text>
+  <text x="362" y="248" class="li">✅  Only after you say</text>
+  <g class="label"><rect x="526" y="234" width="76" height="20" rx="10" fill="#1d76db"/><text x="564" y="248" text-anchor="middle" font-size="12" font-weight="700">approved</text></g>
+  <rect x="362" y="298" width="236" height="28" rx="14" fill="#2d2512" stroke="#ffb02e"/>
+  <text x="480" y="317" text-anchor="middle" class="chip" style="fill:#ffd88a">Administration: write · that's all</text>
+
+  <!-- Lockfile pen -->
+  <rect class="glow3" x="640" y="100" width="280" height="250" rx="16" fill="#151c2a" stroke="#b58cff"/>
+  <path class="ink" d="M668 156 q8 -10 16 0 t16 0 t16 0" fill="none" stroke="#b58cff" stroke-width="3" stroke-linecap="round"/>
+  <g class="nib"><path d="M668 146 l10 -22 l8 4 l-10 22 z" fill="#b58cff"/><path d="M668 146 l3 -6 l5 3 z" fill="#e6ebf5"/></g>
+  <text x="720" y="134" class="role" style="fill:#b58cff">THE PEN</text>
+  <text x="720" y="154" class="h">git-steer</text>
+  <text x="662" y="196" class="li">🔒  Commits lockfiles on PRs</text>
+  <text x="662" y="222" class="li">✍️  Signed by GitHub, never pushed</text>
+  <text x="662" y="248" class="li">📦  One repo: git-steer itself</text>
+  <rect x="662" y="298" width="236" height="28" rx="14" fill="#221a33" stroke="#b58cff"/>
+  <text x="780" y="317" text-anchor="middle" class="chip" style="fill:#d9c6ff">Contents: write · 1 repo</text>
+
+  <!-- Token strip -->
+  <line x1="120" y1="398" x2="720" y2="398" stroke="#2c3750" stroke-width="2" stroke-dasharray="4 6"/>
+  <text x="40" y="403" font-size="13" font-weight="700" style="fill:#ffb02e">one job</text>
+  <g class="key">
+    <circle cx="140" cy="398" r="8" fill="none" stroke="#ffb02e" stroke-width="3"/>
+    <path d="M148 398 h22 m-6 0 v6 m-8 -6 v5" stroke="#ffb02e" stroke-width="3" fill="none"/>
+  </g>
+  <g class="target"><circle cx="740" cy="398" r="16" fill="#3b2a22" stroke="#3ddc84" stroke-width="5"/></g>
+  <text x="770" y="394" font-size="13" font-weight="700">one repo</text>
+  <text x="770" y="412" font-size="12" class="muted">token minted for it alone</text>
+</svg>

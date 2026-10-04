@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" role="img" aria-labelledby="t d">
+  <title id="t">How git-steer v2 works</title>
+  <desc id="d">Each repo is a candy: GitHub's hard shell (Dependabot, CodeQL, secret scanning, rulesets) on the outside, the repo and its own heal.yml inside. A CVE hits the shell, Dependabot opens a fix PR inside that repo, the repo's own checks decide, and heal.yml auto-merges patch and minor updates. The read-only git-steer-reporter App reads every repo and writes nothing; it keeps the fleet view in a private repo, where one issue lists only the decisions a human has to make.</desc>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; fill: #e6ebf5; }
+    .muted { fill: #8b96ad; }
+    .small { font-size: 12px; }
+    .label { font-size: 13px; font-weight: 600; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .cap { font-size: 17px; font-weight: 600; }
+
+    /* 15s loop, five 3s steps */
+    .w1 { animation: w1 15s infinite; } .w2 { animation: w2 15s infinite; }
+    .w3 { animation: w3 15s infinite; } .w4 { animation: w4 15s infinite; }
+    .w5 { animation: w5 15s infinite; }
+    .f2 { animation: f2 15s infinite; } .f3 { animation: f3 15s infinite; }
+    .f4 { animation: f4 15s infinite; } .f5 { animation: f5 15s infinite; }
+    .beam { stroke-dasharray: 6 7; animation: f4 15s infinite, flow 0.8s linear infinite; }
+    .cve { animation: cve 15s infinite; }
+    .wflow { animation: flow 0.8s linear infinite; }
+    .hit { animation: hit 15s infinite; transform-box: fill-box; transform-origin: center; }
+
+    @keyframes w1 { 0%{opacity:0} 2%,18%{opacity:1} 20%,100%{opacity:0} }
+    @keyframes w2 { 0%,20%{opacity:0} 22%,38%{opacity:1} 40%,100%{opacity:0} }
+    @keyframes w3 { 0%,40%{opacity:0} 42%,58%{opacity:1} 60%,100%{opacity:0} }
+    @keyframes w4 { 0%,60%{opacity:0} 62%,78%{opacity:1} 80%,100%{opacity:0} }
+    @keyframes w5 { 0%,80%{opacity:0} 82%,97%{opacity:1} 100%{opacity:0} }
+    @keyframes f2 { 0%,20%{opacity:0} 23%,95%{opacity:1} 100%{opacity:0} }
+    @keyframes f3 { 0%,40%{opacity:0} 43%,95%{opacity:1} 100%{opacity:0} }
+    @keyframes f4 { 0%,60%{opacity:0} 63%,95%{opacity:1} 100%{opacity:0} }
+    @keyframes f5 { 0%,80%{opacity:0} 83%,95%{opacity:1} 100%{opacity:0} }
+    @keyframes flow { to { stroke-dashoffset: -13; } }
+    @keyframes cve {
+      0%   { transform: translate(0,0); opacity: 0; }
+      3%   { opacity: 1; }
+      14%  { transform: translate(84px,-54px); opacity: 1; }
+      18%  { transform: translate(84px,-54px); opacity: 0; }
+      100% { transform: translate(84px,-54px); opacity: 0; }
+    }
+    @keyframes hit { 0%,13%{transform:scale(1)} 15%{transform:scale(1.12)} 18%,100%{transform:scale(1)} }
+    .d1 { animation: s1 15s infinite; } .d2 { animation: s2 15s infinite; } .d3 { animation: s3 15s infinite; }
+    .d4 { animation: s4 15s infinite; } .d5 { animation: s5 15s infinite; }
+    @keyframes s1 { 0%,19%{fill:#ff5c8a} 20%,100%{fill:#3a4459} }
+    @keyframes s2 { 0%,19%{fill:#3a4459} 20%,39%{fill:#ffb02e} 40%,100%{fill:#3a4459} }
+    @keyframes s3 { 0%,39%{fill:#3a4459} 40%,59%{fill:#3ddc84} 60%,100%{fill:#3a4459} }
+    @keyframes s4 { 0%,59%{fill:#3a4459} 60%,79%{fill:#3ec7ff} 80%,100%{fill:#3a4459} }
+    @keyframes s5 { 0%,79%{fill:#3a4459} 80%,100%{fill:#b58cff} }
+
+    @media (prefers-reduced-motion: reduce) {
+      .w1,.w2,.w3,.w4,.w5,.f2,.f3,.f4,.f5,.beam,.wflow,.cve,.hit,.d1,.d2,.d3,.d4,.d5 { animation: none; }
+      .w2,.w3,.w4,.w5,.cve { opacity: 0; }
+    }
+  </style>
+
+  <!-- Background -->
+  <rect width="960" height="600" rx="18" fill="#0f1420"/>
+
+  <!-- Title -->
+  <text x="40" y="48" font-size="26" font-weight="700">git-steer v2 · the candy shell</text>
+  <text x="40" y="74" class="muted" font-size="15">GitHub protects the outside · each repo heals itself inside · git-steer only watches</text>
+
+  <!-- Advisory source -->
+  <g>
+    <rect x="40" y="128" width="150" height="76" rx="14" fill="#1a2233" stroke="#2c3750"/>
+    <text x="115" y="160" text-anchor="middle" class="label">GitHub</text>
+    <text x="115" y="180" text-anchor="middle" class="small muted">Advisory Database</text>
+  </g>
+  <g class="cve">
+    <rect x="120" y="214" width="78" height="24" rx="12" fill="#ff5c8a"/>
+    <text x="159" y="231" text-anchor="middle" font-size="12" font-weight="700" fill="#0f1420" class="mono" style="fill:#0f1420">CVE-…</text>
+  </g>
+
+  <!-- Repos: the candies -->
+  <text x="330" y="104" text-anchor="middle" class="small muted">LAYER 0 · GitHub's hard shell</text>
+  <text x="330" y="120" text-anchor="middle" class="small muted">Dependabot · CodeQL · secret scanning · rulesets</text>
+
+  <g class="hit">
+    <circle cx="330" cy="172" r="44" fill="#3b2a22" stroke="#ff5c8a" stroke-width="10"/>
+    <text x="330" y="168" text-anchor="middle" class="label">repo-a</text>
+    <text x="330" y="186" text-anchor="middle" class="small mono" style="fill:#f3c9a8">heal.yml</text>
+  </g>
+  <g>
+    <circle cx="330" cy="290" r="44" fill="#3b2a22" stroke="#ffb02e" stroke-width="10"/>
+    <text x="330" y="286" text-anchor="middle" class="label">repo-b</text>
+    <text x="330" y="304" text-anchor="middle" class="small mono" style="fill:#f3c9a8">heal.yml</text>
+  </g>
+  <g>
+    <circle cx="330" cy="408" r="44" fill="#3b2a22" stroke="#3ec7ff" stroke-width="10"/>
+    <text x="330" y="404" text-anchor="middle" class="label">repo-c</text>
+    <text x="330" y="422" text-anchor="middle" class="small mono" style="fill:#f3c9a8">heal.yml</text>
+  </g>
+  <text x="330" y="482" text-anchor="middle" class="small muted">LAYER 1 · inside, each repo fixes itself</text>
+  <text x="330" y="498" text-anchor="middle" class="small muted">× 114 repos, each with its own token</text>
+
+  <!-- Step 4: read-only beams to the reporter -->
+  <path class="beam" d="M376 172 C 470 172, 520 270, 586 286" fill="none" stroke="#3ec7ff" stroke-width="2.5"/>
+  <path class="beam" d="M376 290 L 586 290" fill="none" stroke="#3ec7ff" stroke-width="2.5"/>
+  <path class="beam" d="M376 408 C 470 408, 520 310, 586 294" fill="none" stroke="#3ec7ff" stroke-width="2.5"/>
+
+  <!-- Step 2: Dependabot PR inside repo-a -->
+  <g class="f2">
+    <rect x="384" y="146" width="150" height="26" rx="13" fill="#1a2233" stroke="#ffb02e"/>
+    <text x="459" y="164" text-anchor="middle" class="small">Dependabot PR · patch</text>
+  </g>
+  <!-- Step 3: repo's own checks decide -->
+  <g class="f3">
+    <rect x="384" y="178" width="150" height="26" rx="13" fill="#123322" stroke="#3ddc84"/>
+    <text x="459" y="196" text-anchor="middle" class="small" style="fill:#9ff0c4">✓ checks · auto-merge</text>
+  </g>
+  <g class="f3">
+    <rect x="384" y="394" width="150" height="26" rx="13" fill="#2d2512" stroke="#ffb02e"/>
+    <text x="459" y="412" text-anchor="middle" class="small" style="fill:#ffd88a">major bump → a human</text>
+  </g>
+
+  <!-- Reporter -->
+  <g>
+    <circle cx="620" cy="290" r="34" fill="#1a2233" stroke="#3ec7ff" stroke-width="3"/>
+    <!-- eye -->
+    <path d="M598 290 Q620 270 642 290 Q620 310 598 290 Z" fill="none" stroke="#e6ebf5" stroke-width="2.5"/>
+    <circle cx="620" cy="290" r="6" fill="#3ec7ff"/>
+    <text x="620" y="346" text-anchor="middle" class="label">git-steer-reporter</text>
+    <text x="620" y="363" text-anchor="middle" class="small muted">read-only App</text>
+  </g>
+
+  <!-- Step 4: a write from the reporter toward repo-b, stopped at a wall -->
+  <g class="w4">
+    <path class="wflow" d="M589 306 L 414 306" stroke="#ff5c6e" stroke-width="2.5" stroke-dasharray="6 6" fill="none"/>
+    <polygon points="414,300 402,306 414,312" fill="#ff5c6e"/>
+    <rect x="390" y="292" width="6" height="30" rx="2" fill="#ff5c6e"/>
+    <rect x="404" y="316" width="190" height="20" rx="10" fill="#0f1420" stroke="#ff5c6e" stroke-opacity="0.5"/>
+    <text x="499" y="330" text-anchor="middle" class="small" style="fill:#ff9aa5">✕ write blocked · read-only App</text>
+  </g>
+
+  <!-- Reporter → private fleet repo -->
+  <path class="beam" d="M654 290 L 712 290" fill="none" stroke="#b58cff" stroke-width="2.5"/>
+  <g>
+    <rect x="714" y="262" width="210" height="56" rx="12" fill="#1a2233" stroke="#b58cff" stroke-width="2"/>
+    <!-- lock -->
+    <path d="M736 284 v-6 a8 8 0 0 1 16 0 v6" fill="none" stroke="#b58cff" stroke-width="2.5"/>
+    <rect x="732" y="284" width="24" height="18" rx="3" fill="#b58cff"/>
+    <text x="768" y="286" class="label">git-steer-fleet</text>
+    <text x="768" y="304" class="small muted">private repo</text>
+  </g>
+
+  <!-- Step 5: the dashboard issue -->
+  <g class="f5">
+    <rect x="690" y="340" width="234" height="150" rx="12" fill="#161d2b" stroke="#2c3750"/>
+    <text x="706" y="364" class="label">Fleet dashboard</text>
+    <text x="706" y="381" class="small muted">one issue · updated in place</text>
+    <line x1="706" y1="392" x2="908" y2="392" stroke="#2c3750"/>
+    <circle cx="714" cy="410" r="4" fill="#ffb02e"/>
+    <text x="726" y="414" class="small">repo-c · major bump needs you</text>
+    <circle cx="714" cy="434" r="4" fill="#ff5c8a"/>
+    <text x="726" y="438" class="small">repo-x · Dependabot is off</text>
+    <circle cx="714" cy="458" r="4" fill="#8b96ad"/>
+    <text x="726" y="462" class="small">repo-y · no branch rules</text>
+    <text x="706" y="482" class="small muted">111 repos fine · nothing to do</text>
+  </g>
+
+  <!-- The human behind the keyboard -->
+  <g class="f5">
+    <circle cx="740" cy="520" r="11" fill="#e6ebf5"/>
+    <path d="M722 556 q18 -26 36 0 Z" fill="#e6ebf5"/>
+    <rect x="704" y="558" width="72" height="12" rx="3" fill="#2c3750"/>
+    <text x="788" y="536" class="label">you</text>
+    <text x="788" y="552" class="small muted">only the calls a</text>
+    <text x="788" y="566" class="small muted">machine can't make</text>
+  </g>
+
+  <!-- Step indicator -->
+  <g>
+    <circle class="d1" cx="48" cy="536" r="6"/>
+    <circle class="d2" cx="66" cy="536" r="6"/>
+    <circle class="d3" cx="84" cy="536" r="6"/>
+    <circle class="d4" cx="102" cy="536" r="6"/>
+    <circle class="d5" cx="120" cy="536" r="6"/>
+  </g>
+
+  <!-- Captions -->
+  <g>
+    <text x="40" y="570" class="cap w1">1 · GitHub spots a CVE and it hits the shell</text>
+    <text x="40" y="570" class="cap w2">2 · Dependabot opens a fix PR inside that repo</text>
+    <text x="40" y="570" class="cap w3">3 · The repo's own checks decide · patch/minor auto-merge</text>
+    <text x="40" y="570" class="cap w4">4 · The reporter reads all 114 repos · writes nothing</text>
+    <text x="40" y="570" class="cap w5">5 · One private list: just the decisions for you</text>
+  </g>
+</svg>
