@@ -1,5 +1,5 @@
 /**
- * Miscellaneous tools: slack_notify, slack_configure, code_quality_sweep, code_review
+ * Miscellaneous tools: slack_notify, slack_configure, code_review
  */
 
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
@@ -46,38 +46,6 @@ export function getTools(): Tool[] {
           },
         },
         required: ['webhook_url'],
-      },
-    },
-    {
-      name: 'code_quality_sweep',
-      description: 'Run linters and SAST tools (ESLint, Ruff, gosec, Bandit) on a repository via GitHub Actions. Auto-detects language stack.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          owner: { type: 'string' },
-          repo: { type: 'string' },
-          tools: {
-            type: 'array',
-            items: {
-              type: 'string',
-              enum: ['eslint', 'ruff', 'gosec', 'bandit', 'auto'],
-            },
-            default: ['auto'],
-            description: 'Linter/SAST tools to run. "auto" detects from language stack.',
-          },
-          createIssues: {
-            type: 'boolean',
-            default: false,
-            description: 'Create GitHub issues for findings',
-          },
-          severity: {
-            type: 'string',
-            enum: ['error', 'warning', 'all'],
-            default: 'error',
-            description: 'Minimum finding severity to report',
-          },
-        },
-        required: ['owner', 'repo'],
       },
     },
     {
@@ -133,7 +101,6 @@ export function handleCall(name: string, args: Record<string, any>, deps: ToolDe
   switch (name) {
     case 'slack_notify': return handleSlackNotify(args, deps);
     case 'slack_configure': return handleSlackConfigure(args, deps);
-    case 'code_quality_sweep': return handleCodeQualitySweep(args, deps);
     case 'code_review': return handleCodeReview(args, deps);
     default: return null;
   }
@@ -196,51 +163,6 @@ async function handleSlackConfigure(args: Record<string, any>, deps: ToolDeps): 
   });
 
   return { success: true, config };
-}
-
-async function handleCodeQualitySweep(args: Record<string, any>, deps: ToolDeps): Promise<any> {
-  const jobId = `quality-${Date.now()}`;
-
-  if (args.createIssues) {
-    await deps.github.ensureLabel(args.owner, args.repo, 'code-quality', '5319e7', 'Code quality findings');
-    await deps.github.ensureLabel(args.owner, args.repo, 'automated', 'bfd4f2', 'Created by automation');
-  }
-
-  let tools = args.tools || ['auto'];
-  if (tools.includes('auto')) {
-    const files = await deps.github.listFiles(args.owner, args.repo, '');
-    const fileNames = files.map((f) => f.name);
-    tools = [];
-    if (fileNames.includes('package.json') || fileNames.includes('tsconfig.json')) tools.push('eslint');
-    if (fileNames.includes('pyproject.toml') || fileNames.includes('requirements.txt') || fileNames.includes('setup.py')) {
-      tools.push('ruff', 'bandit');
-    }
-    if (fileNames.includes('go.mod')) tools.push('gosec');
-    if (tools.length === 0) tools = ['eslint'];
-  }
-
-  await deps.github.triggerWorkflow(
-    'ry-ops',
-    'git-steer',
-    'code-quality.yml',
-    'main',
-    {
-      target_owner: args.owner,
-      target_repo: args.repo,
-      tools: JSON.stringify(tools),
-      create_issues: String(args.createIssues || false),
-      severity: args.severity || 'error',
-      job_id: jobId,
-    }
-  );
-
-  return {
-    success: true,
-    jobId,
-    repo: `${args.owner}/${args.repo}`,
-    tools,
-    message: 'Code quality workflow dispatched. Use workflow_status to check progress.',
-  };
 }
 
 async function handleCodeReview(args: Record<string, any>, _deps: ToolDeps): Promise<any> {
