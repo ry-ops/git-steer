@@ -43,7 +43,7 @@ export async function getFileContent(
   owner: string,
   repo: string,
   path: string,
-  ref?: string,
+  _ref?: string,
 ): Promise<string | null> {
   return github.getFileContent(owner, repo, path);
 }

@@ -168,7 +168,7 @@ async function fixAndMerge(
 ): Promise<FixResult> {
   try {
     // 1. Create branch + PR
-    const { prNumber, prUrl, branch: _branch } = await gh.createSecurityFixPR(owner, repo, alert);
+    const { prNumber, prUrl } = await gh.createSecurityFixPR(owner, repo, alert);
 
     // 2. Wait briefly for CI checks to register (if any)
     await sleep(5000);
