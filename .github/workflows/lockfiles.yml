@@ -16,8 +16,6 @@ on:
     paths:
       - 'package.json'
       - 'package-lock.json'
-      - 'web/package.json'
-      - 'web/package-lock.json'
       - '.github/workflows/lockfiles.yml'
 
 permissions:
@@ -51,10 +49,8 @@ jobs:
       - name: Regenerate lockfiles
         id: regen
         run: |
-          for dir in . web; do
-            (cd "$dir" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund)
-          done
-          changed=$(git status --porcelain -- package-lock.json web/package-lock.json | awk '{print $2}')
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          changed=$(git status --porcelain -- package-lock.json | awk '{print $2}')
           echo "Changed: ${changed:-none}"
           {
             echo 'files<<EOF'

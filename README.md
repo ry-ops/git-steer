@@ -84,7 +84,7 @@ Each item below is removed in its own PR (ADR-008, C-008-009). The scheduled and
 | ~~`code-quality.yml`~~ | Ran linters in other repos and opened issues there. **Removed**, with the `code_quality_sweep` MCP tool that dispatched it. |
 | ~~`/api/cve/fix`, `/api/cve/fix-all`, `fabric_cve_triage`~~ | Opened PRs and merged them seconds later. **Removed**: the routes, the web UI's Fix / Fix All buttons, and the client methods that opened and merged PRs. (`fabric_cve_triage` was already unrouted under ADR-007; its last web route is gone.) |
 | ~~The MCP server, local CLI and Keychain setup~~ (`src/mcp`, `bin/cli.js`, `git-steer init`, `npx git-steer`, the `git-steer/fabric` app) | Ran git-steer on a workstation, with ~60 tools including repo create/delete/commit/settings, branch protect/reap and PR create/merge. **Removed entirely**, with the root `Dockerfile`, the local-install docs and the manual fleet scripts in `scripts/` (several fanned out writes and read the App key from Keychain). |
-| `deploy-web.yml`, `Dockerfile.web`, `src/web`, `web/` | Deployed the web dashboard to a self-hosted k3s cluster, which isn't GitHub (C-008-001) |
+| ~~`deploy-web.yml`, `Dockerfile.web`, `src/web`, `web/`~~ | Deployed the web dashboard to a self-hosted k3s cluster, which isn't GitHub (C-008-001). **Removed**, with `bin/web.js`, `src/fabric/gateway.ts` and the `@git-fabric/*`, `fastify` and `redis` dependencies. |
 
 What stays as Layer 2 building blocks: the rate-limit-hardened GitHub client (`src/github/client.ts`: throttle and retry, ETag caching, GraphQL batching, concurrency caps), the state manager, and `scripts/ci-dashboard.mjs` with `src/dashboard/`.
 
@@ -92,13 +92,11 @@ What stays as Layer 2 building blocks: the rate-limit-hardened GitHub client (`s
 
 ```
 adr/                     Architecture decisions (ADR-008 is current)
-src/                     TypeScript: GitHub client, state manager, dashboard templates, web API (src/web, being retired)
-web/                     React dashboard (being retired with the k3s deploy)
+src/                     TypeScript: GitHub client, state manager, dashboard templates
 scripts/                 ci-dashboard.mjs (Layer 2 building block), ci-changelog.mjs
 .github/workflows/
-  ci.yml                 Build, lint and test the root package and web/ on every PR
+  ci.yml                 Build, lint and test on every PR
   lockfiles.yml          Regenerate lockfiles on PRs; GitHub-signed commits
-  deploy-web.yml         Build and deploy the web dashboard to k3s (being retired)
   changelog.yml          Daily changelog sync to the blog repo (one repo written per run; under review against ADR-008)
   …                      Legacy workflows listed above (disabled)
 ```
@@ -111,9 +109,7 @@ All checks run in CI on every pull request (`.github/workflows/ci.yml`, Node 24)
 npm ci
 npm run build          # tsc
 npm run lint           # eslint src/
-npm test -- --run      # vitest: 45 tests across 8 files
-
-cd web && npm ci && npm run build   # tsc -b && vite build
+npm test -- --run      # vitest
 ```
 
 Don't edit lockfiles by hand. Change `package.json` in a PR and the **Lockfiles** workflow commits the matching `package-lock.json` to the branch. To force a fresh resolution, delete the lockfile in the PR.
