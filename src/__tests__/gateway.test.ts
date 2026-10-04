@@ -172,7 +172,7 @@ describe('Gateway', () => {
       'config_show', 'config_add_repo', 'config_remove_repo',
       'security_scan', 'security_fix_pr', 'workflow_status',
       'repo_commit', 'repo_read_file', 'repo_list_files',
-      'security_enforce', 'code_quality_sweep',
+      'security_enforce',
       'report_generate', 'dashboard_generate', 'code_review',
     ];
 
