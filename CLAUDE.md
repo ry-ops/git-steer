@@ -8,7 +8,7 @@ Git-Steer looks after a fleet of GitHub repositories and runs only on GitHub (AD
 - `src/github/client.ts` - Rate-limit-hardened GitHub API client (throttle/retry, ETag cache, concurrency caps)
 - `src/state/manager.ts` - Reads/writes the `git-steer-state` repo
 - `src/dashboard/` - Dashboard HTML, used by `scripts/ci-dashboard.mjs`
-- `scripts/` - `ci-dashboard.mjs` (Layer 2 building block), `ci-changelog.mjs`
+- `scripts/` - `app-audit.mjs` (App permissions audit; runs only from the private `git-steer-fleet` repo), `ci-dashboard.mjs` (Layer 2 building block), `ci-changelog.mjs`
 - `.github/workflows/` - `ci.yml`, `lockfiles.yml` (Layer 1 prototype), others
 
 ## Development
