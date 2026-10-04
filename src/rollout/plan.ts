@@ -4,12 +4,19 @@
  * It only continues rollouts a person started and the owner approved
  * (C-010-002), skips paused ones, and never takes more than the budget
  * across all rollouts (C-010-003). Oldest rollout first.
+ *
+ * The budget comes from what was actually written, not from when the step
+ * runs: writes recorded on rollout issues (open or recently closed) in the
+ * last 60 minutes count against the 5, so a late, manual or doubled-up run
+ * can't exceed 5 an hour.
  */
 
 import { parseRolloutIssue, remaining } from './issue.js';
 
 export interface RolloutIssue {
   number: number;
+  /** Closed issues are passed in only so their recent writes count against the budget. */
+  open: boolean;
   body: string;
   labels: string[];
   /** The issue was opened by the start workflow (github-actions[bot]). */
@@ -30,11 +37,28 @@ export interface SkippedRollout {
 }
 
 export const HOURLY_BUDGET = 5;
+const HOUR_MS = 60 * 60 * 1000;
 
-export function planStep(issues: RolloutIssue[], knownChanges: string[], budget = HOURLY_BUDGET): { items: StepItem[]; skipped: SkippedRollout[] } {
+/** Writes recorded in the last hour across every rollout issue given. */
+export function recentWrites(issues: RolloutIssue[], now: Date): number {
+  let n = 0;
+  for (const issue of issues) {
+    for (const item of parseRolloutIssue(issue.body)?.items ?? []) {
+      // Notes are recorded to the minute; count anything that might be inside the hour.
+      if (item.wroteAt && now.getTime() - item.wroteAt.getTime() < HOUR_MS + 60_000) n++;
+    }
+  }
+  return n;
+}
+
+export function planStep(
+  issues: RolloutIssue[], knownChanges: string[], now = new Date(), hourly = HOURLY_BUDGET,
+): { items: StepItem[]; skipped: SkippedRollout[]; recent: number; budget: number } {
+  const recent = recentWrites(issues, now);
+  const budget = Math.max(0, hourly - recent);
   const items: StepItem[] = [];
   const skipped: SkippedRollout[] = [];
-  for (const issue of [...issues].sort((a, b) => a.number - b.number)) {
+  for (const issue of [...issues].filter((i) => i.open).sort((a, b) => a.number - b.number)) {
     const rollout = parseRolloutIssue(issue.body);
     if (!rollout) { skipped.push({ issue: issue.number, reason: 'not a rollout issue' }); continue; }
     if (!issue.openedByGitSteer) { skipped.push({ issue: issue.number, reason: 'not opened by the start workflow' }); continue; }
@@ -42,9 +66,9 @@ export function planStep(issues: RolloutIssue[], knownChanges: string[], budget 
     if (issue.labels.includes('paused')) { skipped.push({ issue: issue.number, reason: 'paused' }); continue; }
     if (!issue.approvedByOwner) { skipped.push({ issue: issue.number, reason: 'waiting for approval' }); continue; }
     for (const item of remaining(rollout)) {
-      if (items.length >= budget) return { items, skipped };
+      if (items.length >= budget) return { items, skipped, recent, budget };
       items.push({ issue: issue.number, change: rollout.change, target: item.target });
     }
   }
-  return { items, skipped };
+  return { items, skipped, recent, budget };
 }

@@ -7,7 +7,7 @@ export const CHANGES: Record<string, Change> = {
 };
 
 export { applyToTarget } from './apply.js';
-export { planStep, HOURLY_BUDGET } from './plan.js';
+export { planStep, recentWrites, HOURLY_BUDGET } from './plan.js';
 export { parseRolloutIssue, recordResult, remaining, renderRolloutIssue } from './issue.js';
 export type { Change, CheckResult, TargetResult } from './types.js';
 export type { RolloutIssue, StepItem } from './plan.js';
