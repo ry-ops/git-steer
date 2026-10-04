@@ -7,11 +7,11 @@
 metadata:
   id: ADR-007
   title: "Autonomous Remediation Control Plane"
-  status: ACCEPTED
+  status: SUPERSEDED
   date: "2026-06-24"
   author: "Ryan // ry-ops.dev"
   supersedes: null
-  superseded_by: null
+  superseded_by: ADR-008   # 2026-10-04 — central remediation retired
   amends:
     - ADR-005   # finally satisfies C-005-005 (one gate) and C-005-006 (verdict provenance)
     - ADR-006   # hardens C-006-008 persistence against silent clears
@@ -277,4 +277,4 @@ consequences:
     - risk: "The event path depends on the App's webhook receiver (a running service)"
       mitigation: "The heartbeat sweep is the always-on fallback; if the receiver is down, convergence is delayed to the next tick, not lost"
 
-superseded_by: null
+superseded_by: ADR-008
