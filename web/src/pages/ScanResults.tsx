@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link } from 'react-router';
 import Card from '../components/Card';
 import Badge from '../components/Badge';
 import Button from '../components/Button';
@@ -110,8 +110,8 @@ export default function ScanResults() {
       setFixResults((prev) => ({
         ...prev,
         [cveId]: {
-          prNumber: res.prNumber ?? res.pr_number ?? 0,
-          prUrl: res.prUrl ?? res.pr_url ?? '',
+          prNumber: res.prNumber ?? 0,
+          prUrl: res.prUrl ?? '',
           merged: res.merged ?? false,
           error: res.error,
         },
@@ -224,7 +224,7 @@ export default function ScanResults() {
           <p className="text-sm font-semibold text-contrast mb-3">Fix All Complete</p>
           <div className="flex flex-wrap gap-3 text-xs mb-3">
             <span className="text-safe font-semibold">{fixAllResult.fixed} fixed</span>
-            {fixAllResult.no_fix > 0 && <span className="text-muted font-semibold">{fixAllResult.no_fix} no fix available</span>}
+            {(fixAllResult.no_fix ?? 0) > 0 && <span className="text-muted font-semibold">{fixAllResult.no_fix} no fix available</span>}
             {fixAllResult.failed > 0 && <span className="text-critical font-semibold">{fixAllResult.failed} failed</span>}
           </div>
           {fixAllResult.prs && fixAllResult.prs.length > 0 && (

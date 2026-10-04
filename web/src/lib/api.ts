@@ -32,13 +32,13 @@ async function del<T>(path: string): Promise<T> {
 
 export const api = {
   repos: {
-    list: () => get<Repo[]>('/api/repos'),
+    list: () => get<RepoListResponse>('/api/repos'),
     get: (owner: string, repo: string) => get<Repo>(`/api/repos/${owner}/${repo}`),
     add: (body: { owner: string; repo: string }) => post<Repo>('/api/repos', body),
   },
   cve: {
     scan: (owner: string, repo: string) => post<ScanResult>('/api/cve/scan', { owner, repo }),
-    results: (owner: string, repo: string) => get<ScanResult>(`/api/cve/results/${owner}/${repo}`),
+    results: (owner: string, repo: string) => get<CveResultsResponse>(`/api/cve/results/${owner}/${repo}`),
     fix: (cveId: string, owner: string, repo: string) =>
       post<FixResult>('/api/cve/fix', { cve_id: cveId, owner, repo }),
     queue: () => get<QueueItem[]>('/api/cve/queue'),
@@ -105,18 +105,49 @@ export interface ScanResult {
   counts: SeverityCounts;
 }
 
+// Response shapes below mirror src/web/routes (repos.ts, cve.ts).
+
+export interface RepoSummary {
+  owner: string;
+  name: string;
+  fullName: string;
+  private: boolean;
+  archived: boolean;
+  defaultBranch: string;
+  pushedAt: string | null;
+  language: string | null;
+  managed: boolean;
+}
+
+export interface RepoListResponse {
+  count: number;
+  orgs: string[];
+  repos: RepoSummary[];
+}
+
+export interface CveResultsResponse {
+  repo: string;
+  totalAlerts: number;
+  alerts: unknown[];
+}
+
 export interface FixResult {
-  pr_url: string;
-  cve_id: string;
-  status: string;
+  alertNumber: number;
+  package: string;
+  cve: string | null;
+  severity: string;
+  prNumber: number;
+  prUrl: string;
+  merged: boolean;
+  error?: string;
 }
 
 export interface FixAllResult {
   total: number;
   fixed: number;
-  no_fix: number;
   failed: number;
-  details: Array<{ cve_id: string; status: string; pr_url?: string }>;
+  no_fix?: number;
+  prs: FixResult[];
 }
 
 export interface VerifyResult {

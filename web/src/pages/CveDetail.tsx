@@ -1,4 +1,4 @@
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link } from 'react-router';
 import Card from '../components/Card';
 import Badge from '../components/Badge';
 import Button from '../components/Button';

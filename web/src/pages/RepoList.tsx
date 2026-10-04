@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import Card from '../components/Card';
 import Badge from '../components/Badge';
 import Button from '../components/Button';
 import { api } from '../lib/api';
 import { TrendBars } from './Dashboard';
-import type { RecentScan, TrendData, AutoscanConfig, SeverityCounts } from '../lib/api';
+import type { RecentScan, AutoscanConfig } from '../lib/api';
 
 interface RepoItem {
   owner: string;
@@ -42,8 +42,7 @@ export default function RepoList() {
   async function loadRepos() {
     try {
       const data = await api.repos.list();
-      const repoList = Array.isArray(data) ? data : Array.isArray(data?.repos) ? data.repos : [];
-      setRepos(repoList);
+      setRepos(data?.repos ?? []);
       setOrgs(data?.orgs ?? []);
 
       // Load recent scans to enrich repo cards
