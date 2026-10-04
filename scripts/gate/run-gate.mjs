@@ -26,8 +26,9 @@
  */
 
 import { execSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync, appendFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 
 const SKIP_DIRS = new Set(['node_modules', 'vendor', '.git', '.github', 'dist', 'build', '.next', '.venv', 'venv', '__pycache__']);
 const MAX_DEPTH = 4; // deep enough for packages/*/svc, shallow enough to stay fast
@@ -286,15 +287,37 @@ function main() {
   };
   console.log(JSON.stringify(out, null, 2));
 
-  if (process.env.GITHUB_OUTPUT) {
-    const gho = process.env.GITHUB_OUTPUT;
-    appendFileSync(gho, `verdict=${verdict}\n`);
-    appendFileSync(gho, `dimensions=${JSON.stringify(dims)}\n`);
-    appendFileSync(gho, `packages=${JSON.stringify(perPackage)}\n`);
-    // multiline: heredoc-style delimiter (the build tail is multi-line)
-    appendFileSync(gho, `report<<GATE_REPORT_EOF\n${report}\nGATE_REPORT_EOF\n`);
-  }
+  if (process.env.GITHUB_OUTPUT) writeStepOutputs({ verdict, dims, perPackage, report });
   return out;
+}
+
+// ── step outputs ─────────────────────────────────────────────────────
+// GITHUB_OUTPUT is a path from the environment, so confine it to the
+// runner's temp dir (where Actions puts its file commands) instead of
+// appending to wherever it points.
+function writeStepOutputs({ verdict, dims, perPackage, report }) {
+  const runnerTemp = process.env.RUNNER_TEMP;
+  if (!runnerTemp) {
+    console.error('run-gate: GITHUB_OUTPUT is set but RUNNER_TEMP is not; refusing to write outputs');
+    process.exit(2);
+  }
+  const allowedRoot = resolve(runnerTemp) + sep;
+  const gho = resolve(process.env.GITHUB_OUTPUT);
+  // `report` embeds raw build/test output from the target repo. A fixed
+  // heredoc delimiter would let that output close the block early and append
+  // its own `verdict=GO` line, so use a random one it can't predict.
+  const eof = `GATE_REPORT_${randomBytes(16).toString('hex')}`;
+  if (gho.startsWith(allowedRoot)) {
+    appendFileSync(gho, [
+      `verdict=${verdict}`,
+      `dimensions=${JSON.stringify(dims)}`,
+      `packages=${JSON.stringify(perPackage)}`,
+      `report<<${eof}`, report, eof, '',
+    ].join('\n'));
+  } else {
+    console.error(`run-gate: GITHUB_OUTPUT is outside RUNNER_TEMP: ${gho}`);
+    process.exit(2);
+  }
 }
 
 main();
