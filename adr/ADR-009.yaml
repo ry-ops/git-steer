@@ -1,0 +1,256 @@
+# ══════════════════════════════════════════════════════════════
+# ADR-009 — git-steer v2: Repos Run Themselves, the Fleet Is Seen Whole
+# Each repo owns its config and its fixes; git-steer reads the fleet
+# and reports it, privately, with coverage before findings
+# ══════════════════════════════════════════════════════════════
+
+metadata:
+  id: ADR-009
+  title: "git-steer v2: Repos Run Themselves, the Fleet Is Seen Whole"
+  status: PROPOSED
+  date: "2026-10-04"
+  author: "Ryan // ry-ops.dev"
+  supersedes: null
+  superseded_by: null
+  amends:
+    - ADR-008   # keeps all of its HARD constraints; settles Layer 2's design, its output target, and per-repo config/state
+  affects:
+    - ry-ops/git-steer
+    - ry-ops/git-steer-state
+    - all managed repos (ry-ops, git-fabric, cortex-io, fabric-forge, TAEM-DEV, m5stack-lab; ~113 repos)
+
+context: |
+  ADR-008 moved fixing down into each repo and turned git-steer into a
+  read-only observer. It left three things open, and the retirement work
+  (ADR-008 C-008-009, complete) has left nothing yet that does Layer 2:
+
+    1. What the fleet view actually is. The old dashboard (scripts/ci-dashboard.mjs,
+       src/dashboard/) never worked reliably: it scanned ~113 repos one at a
+       time, read only the first page of alerts, and was fed by state files
+       the retired control plane used to write (CVE queue, escalation, RFCs).
+
+    2. Where reports go, given who can see them. ry-ops/git-steer is public
+       and meant to be forked. ry-ops/git-steer-state is private. Many managed
+       repos are private. GitHub Pages sites are public on this account's
+       plan, even when built from a private repo. A fleet report published
+       from git-steer, or to Pages, would disclose open vulnerabilities in
+       private repos.
+
+    3. Where per-repo state lives. Every repo needs some git-steer setting
+       (opt-in, auto-merge policy, owner). A state file that changes on every
+       run would mean a bot commit or PR in every repo every day: default
+       branches require signed commits through PRs (C-008-006), and a daily
+       write to ~113 repos is the pattern that got the account flagged.
+
+  Two facts shape the answer. First, almost all of the state git-steer used
+  to keep is already held by GitHub: alerts and their dismissal reasons, PRs
+  and their checks, repo settings and rulesets. Second, Dependabot, CodeQL
+  and secret scanning are good detectors but fail silently: a repo with them
+  off shows zero alerts, which looks exactly like a clean repo.
+
+  ry-ops is a personal account, so org-wide alert endpoints
+  (GET /orgs/{org}/dependabot/alerts and the like) work for the five orgs but
+  not for repos owned by ry-ops; those are read per repo.
+
+decision: |
+  git-steer v2 is a toolkit each repo uses on itself, plus one read-only
+  fleet report. ADR-008's three layers stand; this ADR fixes how Layers 1 and
+  2 are built.
+
+    PER-REPO CONFIG — .github/git-steer.yml
+      Each repo may carry a small, rarely-changed config file, added and
+      edited by PR like any other change. It is optional: with no file, the
+      defaults below apply. Schema version 1:
+
+        version: 1
+        enabled: true            # false = repo is listed as opted out, nothing runs
+        automerge:
+          patch: true            # Dependabot patch updates, via gh pr merge --auto
+          minor: true
+          major: false           # majors always go to a human (C-008-005)
+        owner: ry-ops            # who the dashboard lists as responsible
+        tier: standard           # critical | standard | experimental; sorts the dashboard
+
+      Unknown keys are reported, not fatal. The schema lives in this repo
+      (schema/git-steer.schema.json) and changes only by ADR.
+
+    NO PER-REPO STATE FILES
+      git-steer writes no state into managed repos. Everything it reports is
+      derived on each run from GitHub's own records:
+        - findings from Dependabot, code-scanning and secret-scanning alerts;
+        - VEX from dismissed alerts: the dismissal reason and comment are the
+          justification, rendered to OpenVEX (src/core/vex.ts) on demand;
+        - PR health from the PRs and their check runs;
+        - coverage from repo security settings and rulesets.
+      If a repo later needs state GitHub does not hold, it goes in workflow
+      artifacts or org custom properties, never in commits to a default
+      branch, and only through a new ADR.
+
+    FLEET REPORT — a scheduled, read-only workflow in git-steer
+      1. Discover the fleet from the git-steer App's installations. No
+         hand-maintained repo list; archived repos are listed but not scored.
+      2. For each repo, record coverage first: Dependabot alerts, Dependabot
+         security updates, dependency graph, CodeQL, secret scanning and push
+         protection on or off; default-branch ruleset present; required checks
+         present; .github/git-steer.yml present and valid; heal.yml caller
+         present.
+      3. Then record findings: open alerts by tool and severity, alerts with no
+         patched version, Dependabot PRs open more than 14 days, majors failing
+         checks, dismissed alerts with no justification.
+      4. Use org-wide endpoints for the orgs and per-repo calls for ry-ops,
+         through the rate-limit-hardened client (src/github/client.ts).
+      5. Produce status.json (versioned schema) and the dashboard from it.
+
+    OUTPUT — private by default
+      Fleet data is written to one private output repo, ry-ops/git-steer-state
+      by default, set by a repository variable so forks can choose their own.
+        - The dashboard is a single issue in that repo, updated in place:
+          a fleet table, the coverage gaps, and the human-decision list from
+          C-008-008. It is never closed while it serves as the dashboard; the
+          human-decision list inside it is what empties.
+        - status.json is uploaded as a workflow artifact on every run.
+      Nothing fleet-specific is written to the public git-steer repo: no
+      issues, no Pages, no committed data. A public view, if ever wanted,
+      carries aggregate counts only, with no repo names or alert details for
+      private repos, and needs its own ADR.
+
+    FORKABLE
+      Owners, orgs, the output repo and the App are configuration (repository
+      variables and secrets), not code. A fork plus an App installation plus
+      those settings is a working git-steer.
+
+constraints:
+  - id: C-009-001
+    type: HARD
+    scope: coverage-before-findings
+    rule: >
+      The report never shows a repo as clean unless its detectors are on. A
+      repo with Dependabot alerts, the dependency graph, CodeQL or secret
+      scanning off, or whose settings git-steer cannot read, is shown as
+      UNKNOWN for that tool, with the reason, never as zero findings.
+    check: |
+      for repo, tool in report: tool.enabled != true ⇒ status(repo, tool) == UNKNOWN
+    violation: NO-GO
+    adr: ADR-009
+
+  - id: C-009-002
+    type: HARD
+    scope: no-state-in-managed-repos
+    rule: >
+      git-steer stores no state in managed repos. The only git-steer file in a
+      managed repo is .github/git-steer.yml, which people change by PR.
+      Findings, PR health and VEX are derived from GitHub's records on each run.
+    check: |
+      fleet_report.write_calls(managed_repos) == 0
+      && managed_repo.git_steer_files ⊆ {.github/git-steer.yml, heal.yml caller}
+    violation: NO-GO
+    adr: ADR-009
+
+  - id: C-009-003
+    type: HARD
+    scope: private-fleet-data
+    rule: >
+      Fleet data (repo names, alert details, coverage gaps) goes only to the
+      configured private output repo and to workflow artifacts. It is never
+      published to the public git-steer repo, to GitHub Pages, or to any
+      public location. The report job fails if the output repo is not private.
+    check: |
+      output_repo.visibility == private
+      && public_outputs(fleet_report) == ∅
+    violation: NO-GO
+    adr: ADR-009
+
+  - id: C-009-004
+    type: HARD
+    scope: read-only-report-token
+    rule: >
+      The fleet report reads managed repos with a git-steer App token minted
+      with read permissions only. Writing the dashboard issue and artifacts
+      uses a separate token minted for the output repo alone, with issues
+      write and nothing else.
+    check: |
+      report_token.permissions ⊆ read
+      && output_token.repositories == [output_repo]
+      && output_token.permissions == {issues: write}
+    violation: NO-GO
+    adr: ADR-009
+
+  - id: C-009-005
+    type: HARD
+    scope: discovered-fleet
+    rule: >
+      The fleet is the set of repos the git-steer App is installed on. No
+      repo list is maintained by hand, and the report does not depend on any
+      file in the output repo to know what to read.
+    check: |
+      fleet == ⋃ installations(app).repositories
+    violation: WARN
+    adr: ADR-009
+
+  - id: C-009-006
+    type: SOFT
+    scope: optional-versioned-config
+    rule: >
+      .github/git-steer.yml is optional and versioned. A missing file means
+      defaults; an invalid file is reported on the dashboard and the repo is
+      treated as defaults, not skipped. Schema changes go through an ADR.
+    check: |
+      missing(config) ⇒ defaults && invalid(config) ⇒ listed && defaults
+    violation: WARN
+    adr: ADR-009
+
+  - id: C-009-007
+    type: SOFT
+    scope: forkable
+    rule: >
+      No owner, org, repo name or App ID is hard-coded in workflows or source.
+      They come from repository variables and secrets, with ry-ops values only
+      as documented examples.
+    check: |
+      grep(hard-coded owners) in .github/ src/ scripts/ == ∅
+    violation: WARN
+    adr: ADR-009
+
+rationale: |
+  Coverage comes before findings because the worst failure for a dashboard is
+  a false all-clear. Dependabot and its siblings are trustworthy when they
+  run, and invisible when they don't; git-steer's job is to know which is
+  which.
+
+  Deriving state instead of storing it removes a class of bugs the old design
+  had (state files drifting from reality, silent clears) and removes every
+  reason to write to managed repos. GitHub already keeps the alerts, the
+  dismissals and the PRs; a copy of them would only be another thing to keep
+  in sync.
+
+  The output is private because the repo is public and the fleet is not.
+  An issue in a private repo is the cheapest private, always-on dashboard
+  GitHub offers: it renders markdown, needs no hosting and no commits, and
+  can be read from a phone. If it outgrows an issue, the status.json schema
+  is what the next view is built on.
+
+  Discovering the fleet from App installations means installing the App is
+  how a repo joins, and uninstalling is how it leaves, so the list can't
+  drift from what git-steer can actually read.
+
+consequences:
+  positive:
+    - One read-only workflow gives a full fleet view; no writes, no account risk
+    - A repo with detectors off can't hide behind zero alerts
+    - No per-repo churn; the only file in each repo changes when its policy does
+    - VEX needs no separate store; dismissals are the record
+    - A fork is configuration, not code changes
+  risks:
+    - risk: "The output repo, git-steer-state, does not work today"
+      mitigation: "The report needs only an issue and artifacts there, none of its old files or workflows; if it can't be repaired, a new private repo is set by variable"
+    - risk: "An issue body is limited to 65,536 characters"
+      mitigation: "The issue shows repos with something to act on plus a one-line count of clean repos; the full table is in status.json"
+    - risk: "The App's installed permissions may not cover every read"
+      mitigation: "Missing permissions show as UNKNOWN under C-009-001, with the permission named, so the gap is visible rather than silent"
+    - risk: "Reads across ~113 repos could hit rate limits"
+      mitigation: "Org-wide endpoints for the five orgs, ETag caching and concurrency caps from src/github/client.ts, one scheduled run per day"
+
+open_questions:
+  - "Is git-steer-state repaired as the output repo, or replaced by a new private repo?"
+  - "Which permissions does the installed git-steer App have today, per org, and do they cover the coverage checks?"
+  - "Does changelog.yml (personal access token, writes to fabric-forge/blog) stay, change, or go under ADR-008 and this ADR?"
