@@ -1,7 +1,7 @@
 {
   "name": "git-steer-admin",
   "url": "https://github.com/ry-ops/git-steer",
-  "description": "git-steer rollouts (ADR-010): applies rulesets and security settings, one repo or org per job, only for rollouts the owner approved.",
+  "description": "git-steer rollouts (ADR-010, ADR-011): applies rulesets and security settings and merges approved Dependabot PRs, one repo or org per job, only for rollouts the owner approved.",
   "public": true,
   "redirect_url": "https://github.com/YOUR-NAME/git-steer-fleet",
   "hook_attributes": {
@@ -11,7 +11,13 @@
   "default_permissions": {
     "metadata": "read",
     "administration": "write",
-    "organization_administration": "write"
+    "organization_administration": "write",
+    "contents": "write",
+    "pull_requests": "write",
+    "checks": "read",
+    "statuses": "read",
+    "issues": "write",
+    "vulnerability_alerts": "write"
   },
   "default_events": []
 }

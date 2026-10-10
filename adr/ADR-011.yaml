@@ -57,9 +57,10 @@ decision: |
           ready     - checks passed
           untested  - no checks ran (the repo has no CI)
           failing   - a check failed; never merged
-        It opens a rollout issue (ADR-010) whose targets are the ready and
-        untested PRs, one checkbox each. The owner unticks any PR they don't
-        want, then adds `approved`. The rollout step merges one PR per job
+        It opens a rollout issue (ADR-010) whose targets are the ready,
+        untested and waiting PRs, one line each. The owner deletes the line
+        of any PR they don't want (a ticked box means done, so unticking
+        can't mean skip), then adds `approved`. The rollout step merges one PR per job
         (squash, so the commit is GitHub-signed), re-checks, and ticks the
         box. When the rollout ends, git-steer scans the repo again and posts
         before/after counts on the request.
@@ -79,10 +80,12 @@ decision: |
     FIX ROLLOUT TARGETS — one pull request
       A target can be "owner/repo#N". check(PR):
         compliant    - merged
-        noncompliant - open, mergeable, checks ready (or untested and still
-                       ticked)
-        waiting      - open but behind or in conflict (Dependabot is
-                       rebasing); not a failure, retried next step, and
+        noncompliant - open, Dependabot's, into the default branch,
+                       mergeable, and no check failed (ready or untested;
+                       being on the approved rollout is the owner's yes)
+        waiting      - in conflict, still computing, or checks running
+                       (Dependabot is rebasing); not a failure, retried
+                       next step, and
                        does not count against the hourly pace
         unavailable  - closed unmerged, or checks now failing; skipped
       apply(PR) merges it. C-010-001, -003 and -004 apply unchanged: one
@@ -91,9 +94,12 @@ decision: |
 
     PERMISSIONS
       git-steer-admin adds, per repository: pull_requests: write and
-      contents: write (merging), issues: write (hand-off issue) and
+      contents: write (merging), checks: read and statuses: read (judging a
+      PR's checks before merging), issues: write (hand-off issue) and
       vulnerability_alerts: write (dismissing). Each job's token still names
-      one repo and only the permissions its change needs.
+      one repo and only the permissions its change needs: a merge job's
+      token has contents, pull requests, checks and statuses, and no
+      Administration. Approved by the owner on 2026-10-10.
 
     COPILOT
       Copilot reads replies and explains them, and can draft a request issue
@@ -135,10 +141,9 @@ constraints:
     scope: never-merge-failing
     rule: >
       A pull request whose checks failed is never merged. An untested pull
-      request is merged only if the owner left it ticked on an approved
-      rollout.
+      request is merged only if the owner left it on an approved rollout.
     check: |
-      for merge in fix_merges: merge.pr.checks != "failing" && (merge.pr.checks == "ready" || merge.target.ticked)
+      for merge in fix_merges: merge.pr.checks != "failing" && (merge.pr.checks == "ready" || merge.target ∈ approved_rollout.lines)
     violation: NO-GO
     adr: ADR-011
 
@@ -185,7 +190,7 @@ consequences:
     - Copilot gives the owner a conversational view without holding any power
   risks:
     - risk: "An untested Dependabot upgrade breaks a repo with no CI"
-      mitigation: "Untested PRs are listed as such and merged only if the owner leaves them ticked; a later 'make repo self-healing' change adds CI"
+      mitigation: "Untested PRs are listed as such and merged only if the owner leaves them on the approved rollout; a later 'make repo self-healing' change adds CI"
     - risk: "git-steer-admin gains merge and contents write"
       mitigation: "Per-job tokens name one repo and only the permissions that change type needs; the key stays in the fleet-write environment"
     - risk: "Dependabot rebases slowly, so a fix rollout takes several hours"
