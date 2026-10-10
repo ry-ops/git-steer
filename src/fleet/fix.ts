@@ -10,12 +10,14 @@
 import type { App } from 'octokit';
 import { getPull, judgePull, readChecks } from '../rollout/changes/merge-dependabot-pr.js';
 import { repoOctokit, scanRepo } from './collect.js';
-import { verdict } from './scan.js';
+import { parseScanTarget, verdict } from './scan.js';
 import type { CveAlert, RepoScan } from './types.js';
 
 export type PlanState = 'ready' | 'untested' | 'waiting' | 'failing' | 'skip';
 
 export interface PackageUpdate { name: string; from: string; to: string }
+
+export type Bump = 'minor' | 'major' | 'unknown';
 
 export interface PlannedPr {
   number: number;
@@ -25,6 +27,41 @@ export interface PlannedPr {
   detail: string;
   updates: PackageUpdate[];
   closes: CveAlert[];
+  /** The largest semver step among its updates. A 0.x minor counts as major. */
+  bump: Bump;
+}
+
+/** What goes on a fix rollout. Failing PRs never do (C-011-003). */
+export interface FixOptions {
+  /** Include PRs with no checks (the repo has no CI). */
+  untested: boolean;
+  /** Include major (and 0.x minor, and unreadable) version bumps. */
+  major: boolean;
+}
+
+export const REPO_DEFAULTS: FixOptions = { untested: true, major: false };
+export const FLEET_DEFAULTS: FixOptions = { untested: false, major: false };
+
+export interface FixRequest {
+  repo?: string;
+  /** An owner, or undefined with no repo for the whole fleet. */
+  owner?: string;
+  opts: FixOptions;
+}
+
+/**
+ * Reads a fix request: "fix owner/repo", "fix <owner>" or "fix fleet" (also
+ * "fix all"), with optional "+untested" / "+major" anywhere in the title.
+ */
+export function parseFixRequest(title: string, body = ''): FixRequest | null {
+  const untested = /(^|\s)\+untested\b/i.test(title);
+  const major = /(^|\s)\+major\b/i.test(title);
+  const repo = parseScanTarget(`${title}\n${body}`);
+  if (repo) return { repo, opts: { untested: untested || REPO_DEFAULTS.untested, major } };
+  const m = title.trim().match(/^fix:?\s+([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)(?:\s|$)/i);
+  if (!m) return null;
+  const scope = m[1].toLowerCase() === 'fleet' || m[1].toLowerCase() === 'all' ? undefined : m[1];
+  return { owner: scope, opts: { untested, major } };
 }
 
 export interface FixPlan {
@@ -45,6 +82,33 @@ export function parseUpdates(body: string): PackageUpdate[] {
     if (!out.has(m[1])) out.set(m[1], { name: m[1], from: m[2], to: m[3] });
   }
   return [...out.values()];
+}
+
+function majorStep(from: string, to: string): boolean {
+  const parts = (v: string) => v.replace(/^v/, '').split(/[-+]/)[0].split('.').map((x) => parseInt(x, 10) || 0);
+  const [a, b] = [parts(from), parts(to)];
+  if (a[0] !== b[0]) return true;
+  return a[0] === 0 && (a[1] ?? 0) !== (b[1] ?? 0); // 0.x: a minor step can break
+}
+
+/** The bump a Dependabot PR makes, from its parsed updates, else from "from X to Y" in its title. */
+export function bumpOf(updates: PackageUpdate[], title: string): Bump {
+  let pairs = updates.map((u) => [u.from, u.to] as const);
+  if (!pairs.length) {
+    const m = title.match(/from v?(\d[\w.+-]*) to v?(\d[\w.+-]*)/);
+    if (m) pairs = [[m[1], m[2]]];
+  }
+  if (!pairs.length) return 'unknown';
+  return pairs.some(([f, t]) => majorStep(f, t)) ? 'major' : 'minor';
+}
+
+/** Whether a planned PR goes on the rollout under these options, and if not, why. */
+export function eligibility(p: PlannedPr, opts: FixOptions): { ok: boolean; why: string } {
+  if (p.state === 'failing') return { ok: false, why: 'a check failed' };
+  if (p.state === 'skip') return { ok: false, why: p.detail };
+  if (p.bump !== 'minor' && !opts.major) return { ok: false, why: p.bump === 'major' ? 'major version: ask with +major' : 'version step unreadable: ask with +major' };
+  if (p.state === 'untested' && !opts.untested) return { ok: false, why: 'no checks ran: ask with +untested' };
+  return { ok: true, why: '' };
 }
 
 /** Numeric version compare on the release part (1.2.10 > 1.2.9); pre-release tags are ignored. */
@@ -85,7 +149,7 @@ export async function buildFixPlan(app: App, fullName: string): Promise<FixPlan>
     prs.push({
       number: listed.number, title: listed.title, url: listed.html_url,
       state: planState(v, checks.state), detail: v.state === 'noncompliant' ? checks.detail : v.detail,
-      updates, closes: alertsClosedBy(updates, alerts),
+      updates, closes: alertsClosedBy(updates, alerts), bump: bumpOf(updates, listed.title),
     });
   }
   prs.sort((a, b) => b.closes.length - a.closes.length || a.number - b.number);
@@ -98,10 +162,10 @@ export async function buildFixPlan(app: App, fullName: string): Promise<FixPlan>
 }
 
 /** The PRs to put on the rollout: everything that may be merged, with a note the owner sees. */
-export function rolloutTargets(plan: FixPlan): { targets: string[]; notes: Record<string, string> } {
+export function rolloutTargets(plan: FixPlan, opts: FixOptions = REPO_DEFAULTS): { targets: string[]; notes: Record<string, string> } {
   const targets: string[] = [];
   const notes: Record<string, string> = {};
-  for (const p of plan.prs.filter((x) => x.state === 'ready' || x.state === 'untested' || x.state === 'waiting')) {
+  for (const p of plan.prs.filter((x) => eligibility(x, opts).ok)) {
     const t = `${plan.repo}#${p.number}`;
     targets.push(t);
     const label = { ready: '🟢 checks passed', untested: '🟡 untested: no checks ran', waiting: '⏳ waiting (conflict or checks running)' }[p.state as 'ready' | 'untested' | 'waiting'];
@@ -115,10 +179,10 @@ const STATE_TEXT: Record<PlanState, string> = {
 };
 
 /** @param rolloutRef how to name the rollout issue (e.g. "#17"), or undefined when there's nothing to merge. */
-export function renderFixPlan(plan: FixPlan, rolloutRef?: string): string {
+export function renderFixPlan(plan: FixPlan, rolloutRef?: string, opts: FixOptions = REPO_DEFAULTS): string {
   const s = plan.scan;
   const alerts = s.alerts?.length ?? 0;
-  const willClose = new Set(plan.prs.filter((p) => p.state !== 'failing' && p.state !== 'skip').flatMap((p) => p.closes.map((a) => a.number))).size;
+  const willClose = new Set(plan.prs.filter((p) => eligibility(p, opts).ok).flatMap((p) => p.closes.map((a) => a.number))).size;
   const out: string[] = [];
   out.push(`## git-steer fix plan: [${plan.repo}](${s.status.url})`, '');
   out.push(verdict(s), '');
@@ -130,10 +194,11 @@ export function renderFixPlan(plan: FixPlan, rolloutRef?: string): string {
 
   if (plan.prs.length) {
     out.push(`### Dependabot PRs (${plan.prs.length})`, '');
-    out.push('| PR | State | Checks | Closes | Updates |', '|---|---|---|---|---|');
+    out.push('| PR | State | Checks | Closes | Updates | On rollout |', '|---|---|---|---|---|---|');
     for (const p of plan.prs) {
       const ups = p.updates.map((u) => `${u.name} ${u.from} → ${u.to}`).join('<br>') || '—';
-      out.push(`| [#${p.number}](${p.url}) ${p.title.replace(/\|/g, '/')} | ${STATE_TEXT[p.state]} | ${p.detail.replace(/\|/g, '/')} | ${p.closes.length} | ${ups} |`);
+      const e = eligibility(p, opts);
+      out.push(`| [#${p.number}](${p.url}) ${p.title.replace(/\|/g, '/')} | ${STATE_TEXT[p.state]} | ${p.detail.replace(/\|/g, '/')} | ${p.closes.length} | ${ups} | ${e.ok ? '✅' : `— ${e.why}`} |`);
     }
     out.push('', '🟢 checks passed · 🟡 no checks ran (the repo has no CI): merging is your call · ⏳ in conflict or checks running: merged once Dependabot rebases · 🔴 a check failed: never merged', '');
   } else {

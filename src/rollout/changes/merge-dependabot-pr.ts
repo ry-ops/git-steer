@@ -65,7 +65,8 @@ export interface PullLike {
   head: { sha: string };
 }
 
-export function judgePull(pr: PullLike, defaultBranch: string, checks: ChecksVerdict): CheckResult {
+/** @param requireChecks merge only when a check passed; a PR with no checks is skipped (merge-dependabot-pr-tested). */
+export function judgePull(pr: PullLike, defaultBranch: string, checks: ChecksVerdict, requireChecks = false): CheckResult {
   if (pr.merged) return { state: 'compliant', detail: 'merged' };
   if (pr.state !== 'open') return { state: 'unavailable', detail: 'closed without merging' };
   if (pr.user?.login !== DEPENDABOT) return { state: 'unavailable', detail: `not a Dependabot PR (${pr.user?.login ?? 'unknown author'})` };
@@ -74,6 +75,7 @@ export function judgePull(pr: PullLike, defaultBranch: string, checks: ChecksVer
   if (pr.mergeable === false || pr.mergeable_state === 'dirty') return { state: 'waiting', detail: 'in conflict; waiting for Dependabot to rebase' };
   if (checks.state === 'failing') return { state: 'unavailable', detail: checks.detail };
   if (checks.state === 'running') return { state: 'waiting', detail: checks.detail };
+  if (requireChecks && checks.state === 'untested') return { state: 'unavailable', detail: 'no checks ran, and this rollout merges only PRs whose checks passed' };
   return { state: 'noncompliant', detail: `open, ${checks.state} (${checks.detail}) @ ${pr.head.sha.slice(0, 7)}` };
 }
 
@@ -100,36 +102,45 @@ export async function getPull(
   }
 }
 
-async function read(octokit: Octokit, target: string): Promise<{ pr: PullLike; verdict: CheckResult }> {
+async function read(octokit: Octokit, target: string, requireChecks = false): Promise<{ pr: PullLike; verdict: CheckResult }> {
   const { owner, repo, number } = parsePullTarget(target);
   const [p, { data: info }] = await Promise.all([
     getPull(octokit, owner, repo, number),
     octokit.request('GET /repos/{owner}/{repo}', { owner, repo }),
   ]);
   const checks = p.state === 'open' && !p.merged ? await readChecks(octokit, owner, repo, p.head.sha) : { state: 'untested' as const, detail: '' };
-  return { pr: p, verdict: judgePull(p, info.default_branch, checks) };
+  return { pr: p, verdict: judgePull(p, info.default_branch, checks, requireChecks) };
 }
 
-export const mergeDependabotPr: Change = {
-  id: 'merge-dependabot-pr',
-  target: 'pr',
-  summary: 'Merge Dependabot pull requests (squash), one per job, each re-checked just before merging. A PR whose checks failed is never merged.',
+function mergeChange(id: string, requireChecks: boolean, summary: string): Change {
+  return {
+    id,
+    target: 'pr',
+    summary,
 
-  async check(octokit, target) {
-    try {
-      return (await read(octokit, target)).verdict;
-    } catch (err) {
-      const e = err as { status?: number; message?: string };
-      return { state: 'unknown', detail: `${e.status ?? ''} ${e.message ?? ''}`.trim() };
-    }
-  },
+    async check(octokit, target) {
+      try {
+        return (await read(octokit, target, requireChecks)).verdict;
+      } catch (err) {
+        const e = err as { status?: number; message?: string };
+        return { state: 'unknown', detail: `${e.status ?? ''} ${e.message ?? ''}`.trim() };
+      }
+    },
 
-  async apply(octokit, target) {
-    const { owner, repo, number } = parsePullTarget(target);
-    const { pr, verdict } = await read(octokit, target);
-    if (verdict.state !== 'noncompliant') throw new Error(`no longer mergeable: ${verdict.detail}`);
-    await octokit.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', {
-      owner, repo, pull_number: number, merge_method: 'squash', sha: pr.head.sha,
-    });
-  },
-};
+    async apply(octokit, target) {
+      const { owner, repo, number } = parsePullTarget(target);
+      const { pr, verdict } = await read(octokit, target, requireChecks);
+      if (verdict.state !== 'noncompliant') throw new Error(`no longer mergeable: ${verdict.detail}`);
+      await octokit.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', {
+        owner, repo, pull_number: number, merge_method: 'squash', sha: pr.head.sha,
+      });
+    },
+  };
+}
+
+export const mergeDependabotPr = mergeChange('merge-dependabot-pr', false,
+  'Merge Dependabot pull requests (squash), one per job, each re-checked just before merging. A PR whose checks failed is never merged.');
+
+/** Fleet default (ADR-011): only PRs whose checks passed; untested ones are skipped at merge time too. */
+export const mergeDependabotPrTested = mergeChange('merge-dependabot-pr-tested', true,
+  'Merge Dependabot pull requests whose checks passed (squash), one per job, each re-checked just before merging. PRs with no checks, or a failed check, are skipped.');

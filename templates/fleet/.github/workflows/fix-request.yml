@@ -1,8 +1,8 @@
 name: Fix request
 
-# Fix a repo (ADR-011), asked for with an issue titled "fix owner/repo"
-# (the "Fix a repo" template, by hand, from the mobile app, or drafted by
-# Copilot). This workflow is read-only toward the repo: it reads it through
+# Fix (ADR-011), asked for with an issue titled "fix owner/repo",
+# "fix <owner>" or "fix fleet", optionally with "+untested" / "+major" (the
+# "Fix a repo" template, by hand, from the mobile app, or drafted by Copilot). This workflow is read-only toward the repo: it reads it through
 # git-steer-reporter, replies with a plan, and opens a merge-dependabot-pr
 # rollout issue. Nothing is merged until the owner adds `approved` to that
 # rollout; the hourly Rollout step does the merging (ADR-010).
@@ -30,7 +30,7 @@ jobs:
       github.event.issue.user.login == github.repository_owner &&
       startsWith(github.event.issue.title, 'fix')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30   # a fleet plan reads every repo with open Dependabot PRs
     steps:
       - name: Check out git-steer
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
