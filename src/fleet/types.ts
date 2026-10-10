@@ -5,7 +5,7 @@
  * any later view is built on. Change it only by bumping SCHEMA.
  */
 
-export const SCHEMA = 'git-steer/fleet-status@1';
+export const SCHEMA = 'git-steer/fleet-status@2';
 
 /**
  * on          - the detector or setting is enabled
@@ -25,6 +25,18 @@ export interface Coverage {
 }
 
 export type CoverageKey = keyof Coverage;
+
+/**
+ * Repo settings that aren't security coverage, so they never count as a
+ * coverage gap. skipped - deliberately left off (e.g. Sponsorships on a fork).
+ */
+export type SettingState = 'on' | 'off' | 'skipped' | 'unknown';
+
+export interface Settings {
+  sponsorships: SettingState;
+}
+
+export type SettingKey = keyof Settings;
 
 export interface SeverityCounts {
   critical: number;
@@ -72,6 +84,7 @@ export interface RepoStatus {
   defaultBranch: string;
   url: string;
   coverage: Coverage;
+  settings: Settings;
   findings: Findings;
   config: 'present' | 'absent' | 'unknown';
   errors: string[];

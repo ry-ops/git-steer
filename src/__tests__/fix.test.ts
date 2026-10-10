@@ -133,6 +133,7 @@ describe('fix plan', () => {
     status: {
       repo: 'git-fabric/gateway', owner: 'git-fabric', private: false, defaultBranch: 'main', url: 'https://github.com/git-fabric/gateway',
       coverage: { dependabotAlerts: 'on', dependabotSecurityUpdates: 'on', codeScanning: 'on', secretScanning: 'on', pushProtection: 'on', branchProtection: 'on' },
+      settings: { sponsorships: 'on' },
       findings: { dependabot: { critical: 0, high: alerts.length, medium: 0, low: 0 }, codeScanning: { critical: 0, high: 0, medium: 0, low: 0 }, secretScanning: 0, noPatch: [], staleDependabotPrs: [], undocumentedDismissals: [] },
       config: 'absent', errors: [],
     },

@@ -8,8 +8,9 @@
  *   CHANGE       - a change type id (src/rollout/index.ts)
  *   TARGETS      - targets separated by commas, spaces or newlines ("owner/repo",
  *                  or an org for org changes), or a selector over the latest
- *                  fleet report: "coverage:<check>=<state>", e.g.
- *                  "coverage:branchProtection=off"
+ *                  fleet report: "coverage:<check>=<state>" or
+ *                  "settings:<setting>=<state>", e.g.
+ *                  "coverage:branchProtection=off", "settings:sponsorships=off"
  *   STARTED_BY, RUN_URL - who started it, and the run (set by the workflow)
  */
 
@@ -26,10 +27,10 @@ if (!change) {
 
 let targets;
 let selector;
-const sel = TARGETS.trim().match(/^coverage:([A-Za-z]+)=([a-z]+)$/);
+const sel = TARGETS.trim().match(/^(coverage|settings):([A-Za-z]+)=([a-z]+)$/);
 if (sel) {
   const status = JSON.parse(readFileSync('fleet-status/status.json', 'utf8'));
-  targets = status.repos.filter((r) => r.coverage?.[sel[1]] === sel[2]).map((r) => r.repo);
+  targets = status.repos.filter((r) => r[sel[1]]?.[sel[2]] === sel[3]).map((r) => r.repo);
   selector = TARGETS.trim();
 } else {
   targets = TARGETS.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean);

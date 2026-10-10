@@ -56,7 +56,7 @@ Every morning git-steer reads **every repo it's installed on** and updates **one
 - **Coverage before findings.** If a detector is off, that repo's findings show as **unknown**, never as zero. A quiet repo has to *prove* it's quiet.
 - **Plan limits aren't failures.** When GitHub says a feature needs a paid plan, the dashboard says **"not on this plan"**, not "off".
 - **Private by design.** Fleet data lives only in a private repo. This public repo never holds a repo name, an alert or a number from your fleet.
-- **`status.json`** comes with every run (schema `git-steer/fleet-status@1`), for whatever view you want to build next.
+- **`status.json`** comes with every run (schema `git-steer/fleet-status@2`), for whatever view you want to build next.
 
 <a id="rollouts"></a>
 

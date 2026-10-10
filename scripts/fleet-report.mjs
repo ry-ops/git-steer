@@ -2,7 +2,7 @@
  * Fleet report (ADR-009 Layer 2)
  *
  * Reads the whole fleet through the read-only reporter App and writes:
- *   status.json   - fleet status (src/fleet/types.ts, schema git-steer/fleet-status@1)
+ *   status.json   - fleet status (src/fleet/types.ts, schema git-steer/fleet-status@2)
  *   dashboard.md  - the dashboard issue body
  * to the working directory. Updating the issue is the workflow's job, with
  * the fleet repo's own GITHUB_TOKEN.

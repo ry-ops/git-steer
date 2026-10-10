@@ -15,8 +15,9 @@ on:
         options:
           - default-branch-ruleset
           - security-settings
+          - sponsorships
       targets:
-        description: 'Targets: owner/repo, comma-separated, or a selector over the latest fleet report, e.g. coverage:branchProtection=off'
+        description: 'Targets: owner/repo, comma-separated, or a selector over the latest fleet report, e.g. coverage:branchProtection=off or settings:sponsorships=off'
         required: true
 
 permissions:
@@ -51,7 +52,7 @@ jobs:
           npm run build
 
       - name: Get the latest fleet report (for selectors)
-        if: startsWith(inputs.targets, 'coverage:')
+        if: startsWith(inputs.targets, 'coverage:') || startsWith(inputs.targets, 'settings:')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

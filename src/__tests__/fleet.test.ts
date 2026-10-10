@@ -74,6 +74,7 @@ function repo(name: string, over: Partial<RepoStatus> = {}): RepoStatus {
       dependabotAlerts: 'on', dependabotSecurityUpdates: 'on', codeScanning: 'on',
       secretScanning: 'on', pushProtection: 'on', branchProtection: 'on',
     },
+    settings: { sponsorships: 'on' },
     findings: {
       dependabot: { critical: 0, high: 0, medium: 0, low: 0 }, codeScanning: { critical: 0, high: 0, medium: 0, low: 0 },
       secretScanning: 0, noPatch: [], staleDependabotPrs: [], undocumentedDismissals: [],
@@ -88,6 +89,16 @@ function fleet(repos: RepoStatus[]): FleetStatus {
 }
 
 describe('renderDashboard', () => {
+  it('counts settings apart from coverage and names repos with Sponsorships off', () => {
+    const md = renderDashboard(fleet([
+      repo('acme/a'), repo('acme/b', { settings: { sponsorships: 'off' } }), repo('acme/fork', { settings: { sponsorships: 'skipped' } }),
+    ]));
+    expect(md).toContain('| Sponsorships | 1 | 1 | 1 | 0 |');
+    expect(md).toContain('Sponsorships off: acme/b.');
+    expect(md).toContain('`settings:sponsorships=off`');
+    expect(md).toContain('## Needs you (0)');
+  });
+
   it('says so when nothing needs a human', () => {
     const md = renderDashboard(fleet([repo('acme/a')]));
     expect(md).toContain('## Needs you (0)');

@@ -6,7 +6,7 @@
  * never zero (C-009-001).
  */
 
-import type { CoverageKey, CoverageState, FleetStatus, RepoStatus, SeverityCounts } from './types.js';
+import type { CoverageKey, CoverageState, FleetStatus, RepoStatus, SettingKey, SettingState, SeverityCounts } from './types.js';
 
 /** GitHub's issue body limit is 65,536 characters; stay well under it. */
 export const MAX_BODY = 60_000;
@@ -21,6 +21,12 @@ export const COVERAGE_LABELS: Record<CoverageKey, string> = {
 };
 
 export const KEYS = Object.keys(COVERAGE_LABELS) as CoverageKey[];
+
+export const SETTING_LABELS: Record<SettingKey, string> = {
+  sponsorships: 'Sponsorships',
+};
+
+const SETTING_KEYS = Object.keys(SETTING_LABELS) as SettingKey[];
 
 export interface DecisionCounts {
   noPatch: number;
@@ -149,6 +155,19 @@ function render(status: FleetStatus, maxRows: number): string {
     out.push(`| ${COVERAGE_LABELS[k]} | ${n('on')} | ${n('off')} | ${n('unavailable')} | ${n('unknown')} |`);
   }
   out.push('');
+
+  out.push('## Settings', '');
+  out.push('✅ on · ❌ off · ⏭️ skipped by design · ❓ unknown', '');
+  out.push('| Setting | ✅ | ❌ | ⏭️ | ❓ |', '|---|---|---|---|---|');
+  for (const k of SETTING_KEYS) {
+    const n = (s: SettingState) => repos.filter((r) => r.settings?.[k] === s).length;
+    out.push(`| ${SETTING_LABELS[k]} | ${n('on')} | ${n('off')} | ${n('skipped')} | ${n('unknown')} |`);
+  }
+  out.push('');
+  const noSponsor = repos.filter((r) => r.settings?.sponsorships === 'off').map((r) => r.repo);
+  if (noSponsor.length) {
+    out.push(`Sponsorships off: ${noSponsor.join(', ')}. To turn it on, start a \`sponsorships\` rollout with targets \`settings:sponsorships=off\`.`, '');
+  }
 
   const unknown = repos.filter((r) => KEYS.some((k) => r.coverage[k] === 'unknown') || r.errors.length);
   if (unknown.length) {

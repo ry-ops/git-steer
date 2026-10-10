@@ -14,7 +14,7 @@ import {
   emptyCounts, secretScanningState, securityUpdatesState, settingState,
 } from './classify.js';
 import { SCHEMA } from './types.js';
-import type { Coverage, CveAlert, FleetStatus, Findings, RepoScan, RepoStatus } from './types.js';
+import type { Coverage, CveAlert, FleetStatus, Findings, RepoScan, RepoStatus, Settings } from './types.js';
 
 const STALE_PR_DAYS = 14;
 const REPO_CONCURRENCY = 4;
@@ -30,6 +30,7 @@ interface InstallationRepo {
   full_name: string;
   private: boolean;
   archived: boolean;
+  fork: boolean;
   default_branch: string;
   html_url: string;
   owner: { login: string };
@@ -88,6 +89,20 @@ async function readCoverage(octokit: Octokit, owner: string, repo: string, branc
       { status: classic.status, message: classic.message },
     ),
   };
+}
+
+/** Settings only the GraphQL API exposes. Forks are skipped: Sponsorships stays off on them by design. */
+async function readSettings(octokit: Octokit, owner: string, repo: string, fork: boolean): Promise<Settings> {
+  if (fork) return { sponsorships: 'skipped' };
+  try {
+    const { repository } = await octokit.graphql<{ repository: { hasSponsorshipsEnabled: boolean } }>(
+      'query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){hasSponsorshipsEnabled}}',
+      { owner, repo },
+    );
+    return { sponsorships: repository.hasSponsorshipsEnabled ? 'on' : 'off' };
+  } catch {
+    return { sponsorships: 'unknown' };
+  }
 }
 
 interface DependabotAlert {
@@ -167,11 +182,12 @@ async function readRepo(octokit: Octokit, r: InstallationRepo, now: Date): Promi
   const owner = r.owner.login;
   const errors: string[] = [];
   const coverage = await readCoverage(octokit, owner, r.name, r.default_branch);
+  const settings = await readSettings(octokit, owner, r.name, r.fork === true);
   const findings = await readFindings(octokit, owner, r.name, coverage, now, errors);
   const cfg = await get(octokit, 'GET /repos/{owner}/{repo}/contents/{path}', { owner, repo: r.name, path: '.github/git-steer.yml' });
   return {
     repo: r.full_name, owner, private: r.private, defaultBranch: r.default_branch, url: r.html_url,
-    coverage, findings,
+    coverage, settings, findings,
     config: cfg.status === 200 ? 'present' : cfg.status === 404 ? 'absent' : 'unknown',
     errors,
   };

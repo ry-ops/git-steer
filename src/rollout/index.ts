@@ -1,12 +1,14 @@
 import { defaultBranchRuleset } from './changes/default-branch-ruleset.js';
 import { mergeDependabotPr, mergeDependabotPrTested } from './changes/merge-dependabot-pr.js';
 import { securitySettings } from './changes/security-settings.js';
+import { sponsorships } from './changes/sponsorships.js';
 import type { Change } from './types.js';
 
 /** Change types git-steer can roll out. New ones are added here, by PR. */
 export const CHANGES: Record<string, Change> = {
   [defaultBranchRuleset.id]: defaultBranchRuleset,
   [securitySettings.id]: securitySettings,
+  [sponsorships.id]: sponsorships,
   [mergeDependabotPr.id]: mergeDependabotPr,
   [mergeDependabotPrTested.id]: mergeDependabotPrTested,
 };
