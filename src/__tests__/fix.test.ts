@@ -91,6 +91,8 @@ describe('merge-dependabot-pr', () => {
     expect(judgeChecks([{ name: 'check', status: 'completed', conclusion: 'success' }], []).state).toBe('ready');
     // Dependabot's own update jobs show up as check runs on the default branch (git-fabric/k8s, 2026-10-10).
     expect(judgeChecks([{ name: 'Dependabot', status: 'completed', conclusion: 'success' }], []).state).toBe('untested');
+    const ingest = { name: 'ingest', status: 'completed', conclusion: 'failure' };
+    expect(judgeChecks([ingest, ingest, { name: 'build', status: 'completed', conclusion: 'failure' }], []).detail).toBe('failed: ingest, build');
     expect(judgeChecks([{ name: 'test', status: 'completed', conclusion: 'success' }, { name: 'Snyk', status: 'completed', conclusion: 'failure' }], []).state).toBe('failing');
     expect(judgeChecks([], [{ context: 'ci/legacy', state: 'error' }]).state).toBe('failing');
     expect(judgeChecks([{ name: 'ci', status: 'in_progress', conclusion: null }], []).state).toBe('running');

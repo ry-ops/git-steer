@@ -51,15 +51,16 @@ export const SCANNER = /codeql|codacy|sonar|snyk|semgrep|gitguardian|gitleaks|tr
  * passing scanners: "ready" needs a passing check that builds or tests.
  */
 export function judgeChecks(runs: CheckRunLike[], statuses: StatusLike[]): ChecksVerdict {
-  const failed = [
+  // Matrix jobs share a name (fabric-forge/fabric-prospect: nine "ingest"), so name each once.
+  const failed = [...new Set([
     ...runs.filter((r) => r.status === 'completed' && FAILED.has(r.conclusion ?? '')).map((r) => r.name),
     ...statuses.filter((s) => s.state === 'failure' || s.state === 'error').map((s) => s.context),
-  ];
+  ])];
   if (failed.length) return { state: 'failing', detail: `failed: ${failed.join(', ')}` };
-  const running = [
+  const running = [...new Set([
     ...runs.filter((r) => r.status !== 'completed').map((r) => r.name),
     ...statuses.filter((s) => s.state === 'pending').map((s) => s.context),
-  ];
+  ])];
   if (running.length) return { state: 'running', detail: `running: ${running.join(', ')}` };
   const passed = [...new Set([
     ...runs.filter((r) => r.conclusion === 'success').map((r) => r.name),
