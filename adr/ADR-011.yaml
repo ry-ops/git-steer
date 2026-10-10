@@ -32,10 +32,13 @@ context: |
   rebases them.
 
   The owner works from github.com and the GitHub mobile app, and asks GitHub
-  Copilot about the fleet. Copilot chat there can read issues and comments
-  but can't create issues or add labels ("the GitHub tools available to me
-  are read-only", 2026-10-10). The mobile app opens Markdown issue templates;
-  it hands YAML issue forms off to a web link, which failed.
+  Copilot about the fleet. Copilot chat there reads issues and comments. In
+  plain chat it said it can't create issues ("the GitHub tools available to
+  me are read-only", 2026-10-10), but its "Create issue" mode drafts one in a
+  side panel, with a template picker that lists this repo's templates, and
+  a person clicks Create; the issue's author is the owner (tested
+  2026-10-10, fleet issue #15). The mobile app hands YAML issue forms off to
+  a web link, which failed, so request templates are Markdown.
 
 decision: |
   The owner asks git-steer for an action by opening an issue in
@@ -93,11 +96,15 @@ decision: |
       one repo and only the permissions its change needs.
 
     COPILOT
-      Copilot is a reader. Custom instructions for Copilot (a later change)
-      tell it where requests and replies live and how to summarize them.
-      Because Copilot acts as the owner, any future write access for it
-      would bypass the `approved` gate; ADR-011 depends on Copilot staying
-      read-only, and must be revisited if that changes.
+      Copilot reads replies and explains them, and can draft a request issue
+      that the owner creates with one click (Create issue mode). Because an
+      issue Copilot creates is authored by the owner, git-steer can't tell
+      it apart from one the owner typed, so what protects writes is the
+      `approved` label on the rollout issue git-steer opens, never the
+      request itself. Copilot must not add that label; if Copilot can ever
+      label existing issues, approval needs a check Copilot can't satisfy.
+      Scan replies start with a Verdict line, so a summary can't turn
+      "scanner off" into "clean".
 
 constraints:
   - id: C-011-001
@@ -139,10 +146,10 @@ constraints:
     type: HARD
     scope: copilot-reads
     rule: >
-      Copilot never starts, approves or performs a git-steer action. It
-      reads requests and replies.
+      Copilot never approves or performs a git-steer action. It may draft a
+      request the owner creates; only the owner adds `approved`.
     check: |
-      for event in request_events ∪ approval_events: event.actor != copilot
+      for event in approval_events: event.actor == owner && !event.via_copilot
     violation: NO-GO
     adr: ADR-011
 
