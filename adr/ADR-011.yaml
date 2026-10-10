@@ -1,0 +1,189 @@
+# ══════════════════════════════════════════════════════════════
+# ADR-011 — Requests: Scan, Fix, Hand Off, Accept Risk
+# The owner asks git-steer for one action with an issue; Copilot reads
+# and explains; anything that writes is a rollout the owner approves
+# ══════════════════════════════════════════════════════════════
+
+metadata:
+  id: ADR-011
+  title: "Requests: Scan, Fix, Hand Off, Accept Risk"
+  status: PROPOSED
+  date: "2026-10-10"
+  author: "Ryan // ry-ops.dev"
+  supersedes: null
+  superseded_by: null
+  amends:
+    - ADR-010   # git-steer-admin gains pull_requests and contents write, and Dependabot alerts write; a rollout target can be a pull request or an alert
+  affects:
+    - ry-ops/git-steer
+    - ry-ops/git-steer-fleet
+    - all managed repos
+
+context: |
+  The fleet report (ADR-009) and rollouts (ADR-010) cover settings. They
+  don't resolve findings: on 2026-10-10 the dashboard shows ~1,700 open
+  Dependabot alerts and 112 Dependabot PRs open for more than 14 days.
+
+  The first single-repo scan (git-steer #113, fleet issue #12, 2026-10-10)
+  shows why. git-fabric/gateway has 100 open alerts; Dependabot opened 7 fix
+  PRs on 2026-10-05 that cover most of them, and nobody merged them. The
+  repo has no build or test CI, so the PRs' checks are NEUTRAL. All 7 change
+  package-lock.json: merging one puts the rest in conflict until Dependabot
+  rebases them.
+
+  The owner works from github.com and the GitHub mobile app, and asks GitHub
+  Copilot about the fleet. Copilot chat there can read issues and comments
+  but can't create issues or add labels ("the GitHub tools available to me
+  are read-only", 2026-10-10). The mobile app opens Markdown issue templates;
+  it hands YAML issue forms off to a web link, which failed.
+
+decision: |
+  The owner asks git-steer for an action by opening an issue in
+  ry-ops/git-steer-fleet from a Markdown issue template. git-steer serves
+  only issues the owner opened. Copilot reads the replies and explains them;
+  it never starts or approves anything.
+
+    REQUESTS
+      🔍 Scan a repo (read-only, runs at once; built in #113)
+        git-steer reads one repo through git-steer-reporter and replies with
+        its open alerts, coverage and what needs the owner.
+
+      🩹 Fix a repo (writes; a rollout)
+        git-steer replies with a fix plan: the repo's open Dependabot PRs,
+        each with the alerts it closes and its checks, as one of
+          ready     - checks passed
+          untested  - no checks ran (the repo has no CI)
+          failing   - a check failed; never merged
+        It opens a rollout issue (ADR-010) whose targets are the ready and
+        untested PRs, one checkbox each. The owner unticks any PR they don't
+        want, then adds `approved`. The rollout step merges one PR per job
+        (squash, so the commit is GitHub-signed), re-checks, and ticks the
+        box. When the rollout ends, git-steer scans the repo again and posts
+        before/after counts on the request.
+
+      🤖 Hand off to Copilot (writes one issue in the target repo)
+        For what Dependabot can't fix: no patched version, an abandoned
+        package (request), a major upgrade with breaking changes. git-steer
+        opens an issue in the target repo describing the alert and the
+        likely fix. The owner assigns it to the Copilot coding agent from
+        the app and reviews the PR it opens. git-steer never assigns it.
+
+      ✋ Accept risk (writes; a rollout)
+        Dismisses alerts with no fix, with the owner's reason as the
+        dismissal comment, so no dismissal is undocumented (the dashboard
+        already lists those).
+
+    FIX ROLLOUT TARGETS — one pull request
+      A target can be "owner/repo#N". check(PR):
+        compliant    - merged
+        noncompliant - open, mergeable, checks ready (or untested and still
+                       ticked)
+        waiting      - open but behind or in conflict (Dependabot is
+                       rebasing); not a failure, retried next step, and
+                       does not count against the hourly pace
+        unavailable  - closed unmerged, or checks now failing; skipped
+      apply(PR) merges it. C-010-001, -003 and -004 apply unchanged: one
+      repo's token per job, at most 5 writes per hour, a check after every
+      write.
+
+    PERMISSIONS
+      git-steer-admin adds, per repository: pull_requests: write and
+      contents: write (merging), issues: write (hand-off issue) and
+      vulnerability_alerts: write (dismissing). Each job's token still names
+      one repo and only the permissions its change needs.
+
+    COPILOT
+      Copilot is a reader. Custom instructions for Copilot (a later change)
+      tell it where requests and replies live and how to summarize them.
+      Because Copilot acts as the owner, any future write access for it
+      would bypass the `approved` gate; ADR-011 depends on Copilot staying
+      read-only, and must be revisited if that changes.
+
+constraints:
+  - id: C-011-001
+    type: HARD
+    scope: owner-requests-only
+    rule: >
+      git-steer acts only on request issues opened by the owner of
+      ry-ops/git-steer-fleet, and only in that private repo.
+    check: |
+      for run in request_runs: run.issue.author == repo.owner && repo.private
+    violation: NO-GO
+    adr: ADR-011
+
+  - id: C-011-002
+    type: HARD
+    scope: writes-are-rollouts
+    rule: >
+      Fix and Accept risk change nothing until the owner adds `approved` to
+      the rollout issue. Scan never writes. Hand off writes one issue in the
+      target repo and nothing else.
+    check: |
+      for write in request_writes: write.kind == "handoff-issue" || write.rollout.approved
+    violation: NO-GO
+    adr: ADR-011
+
+  - id: C-011-003
+    type: HARD
+    scope: never-merge-failing
+    rule: >
+      A pull request whose checks failed is never merged. An untested pull
+      request is merged only if the owner left it ticked on an approved
+      rollout.
+    check: |
+      for merge in fix_merges: merge.pr.checks != "failing" && (merge.pr.checks == "ready" || merge.target.ticked)
+    violation: NO-GO
+    adr: ADR-011
+
+  - id: C-011-004
+    type: HARD
+    scope: copilot-reads
+    rule: >
+      Copilot never starts, approves or performs a git-steer action. It
+      reads requests and replies.
+    check: |
+      for event in request_events ∪ approval_events: event.actor != copilot
+    violation: NO-GO
+    adr: ADR-011
+
+  - id: C-011-005
+    type: SOFT
+    scope: show-the-result
+    rule: >
+      Every request ends with a reply on its issue: the scan, the plan, or
+      the before/after counts after a fix.
+    check: |
+      for request in requests: request.closed ⇒ request.has_reply
+    violation: WARN
+    adr: ADR-011
+
+rationale: |
+  Most alerts already have a fix waiting: Dependabot wrote the PR, and only
+  the merge is missing. Merging is the smallest write that closes them, and
+  it keeps the fix in the repo's own history, made by Dependabot and landed
+  by the owner's approval.
+
+  One PR per job, rather than enabling auto-merge on all of them, because
+  auto-merge waits only for required checks: on a repo with none (gateway)
+  it would merge a rebased PR without looking at its new checks. The step
+  checks each PR itself just before merging.
+
+  An issue as the request keeps every action on github.com and the mobile
+  app, leaves a record, and is the one write Copilot doesn't need to make.
+
+consequences:
+  positive:
+    - The fleet's largest pile (unmerged Dependabot PRs) can be cleared from a phone
+    - Every fix has a plan, an approval, a per-PR record, and a before/after scan
+    - Copilot gives the owner a conversational view without holding any power
+  risks:
+    - risk: "An untested Dependabot upgrade breaks a repo with no CI"
+      mitigation: "Untested PRs are listed as such and merged only if the owner leaves them ticked; a later 'make repo self-healing' change adds CI"
+    - risk: "git-steer-admin gains merge and contents write"
+      mitigation: "Per-job tokens name one repo and only the permissions that change type needs; the key stays in the fleet-write environment"
+    - risk: "Dependabot rebases slowly, so a fix rollout takes several hours"
+      mitigation: "'waiting' PRs don't count against the pace and are retried each step"
+
+open_questions:
+  - "Should the rollout step also run when `approved` is added, rather than waiting for the hourly slot?"
+  - "Close the 2026-06-17 PR from the retired git-steer on git-fabric/gateway (#5), and others like it, as a separate cleanup rollout?"
