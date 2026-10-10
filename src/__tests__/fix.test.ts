@@ -138,8 +138,8 @@ describe('fix plan', () => {
     const plan: FixPlan = {
       repo: 'git-fabric/gateway', scan: scan([a1, a2, a3]),
       prs: [
-        { number: 9, title: 'bump hono', url: 'https://x/9', state: 'untested', detail: 'no checks ran', updates: [{ name: 'hono', from: '4.12.0', to: '4.13.13' }], closes: [a1] },
-        { number: 5, title: 'Patch 30 vulns', url: 'https://x/5', state: 'failing', detail: 'failed: ci', updates: [], closes: [] },
+        { number: 9, title: 'bump hono', url: 'https://x/9', state: 'untested', detail: 'no checks ran', updates: [{ name: 'hono', from: '4.12.0', to: '4.13.13' }], closes: [a1], bump: 'minor' },
+        { number: 5, title: 'Patch 30 vulns', url: 'https://x/5', state: 'failing', detail: 'failed: ci', updates: [], closes: [], bump: 'unknown' },
       ],
       uncovered: [a2], noFix: [a3],
     };

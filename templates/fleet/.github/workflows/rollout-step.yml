@@ -9,7 +9,10 @@ name: Rollout step
 
 on:
   schedule:
-    - cron: '41 * * * *'   # hourly (GitHub runs it far less often than that)
+    # Three slots an hour: GitHub runs scheduled workflows far less often than
+    # asked (4-5 a day for an hourly cron, 2026-10-10). Extra runs are safe:
+    # the budget counts writes recorded in the last hour (C-010-003).
+    - cron: '11,31,51 * * * *'
   workflow_dispatch: {}
   # Approval starts the work at once instead of waiting for a scheduled slot
   # (ADR-011). The plan still checks that the owner added the label, and the
@@ -91,7 +94,7 @@ jobs:
       # Dependabot PR gets contents and pull requests, plus read on checks.
       - name: Mint a git-steer-admin token for this one repo (settings)
         id: token_admin
-        if: matrix.change != 'merge-dependabot-pr'
+        if: "!startsWith(matrix.change, 'merge-dependabot-pr')"
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.ADMIN_APP_ID }}
@@ -102,7 +105,7 @@ jobs:
 
       - name: Mint a git-steer-admin token for this one repo (merging)
         id: token_merge
-        if: matrix.change == 'merge-dependabot-pr'
+        if: startsWith(matrix.change, 'merge-dependabot-pr')
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.ADMIN_APP_ID }}

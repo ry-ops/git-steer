@@ -1,5 +1,11 @@
 /**
- * Fix a repo: the plan (ADR-011). Read-only, through the reporter App.
+ * Fix: the plan (ADR-011). Read-only, through the reporter App.
+ *
+ * Request forms (issue title): "fix owner/repo", "fix <owner>", "fix fleet",
+ * each optionally with "+untested" (include PRs with no checks; the default
+ * for a single repo) and "+major" (include major version steps). Fleet and
+ * owner scope default to PRs whose checks passed, and use the
+ * merge-dependabot-pr-tested change so that rule also holds at merge time.
  *
  * Writes to the working directory:
  *   fix-plan.md        - the reply on the request issue; "{{ROLLOUT}}" stands
@@ -20,7 +26,7 @@
 
 import { App } from 'octokit';
 import { writeFileSync } from 'node:fs';
-import { buildFixPlan, isRunningInPrivateRepo, parseScanTarget, renderFixPlan, rolloutTargets } from '../dist/fleet/index.js';
+import { buildFixPlan, buildFleetFixPlan, fleetRolloutTargets, isRunningInPrivateRepo, parseFixRequest, renderFixPlan, renderFleetFixPlan, rolloutTargets } from '../dist/fleet/index.js';
 import { CHANGES, renderRolloutIssue } from '../dist/rollout/index.js';
 
 const {
@@ -42,22 +48,40 @@ if (!(await isRunningInPrivateRepo(GITHUB_TOKEN, GITHUB_REPOSITORY))) {
 }
 if (!APP_ID || !APP_PRIVATE_KEY) fail('APP_ID and APP_PRIVATE_KEY are required.');
 
-const target = parseScanTarget(`${REQUEST_TITLE}\n${REQUEST_BODY}`);
-if (!target) fail('No repo found in the request. Name one as `fix owner/repo`.');
+const request = parseFixRequest(REQUEST_TITLE, REQUEST_BODY);
+if (!request) fail('No target found. Ask for `fix owner/repo`, `fix <owner>` or `fix fleet`, optionally with `+untested` and/or `+major`.');
+const app = new App({ appId: APP_ID, privateKey: APP_PRIVATE_KEY });
+const change = CHANGES[request.opts.untested ? 'merge-dependabot-pr' : 'merge-dependabot-pr-tested'];
+const footer = () => `\nFix plan: request #${REQUEST_ISSUE}. Delete the line of any PR you don't want merged before adding \`approved\`.\n`;
 
-let plan;
-try {
-  plan = await buildFixPlan(new App({ appId: APP_ID, privateKey: APP_PRIVATE_KEY }), target);
-} catch (err) {
-  fail(err instanceof Error ? err.message : String(err));
+if (request.repo) {
+  let plan;
+  try {
+    plan = await buildFixPlan(app, request.repo);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+  const { targets, notes } = rolloutTargets(plan, request.opts);
+  writeFileSync('fix-plan.md', renderFixPlan(plan, targets.length ? '{{ROLLOUT}}' : undefined, request.opts));
+  if (targets.length) {
+    const { title, body } = renderRolloutIssue({ change: change.id, summary: change.summary, targets, notes, startedBy: STARTED_BY, runUrl });
+    writeFileSync('rollout-title.txt', `${title}: ${request.repo}`);
+    writeFileSync('rollout-body.md', body + footer());
+  }
+  console.log(`${request.repo}: ${plan.prs.length} Dependabot PRs, ${targets.length} on the rollout, ${plan.uncovered.length} alerts with no PR, ${plan.noFix.length} with no fix.`);
+} else {
+  let fleet;
+  try {
+    fleet = await buildFleetFixPlan(app, request.owner);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+  const { targets, notes, held } = fleetRolloutTargets(fleet, request.opts);
+  writeFileSync('fix-plan.md', renderFleetFixPlan(fleet, request.opts, targets.length ? '{{ROLLOUT}}' : undefined, targets.length, held));
+  if (targets.length) {
+    const { title, body } = renderRolloutIssue({ change: change.id, summary: change.summary, targets, notes, startedBy: STARTED_BY, runUrl });
+    writeFileSync('rollout-title.txt', `${title}: ${fleet.scope}`);
+    writeFileSync('rollout-body.md', body + footer());
+  }
+  console.log(`${fleet.scope}: ${fleet.plans.length} repos with Dependabot PRs, ${targets.length} on the rollout, ${held} held by the cap, ${fleet.errors.length} errors.`);
 }
-
-const { targets, notes } = rolloutTargets(plan);
-writeFileSync('fix-plan.md', renderFixPlan(plan, targets.length ? '{{ROLLOUT}}' : undefined));
-if (targets.length) {
-  const change = CHANGES['merge-dependabot-pr'];
-  const { title, body } = renderRolloutIssue({ change: change.id, summary: change.summary, targets, notes, startedBy: STARTED_BY, runUrl });
-  writeFileSync('rollout-title.txt', `${title}: ${target}`);
-  writeFileSync('rollout-body.md', `${body}\nFix plan: request #${REQUEST_ISSUE}. Delete the line of any PR you don't want merged before adding \`approved\`.\n`);
-}
-console.log(`${target}: ${plan.prs.length} Dependabot PRs, ${targets.length} on the rollout, ${plan.uncovered.length} alerts with no PR, ${plan.noFix.length} with no fix.`);

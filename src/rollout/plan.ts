@@ -38,6 +38,8 @@ export interface SkippedRollout {
 
 export const HOURLY_BUDGET = 5;
 const HOUR_MS = 60 * 60 * 1000;
+/** A target found waiting (e.g. a PR Dependabot is rebasing) isn't retried for this long, so it doesn't use up the hour's slots. */
+export const WAITING_BACKOFF_MS = 30 * 60 * 1000;
 
 /** Writes recorded in the last hour across every rollout issue given. */
 export function recentWrites(issues: RolloutIssue[], now: Date): number {
@@ -66,6 +68,7 @@ export function planStep(
     if (issue.labels.includes('paused')) { skipped.push({ issue: issue.number, reason: 'paused' }); continue; }
     if (!issue.approvedByOwner) { skipped.push({ issue: issue.number, reason: 'waiting for approval' }); continue; }
     for (const item of remaining(rollout)) {
+      if (item.waitingAt && now.getTime() - item.waitingAt.getTime() < WAITING_BACKOFF_MS) continue;
       if (items.length >= budget) return { items, skipped, recent, budget };
       items.push({ issue: issue.number, change: rollout.change, target: item.target });
     }

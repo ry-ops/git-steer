@@ -82,6 +82,21 @@ decision: |
         dismissal comment, so no dismissal is undocumented (the dashboard
         already lists those).
 
+    FIX THE FLEET (added 2026-10-10)
+      "fix <owner>" or "fix fleet" plans every repo with open Dependabot
+      PRs in one read-only pass and opens one rollout, at most 150 PRs,
+      interleaved across repos (consecutive merges land in different repos)
+      with each repo's most useful PRs first. Scope sets the defaults:
+        - one repo: ready and untested PRs (the owner reads the plan);
+        - an owner or the fleet: only PRs whose checks passed, through the
+          merge-dependabot-pr-tested change, so a PR found waiting at plan
+          time is still skipped at merge time if it has no checks.
+      "+untested" adds PRs with no checks; "+major" adds major version
+      steps (and 0.x minor steps, and steps git-steer can't read), which
+      are otherwise held at every scope. Failing PRs are never merged.
+      A target found waiting isn't retried for 30 minutes, so it doesn't
+      use up the hour's writes.
+
     FIX ROLLOUT TARGETS — one pull request
       A target can be "owner/repo#N". check(PR):
         compliant    - merged

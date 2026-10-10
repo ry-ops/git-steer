@@ -15,6 +15,8 @@ export interface RolloutItem {
   note: string;
   /** When git-steer wrote to this target (applied, or failed after trying), from the recorded note. */
   wroteAt: Date | null;
+  /** When git-steer last found this target waiting (e.g. a PR in conflict), from the recorded note. */
+  waitingAt: Date | null;
 }
 
 const WROTE = /^(✅ applied|❌ failed).*\((\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC\)/;
@@ -22,6 +24,13 @@ const WROTE = /^(✅ applied|❌ failed).*\((\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC\
 function wroteAt(note: string): Date | null {
   const m = note.match(WROTE);
   return m ? new Date(`${m[2].replace(' ', 'T')}:00Z`) : null;
+}
+
+const WAITING = /^⏳ waiting.*\((\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC\)/;
+
+function waitingAt(note: string): Date | null {
+  const m = note.match(WAITING);
+  return m ? new Date(`${m[1].replace(' ', 'T')}:00Z`) : null;
 }
 
 export interface Rollout {
@@ -73,7 +82,7 @@ export function parseRolloutIssue(body: string): Rollout | null {
   const items: RolloutItem[] = [];
   for (const line of body.split('\n')) {
     const it = line.match(ITEM);
-    if (it) items.push({ target: it[2], done: it[1] === 'x', note: it[3] ?? '', wroteAt: wroteAt(it[3] ?? '') });
+    if (it) items.push({ target: it[2], done: it[1] === 'x', note: it[3] ?? '', wroteAt: wroteAt(it[3] ?? ''), waitingAt: waitingAt(it[3] ?? '') });
   }
   return { change, items };
 }
@@ -81,7 +90,7 @@ export function parseRolloutIssue(body: string): Rollout | null {
 const OUTCOME_TEXT: Record<Outcome, string> = {
   'already-compliant': '✅ already compliant',
   applied: '✅ applied',
-  unavailable: '— not available on this plan',
+  unavailable: '— skipped',
   failed: '❌ failed',
   waiting: '⏳ waiting',
 };
