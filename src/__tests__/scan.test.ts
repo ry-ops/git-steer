@@ -12,6 +12,7 @@ function scan(over: Partial<RepoScan> = {}): RepoScan {
         dependabotAlerts: 'on', dependabotSecurityUpdates: 'on', codeScanning: 'unavailable',
         secretScanning: 'on', pushProtection: 'on', branchProtection: 'on',
       },
+      settings: { sponsorships: 'on' },
       findings: {
         dependabot: { critical: 0, high: 0, medium: 0, low: 0 }, codeScanning: null,
         secretScanning: 0, noPatch: [], staleDependabotPrs: [], undocumentedDismissals: [],

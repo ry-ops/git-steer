@@ -20,6 +20,7 @@ function plan(repo: string, prs: PlannedPr[]): FixPlan {
       status: {
         repo, owner: repo.split('/')[0], private: false, defaultBranch: 'main', url: '',
         coverage: { dependabotAlerts: 'on', dependabotSecurityUpdates: 'on', codeScanning: 'on', secretScanning: 'on', pushProtection: 'on', branchProtection: 'on' },
+        settings: { sponsorships: 'on' },
         findings: { dependabot: null, codeScanning: null, secretScanning: 0, noPatch: [], staleDependabotPrs: [], undocumentedDismissals: [] },
         config: 'absent', errors: [],
       },

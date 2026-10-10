@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { Octokit } from 'octokit';
 import { desiredRuleset, evaluateRuleset } from '../rollout/changes/default-branch-ruleset.js';
 import { analysisState, evaluateSettings, securitySettings } from '../rollout/changes/security-settings.js';
+import { evaluateSponsorships, sponsorships } from '../rollout/changes/sponsorships.js';
 import { parseRolloutIssue, recordResult, remaining, renderRolloutIssue } from '../rollout/issue.js';
 import { planStep, recentWrites } from '../rollout/plan.js';
 import type { RolloutIssue } from '../rollout/plan.js';
@@ -179,5 +180,36 @@ describe('security settings', () => {
       'PUT /repos/{owner}/{repo}/automated-security-fixes',
       'PATCH /repos/{owner}/{repo} {"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}',
     ]);
+  });
+});
+
+describe('sponsorships', () => {
+  const base = { isFork: false, isArchived: false, hasSponsorshipsEnabled: false };
+
+  it('is noncompliant when off, and leaves forks and archived repos alone', () => {
+    expect(evaluateSponsorships(base)).toEqual({ state: 'noncompliant', detail: 'Sponsorships off' });
+    expect(evaluateSponsorships({ ...base, hasSponsorshipsEnabled: true }).state).toBe('compliant');
+    expect(evaluateSponsorships({ ...base, isFork: true }).state).toBe('unavailable');
+    expect(evaluateSponsorships({ ...base, isArchived: true }).state).toBe('unavailable');
+  });
+
+  it('turns it on through updateRepository with the repo node id', async () => {
+    const calls: { query: string; vars: Record<string, unknown> }[] = [];
+    const octokit = {
+      graphql: async (query: string, vars: Record<string, unknown>) => {
+        calls.push({ query, vars });
+        return { repository: { id: 'R_1', ...base } };
+      },
+    } as unknown as Octokit;
+    expect((await sponsorships.check(octokit, 'a/b')).state).toBe('noncompliant');
+    await sponsorships.apply(octokit, 'a/b');
+    const write = calls.find((c) => c.query.startsWith('mutation'));
+    expect(write?.query).toContain('hasSponsorshipsEnabled:true');
+    expect(write?.vars).toEqual({ id: 'R_1' });
+  });
+
+  it('reports an unreadable repo as unknown, never compliant', async () => {
+    const octokit = { graphql: async () => { throw Object.assign(new Error('Not Found'), { status: 404 }); } } as unknown as Octokit;
+    expect((await sponsorships.check(octokit, 'a/b')).state).toBe('unknown');
   });
 });

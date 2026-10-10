@@ -16,6 +16,7 @@ function plan(isPrivate: boolean, uncovered: CveAlert[], noFix: CveAlert[]): Fix
       status: {
         repo: 'git-fabric/gateway', owner: 'git-fabric', private: isPrivate, defaultBranch: 'main', url: 'https://github.com/git-fabric/gateway',
         coverage: { dependabotAlerts: 'on', dependabotSecurityUpdates: 'on', codeScanning: 'on', secretScanning: 'on', pushProtection: 'on', branchProtection: 'on' },
+        settings: { sponsorships: 'on' },
         findings: { dependabot: null, codeScanning: null, secretScanning: 0, noPatch: [], staleDependabotPrs: [], undocumentedDismissals: [] },
         config: 'absent', errors: [],
       },
