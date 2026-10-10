@@ -54,6 +54,15 @@ describe('merge-dependabot-pr', () => {
     expect(await readChecks(octokit, 'git-fabric', 'gateway', 'abc')).toEqual({ state: 'untested', detail: 'no checks ran' });
   });
 
+  it('tolerates unreadable commit statuses only in the plan (fabric-forge private repos, 2026-10-10)', async () => {
+    const octokit = {
+      paginate: async () => [{ name: 'build', status: 'completed', conclusion: 'success' }],
+      request: async () => { throw Object.assign(new Error('Resource not accessible by integration'), { status: 403 }); },
+    } as unknown as Octokit;
+    expect(await readChecks(octokit, 'fabric-forge', 'blog', 'abc', true)).toEqual({ state: 'ready', detail: 'passed: build (commit statuses not readable; check runs only)' });
+    await expect(readChecks(octokit, 'fabric-forge', 'blog', 'abc')).rejects.toThrow('Resource not accessible');
+  });
+
   it('asks again while GitHub is still computing mergeability (gateway, 2026-10-10)', async () => {
     const answers = [null, null, true];
     let calls = 0;
@@ -75,6 +84,12 @@ describe('merge-dependabot-pr', () => {
     expect(untested.state).toBe('untested');
     expect(ready).toEqual({ state: 'ready', detail: 'passed: test' });
     expect(judgeChecks([{ name: 'ci', status: 'completed', conclusion: 'failure' }, { name: 'x', status: 'completed', conclusion: 'success' }], []).state).toBe('failing');
+    // Passing scanners aren't tests (git-fabric/chat, ry-ops/commit-relay, 2026-10-10); failing ones still block.
+    expect(judgeChecks([{ name: 'Codacy Static Code Analysis', status: 'completed', conclusion: 'success' }, { name: 'CodeQL', status: 'completed', conclusion: 'neutral' }], []).state).toBe('untested');
+    expect(judgeChecks([{ name: 'security', status: 'completed', conclusion: 'success' }], []).detail).toBe('only scanners passed (security); nothing built or tested it');
+    expect(judgeChecks([{ name: 'build-and-push', status: 'completed', conclusion: 'success' }, { name: 'CodeQL', status: 'completed', conclusion: 'neutral' }], []).state).toBe('ready');
+    expect(judgeChecks([{ name: 'check', status: 'completed', conclusion: 'success' }], []).state).toBe('ready');
+    expect(judgeChecks([{ name: 'test', status: 'completed', conclusion: 'success' }, { name: 'Snyk', status: 'completed', conclusion: 'failure' }], []).state).toBe('failing');
     expect(judgeChecks([], [{ context: 'ci/legacy', state: 'error' }]).state).toBe('failing');
     expect(judgeChecks([{ name: 'ci', status: 'in_progress', conclusion: null }], []).state).toBe('running');
   });

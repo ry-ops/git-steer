@@ -143,7 +143,7 @@ export async function buildFixPlan(app: App, fullName: string): Promise<FixPlan>
   const prs: PlannedPr[] = [];
   for (const listed of open.filter((p) => p.user?.login === 'dependabot[bot]')) {
     const pr = await getPull(octokit, owner, repo, listed.number);
-    const checks = await readChecks(octokit, owner, repo, pr.head.sha);
+    const checks = await readChecks(octokit, owner, repo, pr.head.sha, true);
     const v = judgePull(pr, scan.status.defaultBranch, checks);
     const updates = parseUpdates(pr.body ?? '');
     prs.push({

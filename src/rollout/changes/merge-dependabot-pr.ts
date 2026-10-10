@@ -35,7 +35,18 @@ export interface StatusLike { context: string; state: string }
 
 export type ChecksVerdict = { state: 'ready' | 'untested' | 'failing' | 'running'; detail: string };
 
-/** What a PR's checks say. Neutral and skipped runs (e.g. CodeQL with nothing to do) don't count as tests. */
+/**
+ * Scanners and linters look at code; they don't build or test it. A failing
+ * one still blocks a merge, but a passing one isn't evidence the upgrade
+ * works (on 2026-10-10 git-fabric/chat's only passing check was Codacy, and
+ * ry-ops/commit-relay's a workflow named "security").
+ */
+export const SCANNER = /codeql|codacy|sonar|snyk|semgrep|gitguardian|gitleaks|trivy|socket|mend|whitesource|dependency[- ]review|security|secret|\baudit\b|\bscan|analy[sz]e|lint/i;
+
+/**
+ * What a PR's checks say. Neutral and skipped runs don't count, and neither do
+ * passing scanners: "ready" needs a passing check that builds or tests.
+ */
 export function judgeChecks(runs: CheckRunLike[], statuses: StatusLike[]): ChecksVerdict {
   const failed = [
     ...runs.filter((r) => r.status === 'completed' && FAILED.has(r.conclusion ?? '')).map((r) => r.name),
@@ -47,11 +58,13 @@ export function judgeChecks(runs: CheckRunLike[], statuses: StatusLike[]): Check
     ...statuses.filter((s) => s.state === 'pending').map((s) => s.context),
   ];
   if (running.length) return { state: 'running', detail: `running: ${running.join(', ')}` };
-  const passed = [
+  const passed = [...new Set([
     ...runs.filter((r) => r.conclusion === 'success').map((r) => r.name),
     ...statuses.filter((s) => s.state === 'success').map((s) => s.context),
-  ];
-  if (passed.length) return { state: 'ready', detail: `passed: ${[...new Set(passed)].join(', ')}` };
+  ])];
+  const tests = passed.filter((n) => !SCANNER.test(n));
+  if (tests.length) return { state: 'ready', detail: `passed: ${tests.join(', ')}` };
+  if (passed.length) return { state: 'untested', detail: `only scanners passed (${passed.join(', ')}); nothing built or tested it` };
   return { state: 'untested', detail: 'no checks ran' };
 }
 
@@ -79,11 +92,26 @@ export function judgePull(pr: PullLike, defaultBranch: string, checks: ChecksVer
   return { state: 'noncompliant', detail: `open, ${checks.state} (${checks.detail}) @ ${pr.head.sha.slice(0, 7)}` };
 }
 
-export async function readChecks(octokit: Octokit, owner: string, repo: string, sha: string): Promise<ChecksVerdict> {
+/**
+ * @param tolerateStatuses for the read-only plan: if commit statuses can't be
+ *   read (the reporter App lacks statuses: read on private repos), judge on
+ *   check runs alone and say so. The merge step never tolerates it: its
+ *   token can read statuses, and an error there stops the merge.
+ */
+export async function readChecks(octokit: Octokit, owner: string, repo: string, sha: string, tolerateStatuses = false): Promise<ChecksVerdict> {
   // paginate already unwraps check_runs from this endpoint's { total_count, check_runs } pages.
   const runs = (await octokit.paginate('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', { owner, repo, ref: sha, per_page: 100 })) as unknown as CheckRunLike[];
-  const { data: combined } = await octokit.request('GET /repos/{owner}/{repo}/commits/{ref}/status', { owner, repo, ref: sha });
-  return judgeChecks(runs, (combined.statuses ?? []) as StatusLike[]);
+  let statuses: StatusLike[] = [];
+  let note = '';
+  try {
+    const { data: combined } = await octokit.request('GET /repos/{owner}/{repo}/commits/{ref}/status', { owner, repo, ref: sha });
+    statuses = (combined.statuses ?? []) as StatusLike[];
+  } catch (err) {
+    if (!tolerateStatuses) throw err;
+    note = ' (commit statuses not readable; check runs only)';
+  }
+  const v = judgeChecks(runs, statuses);
+  return note ? { ...v, detail: v.detail + note } : v;
 }
 
 /**
