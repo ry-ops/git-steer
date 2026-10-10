@@ -1,9 +1,11 @@
 import { defaultBranchRuleset } from './changes/default-branch-ruleset.js';
+import { securitySettings } from './changes/security-settings.js';
 import type { Change } from './types.js';
 
 /** Change types git-steer can roll out. New ones are added here, by PR. */
 export const CHANGES: Record<string, Change> = {
   [defaultBranchRuleset.id]: defaultBranchRuleset,
+  [securitySettings.id]: securitySettings,
 };
 
 export { applyToTarget } from './apply.js';
