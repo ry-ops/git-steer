@@ -41,6 +41,9 @@ export type ChecksVerdict = { state: 'ready' | 'untested' | 'failing' | 'running
  * works (on 2026-10-10 git-fabric/chat's only passing check was Codacy, and
  * ry-ops/commit-relay's a workflow named "security").
  */
+/** GitHub's own runs that show up as check runs: Dependabot's update jobs (on the default branch). */
+const NOT_A_TEST = /^dependabot$/i;
+
 export const SCANNER = /codeql|codacy|sonar|snyk|semgrep|gitguardian|gitleaks|trivy|socket|mend|whitesource|dependency[- ]review|security|secret|\baudit\b|\bscan|analy[sz]e|lint/i;
 
 /**
@@ -62,7 +65,7 @@ export function judgeChecks(runs: CheckRunLike[], statuses: StatusLike[]): Check
     ...runs.filter((r) => r.conclusion === 'success').map((r) => r.name),
     ...statuses.filter((s) => s.state === 'success').map((s) => s.context),
   ])];
-  const tests = passed.filter((n) => !SCANNER.test(n));
+  const tests = passed.filter((n) => !SCANNER.test(n) && !NOT_A_TEST.test(n));
   if (tests.length) return { state: 'ready', detail: `passed: ${tests.join(', ')}` };
   if (passed.length) return { state: 'untested', detail: `only scanners passed (${passed.join(', ')}); nothing built or tested it` };
   return { state: 'untested', detail: 'no checks ran' };
