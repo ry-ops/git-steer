@@ -8,8 +8,7 @@
  */
 
 import type { App } from 'octokit';
-import { judgePull, readChecks } from '../rollout/changes/merge-dependabot-pr.js';
-import type { PullLike } from '../rollout/changes/merge-dependabot-pr.js';
+import { getPull, judgePull, readChecks } from '../rollout/changes/merge-dependabot-pr.js';
 import { repoOctokit, scanRepo } from './collect.js';
 import { verdict } from './scan.js';
 import type { CveAlert, RepoScan } from './types.js';
@@ -79,12 +78,12 @@ export async function buildFixPlan(app: App, fullName: string): Promise<FixPlan>
   const alerts = scan.alerts ?? [];
   const prs: PlannedPr[] = [];
   for (const listed of open.filter((p) => p.user?.login === 'dependabot[bot]')) {
-    const { data: pr } = await octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', { owner, repo, pull_number: listed.number });
+    const pr = await getPull(octokit, owner, repo, listed.number);
     const checks = await readChecks(octokit, owner, repo, pr.head.sha);
-    const v = judgePull(pr as unknown as PullLike, scan.status.defaultBranch, checks);
+    const v = judgePull(pr, scan.status.defaultBranch, checks);
     const updates = parseUpdates(pr.body ?? '');
     prs.push({
-      number: pr.number, title: pr.title, url: pr.html_url,
+      number: listed.number, title: listed.title, url: listed.html_url,
       state: planState(v, checks.state), detail: v.state === 'noncompliant' ? checks.detail : v.detail,
       updates, closes: alertsClosedBy(updates, alerts),
     });

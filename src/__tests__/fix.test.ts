@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { alertsClosedBy, compareVersions, parseUpdates, planState, renderFixPlan, rolloutTargets } from '../fleet/fix.js';
 import type { FixPlan } from '../fleet/fix.js';
-import { judgeChecks, judgePull, parsePullTarget, readChecks } from '../rollout/changes/merge-dependabot-pr.js';
+import { getPull, judgeChecks, judgePull, parsePullTarget, readChecks } from '../rollout/changes/merge-dependabot-pr.js';
 import type { PullLike } from '../rollout/changes/merge-dependabot-pr.js';
 import { parseRolloutIssue, recordResult, renderRolloutIssue } from '../rollout/issue.js';
 import { applyToTarget } from '../rollout/apply.js';
@@ -52,6 +52,18 @@ describe('merge-dependabot-pr', () => {
       request: async () => ({ data: { state: 'pending', total_count: 0, statuses: [] } }),
     } as unknown as Octokit;
     expect(await readChecks(octokit, 'git-fabric', 'gateway', 'abc')).toEqual({ state: 'untested', detail: 'no checks ran' });
+  });
+
+  it('asks again while GitHub is still computing mergeability (gateway, 2026-10-10)', async () => {
+    const answers = [null, null, true];
+    let calls = 0;
+    const octokit = { request: async () => ({ data: { state: 'open', merged: false, mergeable: answers[calls++], user: { login: 'dependabot[bot]' }, base: { ref: 'main' }, head: { sha: 'a' } } }) } as unknown as Octokit;
+    expect((await getPull(octokit, 'a', 'b', 1, 4, 0)).mergeable).toBe(true);
+    expect(calls).toBe(3);
+    calls = 0;
+    const stuck = { request: async () => { calls++; return { data: { state: 'open', mergeable: null } }; } } as unknown as Octokit;
+    expect((await getPull(stuck, 'a', 'b', 1, 2, 0)).mergeable).toBeNull();
+    expect(calls).toBe(2);
   });
 
   it('parses PR targets', () => {
