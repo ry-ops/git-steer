@@ -48,7 +48,8 @@ console.log(`Writes in the last hour: ${recent}. Budget now: ${budget}.`);
 for (const s of skipped) console.log(`#${s.issue}: skipped (${s.reason})`);
 const matrix = items.map((it, n) => {
   const [o, r] = it.target.split('/');
-  return { ...it, owner: o, repo: r ?? '', key: `${n}` };
+  // A pull request target ("owner/repo#N") gets a token for its repo.
+  return { ...it, owner: o, repo: (r ?? '').split('#')[0], key: `${n}` };
 });
 for (const m of matrix) console.log(`#${m.issue}: ${m.change} → ${m.target}`);
 writeFileSync('plan.json', JSON.stringify({ include: matrix }));

@@ -7,10 +7,10 @@ Git-Steer looks after a fleet of GitHub repositories and runs only on GitHub (AD
 - `adr/` - Architecture decisions; ADR-008 is current
 - `src/github/client.ts` - Rate-limit-hardened GitHub API client (throttle/retry, ETag cache, concurrency caps)
 - `src/state/manager.ts` - Reads/writes the `git-steer-state` repo
-- `src/fleet/` - Fleet report (ADR-009 Layer 2): `collect.ts` reads the fleet through the read-only reporter App, `render.ts` builds the dashboard issue from `status.json`, `scan.ts` renders a single-repo scan
-- `src/rollout/` - Rollouts (ADR-010): change types in `changes/` (check + apply), the rollout issue format, the hourly plan, check/apply/check per target
+- `src/fleet/` - Fleet report (ADR-009 Layer 2): `collect.ts` reads the fleet through the read-only reporter App, `render.ts` builds the dashboard issue from `status.json`, `scan.ts` renders a single-repo scan, `fix.ts` builds a Fix-a-repo plan (ADR-011)
+- `src/rollout/` - Rollouts (ADR-010, ADR-011): change types in `changes/` (check + apply; targets are repos, orgs or pull requests), the rollout issue format, the hourly plan, check/apply/check per target
 - `src/dashboard/` - Old dashboard HTML, used by `scripts/ci-dashboard.mjs` (retired design)
-- `scripts/` - `rollout-{start,plan,apply,record}.mjs` (run by the rollout workflows in `git-steer-fleet`), `fleet-report.mjs` (runs `src/fleet` from the private `git-steer-fleet` repo), `repo-scan.mjs` (read-only scan of one repo, asked for with a "scan owner/repo" issue in `git-steer-fleet`), `app-audit.mjs` (App permissions audit; runs only from the private `git-steer-fleet` repo), `ci-dashboard.mjs` (Layer 2 building block), `ci-changelog.mjs`
+- `scripts/` - `rollout-{start,plan,apply,record}.mjs` (run by the rollout workflows in `git-steer-fleet`), `fleet-report.mjs` (runs `src/fleet` from the private `git-steer-fleet` repo), `repo-scan.mjs` (read-only scan of one repo, asked for with a "scan owner/repo" issue in `git-steer-fleet`), `fix-plan.mjs` (Fix a repo: plan plus a merge-dependabot-pr rollout, from a "fix owner/repo" issue), `app-audit.mjs` (App permissions audit; runs only from the private `git-steer-fleet` repo), `ci-dashboard.mjs` (Layer 2 building block), `ci-changelog.mjs`
 - `.github/workflows/` - `ci.yml`, `lockfiles.yml` (Layer 1 prototype), others
 
 ## Working rule

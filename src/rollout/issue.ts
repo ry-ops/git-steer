@@ -7,7 +7,7 @@
 import type { Outcome, TargetResult } from './types.js';
 
 const MARKER = /^<!-- git-steer-rollout:v1 (\{.*\}) -->$/m;
-const ITEM = /^- \[( |x)\] ([A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)?)(?: — (.*))?$/;
+const ITEM = /^- \[( |x)\] ([A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+(?:#\d+)?)?)(?: — (.*))?$/;
 
 export interface RolloutItem {
   target: string;
@@ -33,6 +33,8 @@ export function renderRolloutIssue(opts: {
   change: string;
   summary: string;
   targets: string[];
+  /** Optional note per target, shown after it until git-steer records a result. */
+  notes?: Record<string, string>;
   startedBy: string;
   runUrl?: string;
   selector?: string;
@@ -52,7 +54,7 @@ export function renderRolloutIssue(opts: {
     '',
     `### Targets (${opts.targets.length})`,
     '',
-    ...opts.targets.map((t) => `- [ ] ${t}`),
+    ...opts.targets.map((t) => `- [ ] ${t}${opts.notes?.[t] ? ` — ${opts.notes[t]}` : ''}`),
     '',
   ];
   return { title: `Rollout: ${opts.change} (${opts.targets.length} targets)`, body: lines.join('\n') };
@@ -81,13 +83,19 @@ const OUTCOME_TEXT: Record<Outcome, string> = {
   applied: '✅ applied',
   unavailable: '— not available on this plan',
   failed: '❌ failed',
+  waiting: '⏳ waiting',
 };
 
-/** Ticks (or, on failure, annotates) one target's line. Failed targets stay unticked so they're retried after a person unpauses. */
+/**
+ * Ticks (or, on failure, annotates) one target's line. Failed targets stay
+ * unticked so they're retried after a person unpauses; waiting ones stay
+ * unticked and are retried next step. Neither failed-to-start nor waiting
+ * counts as a write.
+ */
 export function recordResult(body: string, r: TargetResult): string {
   const run = r.runUrl ? ` · [run](${r.runUrl})` : '';
   const detail = r.outcome === 'applied' ? `${r.before} → ${r.after}` : r.outcome === 'failed' ? `${r.before} → ${r.after}` : r.after;
-  const done = r.outcome !== 'failed';
+  const done = r.outcome !== 'failed' && r.outcome !== 'waiting';
   const replacement = `- [${done ? 'x' : ' '}] ${r.target} — ${OUTCOME_TEXT[r.outcome]}: ${detail.replace(/\n/g, ' ')} (${r.at.slice(0, 16).replace('T', ' ')} UTC)${run}`;
   return body
     .split('\n')

@@ -1,4 +1,5 @@
 import { defaultBranchRuleset } from './changes/default-branch-ruleset.js';
+import { mergeDependabotPr } from './changes/merge-dependabot-pr.js';
 import { securitySettings } from './changes/security-settings.js';
 import type { Change } from './types.js';
 
@@ -6,6 +7,7 @@ import type { Change } from './types.js';
 export const CHANGES: Record<string, Change> = {
   [defaultBranchRuleset.id]: defaultBranchRuleset,
   [securitySettings.id]: securitySettings,
+  [mergeDependabotPr.id]: mergeDependabotPr,
 };
 
 export { applyToTarget } from './apply.js';

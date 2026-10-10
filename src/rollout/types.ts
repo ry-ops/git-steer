@@ -8,10 +8,13 @@ import type { Octokit } from 'octokit';
 /**
  * compliant    - nothing to do
  * noncompliant - apply would change it
- * unavailable  - the target's plan doesn't allow it; never written to
+ * unavailable  - the target's plan doesn't allow it, or it can no longer be
+ *                done (e.g. a pull request closed); never written to
  * unknown      - couldn't tell; never written to
+ * waiting      - not ready yet (e.g. a pull request being rebased); not
+ *                written to, not a failure, retried next step
  */
-export type CheckState = 'compliant' | 'noncompliant' | 'unavailable' | 'unknown';
+export type CheckState = 'compliant' | 'noncompliant' | 'unavailable' | 'unknown' | 'waiting';
 
 export interface CheckResult {
   state: CheckState;
@@ -20,8 +23,8 @@ export interface CheckResult {
 
 export interface Change {
   id: string;
-  /** What one target is: "owner/repo" or an org login. */
-  target: 'repo' | 'org';
+  /** What one target is: "owner/repo", an org login, or a pull request "owner/repo#N". */
+  target: 'repo' | 'org' | 'pr';
   /** One line, shown on the rollout issue. */
   summary: string;
   check(octokit: Octokit, target: string): Promise<CheckResult>;
@@ -29,7 +32,7 @@ export interface Change {
   apply(octokit: Octokit, target: string): Promise<void>;
 }
 
-export type Outcome = 'already-compliant' | 'applied' | 'unavailable' | 'failed';
+export type Outcome = 'already-compliant' | 'applied' | 'unavailable' | 'failed' | 'waiting';
 
 export interface TargetResult {
   issue: number;

@@ -35,7 +35,8 @@ if (sel) {
   targets = TARGETS.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean);
 }
 
-const shape = change.target === 'repo' ? /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/ : /^[A-Za-z0-9._-]+$/;
+const shape = change.target === 'repo' ? /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
+  : change.target === 'pr' ? /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+#\d+$/ : /^[A-Za-z0-9._-]+$/;
 const bad = targets.filter((t) => !shape.test(t));
 if (bad.length) { console.error(`Not a ${change.target}: ${bad.join(', ')}`); process.exit(1); }
 targets = [...new Set(targets)];

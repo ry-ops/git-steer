@@ -14,6 +14,7 @@ export async function applyToTarget(
 
   if (before.state === 'compliant') return { ...base, outcome: 'already-compliant', before: before.detail, after: before.detail, at: at() };
   if (before.state === 'unavailable') return { ...base, outcome: 'unavailable', before: before.detail, after: before.detail, at: at() };
+  if (before.state === 'waiting') return { ...base, outcome: 'waiting', before: before.detail, after: before.detail, at: at() };
   if (before.state === 'unknown') return { ...base, outcome: 'failed', before: before.detail, after: 'not written: state unknown', at: at() };
 
   try {

@@ -207,17 +207,24 @@ export async function collectFleet(app: App, now = new Date()): Promise<FleetSta
  * open Dependabot alerts. GET requests only. Throws when the target isn't a
  * repo the App can see.
  */
-export async function scanRepo(app: App, fullName: string, now = new Date()): Promise<RepoScan> {
+/** The App's installation client for one repo. Throws when the App can't see it. */
+export async function repoOctokit(app: App, fullName: string): Promise<{ octokit: Octokit; slug: string }> {
   const [owner, repo] = fullName.split('/');
   const { data: appInfo } = await app.octokit.request('GET /app');
+  const slug = appInfo?.slug ?? 'unknown';
   let installationId: number;
   try {
     const { data } = await app.octokit.request('GET /repos/{owner}/{repo}/installation', { owner, repo });
     installationId = data.id;
   } catch {
-    throw new Error(`${appInfo?.slug ?? 'The App'} can't see ${fullName}: the repo doesn't exist, or the App isn't installed on it.`);
+    throw new Error(`${slug} can't see ${fullName}: the repo doesn't exist, or the App isn't installed on it.`);
   }
-  const octokit = await app.getInstallationOctokit(installationId);
+  return { octokit: await app.getInstallationOctokit(installationId), slug };
+}
+
+export async function scanRepo(app: App, fullName: string, now = new Date()): Promise<RepoScan> {
+  const [owner, repo] = fullName.split('/');
+  const { octokit, slug } = await repoOctokit(app, fullName);
   const { data: info } = await octokit.request('GET /repos/{owner}/{repo}', { owner, repo });
   const status = await readRepo(octokit, info as unknown as InstallationRepo, now);
 
@@ -237,7 +244,7 @@ export async function scanRepo(app: App, fullName: string, now = new Date()): Pr
     })) ?? null;
   }
 
-  return { generatedAt: now.toISOString(), app: appInfo?.slug ?? 'unknown', archived: info.archived === true, status, alerts };
+  return { generatedAt: now.toISOString(), app: slug, archived: info.archived === true, status, alerts };
 }
 
 /** C-009-003: fleet data may only be produced inside a private repo. */

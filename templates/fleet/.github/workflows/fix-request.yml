@@ -1,0 +1,91 @@
+name: Fix request
+
+# Fix a repo (ADR-011), asked for with an issue titled "fix owner/repo"
+# (the "Fix a repo" template, by hand, from the mobile app, or drafted by
+# Copilot). This workflow is read-only toward the repo: it reads it through
+# git-steer-reporter, replies with a plan, and opens a merge-dependabot-pr
+# rollout issue. Nothing is merged until the owner adds `approved` to that
+# rollout; the hourly Rollout step does the merging (ADR-010).
+#
+# Only issues opened by this repo's owner are served (C-011-001).
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: fix-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    # Never run if this repo is ever made public. Owner only, titles starting
+    # with "fix" (startsWith ignores case).
+    if: >-
+      github.event.repository.private &&
+      github.event.issue.user.login == github.repository_owner &&
+      startsWith(github.event.issue.title, 'fix')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out git-steer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.GIT_STEER_REPO || 'ry-ops/git-steer' }}
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install and build
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      - name: Plan
+        env:
+          REQUEST_TITLE: ${{ github.event.issue.title }}
+          REQUEST_BODY: ${{ github.event.issue.body }}
+          REQUEST_ISSUE: ${{ github.event.issue.number }}
+          STARTED_BY: ${{ github.event.issue.user.login }}
+          APP_ID: ${{ secrets.REPORTER_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.REPORTER_PRIVATE_KEY }}
+          # Only used by the script to confirm this repo is private.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/fix-plan.mjs
+
+      - name: Open the rollout and reply
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create git-steer-fix --repo "$REPO" --color d93f0b --description "git-steer fix request (ADR-011)" 2>/dev/null || true
+          gh label create git-steer-rollout --repo "$REPO" --color 0e8a16 --description "git-steer rollout (ADR-010)" 2>/dev/null || true
+          gh label create approved --repo "$REPO" --color 1d76db --description "Owner approval: git-steer may work this rollout" 2>/dev/null || true
+          gh label create paused --repo "$REPO" --color fbca04 --description "Rollout paused; remove to resume" 2>/dev/null || true
+          gh issue edit "$ISSUE" --repo "$REPO" --add-label git-steer-fix || true
+          if [ ! -s fix-plan.md ]; then
+            printf '## git-steer fix plan: failed\n\nThe plan stopped before it could write a result. See the [run](%s).\n' "$RUN_URL" > fix-plan.md
+          fi
+          if [ -s rollout-body.md ]; then
+            url=$(gh issue create --repo "$REPO" --title "$(cat rollout-title.txt)" --label git-steer-rollout --body-file rollout-body.md)
+            sed -i "s|{{ROLLOUT}}|#${url##*/}|g" fix-plan.md
+          fi
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file fix-plan.md
+          gh issue close "$ISSUE" --repo "$REPO" --reason completed
+
+      - name: Summary
+        if: always()
+        run: if [ -s fix-plan.md ]; then cat fix-plan.md >> "$GITHUB_STEP_SUMMARY"; fi
