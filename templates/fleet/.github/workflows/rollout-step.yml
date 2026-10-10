@@ -9,8 +9,13 @@ name: Rollout step
 
 on:
   schedule:
-    - cron: '41 * * * *'   # hourly
+    - cron: '41 * * * *'   # hourly (GitHub runs it far less often than that)
   workflow_dispatch: {}
+  # Approval starts the work at once instead of waiting for a scheduled slot
+  # (ADR-011). The plan still checks that the owner added the label, and the
+  # hourly budget still counts recorded writes, so this can't exceed 5 an hour.
+  issues:
+    types: [labeled]
 
 permissions:
   contents: read
@@ -21,7 +26,11 @@ concurrency:
 
 jobs:
   plan:
-    if: github.event.repository.private
+    if: >-
+      github.event.repository.private &&
+      (github.event_name != 'issues' ||
+       (github.event.label.name == 'approved' &&
+        contains(github.event.issue.labels.*.name, 'git-steer-rollout')))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

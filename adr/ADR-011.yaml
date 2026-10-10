@@ -201,6 +201,8 @@ consequences:
     - risk: "Dependabot rebases slowly, so a fix rollout takes several hours"
       mitigation: "'waiting' PRs don't count against the pace and are retried each step"
 
+resolved_questions:
+  - "The rollout step also runs when the owner adds `approved` to a rollout issue (2026-10-10). GitHub ran the 'hourly' schedule only 4-5 times a day, so approved rollouts sat for hours; the budget still counts recorded writes, so this can't exceed 5 an hour."
+
 open_questions:
-  - "Should the rollout step also run when `approved` is added, rather than waiting for the hourly slot?"
   - "Close the 2026-06-17 PR from the retired git-steer on git-fabric/gateway (#5), and others like it, as a separate cleanup rollout?"
