@@ -1,0 +1,17 @@
+name: Scan a repo
+description: Read-only CVE scan of one repo by git-steer. The result is posted here as a comment.
+title: "scan "
+labels: [git-steer-scan]
+body:
+  - type: input
+    id: repo
+    attributes:
+      label: Repo to scan
+      description: The owner and repo name, e.g. git-fabric/gateway. A github.com link works too.
+      placeholder: git-fabric/gateway
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        git-steer reads the repo through its read-only App and replies within a few minutes, then closes this issue. Nothing in the repo is changed.

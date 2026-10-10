@@ -85,3 +85,30 @@ export interface FleetStatus {
   owners: { account: string; repos: number }[];
   repos: RepoStatus[];
 }
+
+/** One open Dependabot alert, as listed in a single-repo scan. */
+export interface CveAlert {
+  number: number;
+  ghsa: string;
+  cve: string | null;
+  package: string;
+  ecosystem: string;
+  manifest: string;
+  severity: string;
+  fixedIn: string | null;
+  url: string;
+}
+
+/**
+ * A single-repo scan: the same status a fleet report records for the repo,
+ * plus its open Dependabot alerts one by one. alerts is null when Dependabot
+ * alerts aren't on or couldn't be read (C-009-001).
+ */
+export interface RepoScan {
+  generatedAt: string;
+  app: string;
+  runUrl?: string;
+  archived: boolean;
+  status: RepoStatus;
+  alerts: CveAlert[] | null;
+}
