@@ -1,7 +1,7 @@
 name: Scan request
 
 # A read-only scan of one repo (ADR-009 Layer 2), asked for with an issue.
-# Open an issue in this repo with the "Scan a repo" form, or titled
+# Open an issue in this repo with the "Scan a repo" template, or titled
 # "scan owner/repo", from github.com or the GitHub mobile app. This workflow reads the
 # repo through the read-only git-steer-reporter App, posts the results as a
 # comment, and closes the issue. Nothing in the scanned repo is changed.
