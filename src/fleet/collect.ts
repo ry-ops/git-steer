@@ -14,7 +14,7 @@ import {
   emptyCounts, secretScanningState, securityUpdatesState, settingState,
 } from './classify.js';
 import { SCHEMA } from './types.js';
-import type { Coverage, FleetStatus, Findings, RepoStatus } from './types.js';
+import type { Coverage, CveAlert, FleetStatus, Findings, RepoScan, RepoStatus } from './types.js';
 
 const STALE_PR_DAYS = 14;
 const REPO_CONCURRENCY = 4;
@@ -94,8 +94,8 @@ interface DependabotAlert {
   number: number;
   html_url: string;
   dismissed_comment?: string | null;
-  dependency?: { package?: { name?: string } };
-  security_advisory?: { ghsa_id?: string; severity?: string };
+  dependency?: { package?: { name?: string; ecosystem?: string }; manifest_path?: string };
+  security_advisory?: { ghsa_id?: string; cve_id?: string | null; severity?: string };
   security_vulnerability?: { first_patched_version?: { identifier?: string } | null };
 }
 
@@ -200,6 +200,44 @@ export async function collectFleet(app: App, now = new Date()): Promise<FleetSta
 
   status.repos.sort((a, b) => a.repo.localeCompare(b.repo));
   return status;
+}
+
+/**
+ * Scans one repo through the reporter App: the repo's fleet status plus its
+ * open Dependabot alerts. GET requests only. Throws when the target isn't a
+ * repo the App can see.
+ */
+export async function scanRepo(app: App, fullName: string, now = new Date()): Promise<RepoScan> {
+  const [owner, repo] = fullName.split('/');
+  const { data: appInfo } = await app.octokit.request('GET /app');
+  let installationId: number;
+  try {
+    const { data } = await app.octokit.request('GET /repos/{owner}/{repo}/installation', { owner, repo });
+    installationId = data.id;
+  } catch {
+    throw new Error(`${appInfo?.slug ?? 'The App'} can't see ${fullName}: the repo doesn't exist, or the App isn't installed on it.`);
+  }
+  const octokit = await app.getInstallationOctokit(installationId);
+  const { data: info } = await octokit.request('GET /repos/{owner}/{repo}', { owner, repo });
+  const status = await readRepo(octokit, info as unknown as InstallationRepo, now);
+
+  let alerts: CveAlert[] | null = null;
+  if (status.coverage.dependabotAlerts === 'on') {
+    const open = await getAll<DependabotAlert>(octokit, 'GET /repos/{owner}/{repo}/dependabot/alerts', { owner, repo, state: 'open' });
+    alerts = open?.map((a) => ({
+      number: a.number,
+      ghsa: a.security_advisory?.ghsa_id ?? '',
+      cve: a.security_advisory?.cve_id ?? null,
+      package: a.dependency?.package?.name ?? '',
+      ecosystem: a.dependency?.package?.ecosystem ?? '',
+      manifest: a.dependency?.manifest_path ?? '',
+      severity: a.security_advisory?.severity ?? '',
+      fixedIn: a.security_vulnerability?.first_patched_version?.identifier ?? null,
+      url: a.html_url,
+    })) ?? null;
+  }
+
+  return { generatedAt: now.toISOString(), app: appInfo?.slug ?? 'unknown', archived: info.archived === true, status, alerts };
 }
 
 /** C-009-003: fleet data may only be produced inside a private repo. */

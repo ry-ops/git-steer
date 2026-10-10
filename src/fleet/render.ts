@@ -20,7 +20,7 @@ export const COVERAGE_LABELS: Record<CoverageKey, string> = {
   branchProtection: 'Branch protection',
 };
 
-const KEYS = Object.keys(COVERAGE_LABELS) as CoverageKey[];
+export const KEYS = Object.keys(COVERAGE_LABELS) as CoverageKey[];
 
 export interface DecisionCounts {
   noPatch: number;
@@ -60,11 +60,11 @@ function sum(counts: (SeverityCounts | null)[]): SeverityCounts {
   return total;
 }
 
-function sev(c: SeverityCounts): string {
+export function sev(c: SeverityCounts): string {
   return `${c.critical} critical · ${c.high} high · ${c.medium} medium · ${c.low} low`;
 }
 
-function cell(state: CoverageState): string {
+export function cell(state: CoverageState): string {
   return { on: '✅', off: '❌', unavailable: '—', unknown: '❓' }[state];
 }
 

@@ -1,0 +1,90 @@
+name: Scan request
+
+# A read-only scan of one repo (ADR-009 Layer 2), asked for with an issue.
+# Open an issue in this repo titled "scan owner/repo" (by hand, from the
+# GitHub mobile app, or by asking Copilot to open it). This workflow reads the
+# repo through the read-only git-steer-reporter App, posts the results as a
+# comment, and closes the issue. Nothing in the scanned repo is changed.
+#
+# Only issues opened by this repo's owner are served. The scan code lives in
+# git-steer (src/fleet/scan.ts, scripts/repo-scan.mjs); it runs here because
+# its output names a repo and its gaps (C-009-003).
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: Repo to scan (owner/repo)
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: scan-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    # Never run if this repo is ever made public. Issue requests: owner only,
+    # titles starting with "scan" (startsWith ignores case).
+    if: >-
+      github.event.repository.private &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.issue.user.login == github.repository_owner &&
+        startsWith(github.event.issue.title, 'scan')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out git-steer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.GIT_STEER_REPO || 'ry-ops/git-steer' }}
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install and build
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      - name: Scan
+        env:
+          # The issue title or the dispatch input; parsed and checked by the script.
+          REQUEST: ${{ github.event.issue.title || inputs.repo }}
+          APP_ID: ${{ secrets.REPORTER_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.REPORTER_PRIVATE_KEY }}
+          # Only used by the script to confirm this repo is private.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/repo-scan.mjs
+
+      - name: Reply on the issue
+        if: always() && github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create git-steer-scan --repo "$REPO" --color c5def5 \
+            --description "git-steer scan request" 2>/dev/null || true
+          gh issue edit "$ISSUE" --repo "$REPO" --add-label git-steer-scan || true
+          if [ ! -s scan.md ]; then
+            printf '## git-steer scan: failed\n\nThe scan stopped before it could write a result. See the [run](%s).\n' "$RUN_URL" > scan.md
+          fi
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file scan.md
+          gh issue close "$ISSUE" --repo "$REPO" --reason completed
+
+      - name: Summary
+        if: always()
+        run: if [ -s scan.md ]; then cat scan.md >> "$GITHUB_STEP_SUMMARY"; fi
