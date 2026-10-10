@@ -97,6 +97,10 @@ export interface CveAlert {
   severity: string;
   fixedIn: string | null;
   url: string;
+  /** "direct" or "transitive", when GitHub says. */
+  relationship?: string;
+  /** "runtime" or "development", when GitHub says. */
+  scope?: string;
 }
 
 /**

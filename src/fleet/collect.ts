@@ -94,7 +94,7 @@ interface DependabotAlert {
   number: number;
   html_url: string;
   dismissed_comment?: string | null;
-  dependency?: { package?: { name?: string; ecosystem?: string }; manifest_path?: string };
+  dependency?: { package?: { name?: string; ecosystem?: string }; manifest_path?: string; relationship?: string | null; scope?: string | null };
   security_advisory?: { ghsa_id?: string; cve_id?: string | null; severity?: string };
   security_vulnerability?: { first_patched_version?: { identifier?: string } | null };
 }
@@ -241,6 +241,8 @@ export async function scanRepo(app: App, fullName: string, now = new Date()): Pr
       severity: a.security_advisory?.severity ?? '',
       fixedIn: a.security_vulnerability?.first_patched_version?.identifier ?? null,
       url: a.html_url,
+      relationship: a.dependency?.relationship ?? undefined,
+      scope: a.dependency?.scope ?? undefined,
     })) ?? null;
   }
 

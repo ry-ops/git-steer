@@ -68,9 +68,14 @@ decision: |
       🤖 Hand off to Copilot (writes one issue in the target repo)
         For what Dependabot can't fix: no patched version, an abandoned
         package (request), a major upgrade with breaking changes. git-steer
-        opens an issue in the target repo describing the alert and the
-        likely fix. The owner assigns it to the Copilot coding agent from
-        the app and reviews the PR it opens. git-steer never assigns it.
+        opens issues in the target repo (one for upgrades no Dependabot PR
+        reaches, one per package with no fixed release; at most 5 per
+        request, never twice for the same open task) with a token scoped to
+        that repo and issues: write. The owner assigns them to the Copilot
+        coding agent and reviews the PR it opens. git-steer never assigns.
+        A public repo's issues are public, so there they name packages and
+        target versions only, with no advisory IDs, severities or alert
+        links (C-009-003); a private repo's issues carry the advisories.
 
       ✋ Accept risk (writes; a rollout)
         Dismisses alerts with no fix, with the owner's reason as the
