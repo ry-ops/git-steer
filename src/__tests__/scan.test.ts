@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { MAX_BODY } from '../fleet/render.js';
-import { parseScanTarget, renderScan } from '../fleet/scan.js';
+import { parseScanTarget, renderScan, verdict } from '../fleet/scan.js';
 import type { CveAlert, RepoScan } from '../fleet/types.js';
 
 function scan(over: Partial<RepoScan> = {}): RepoScan {
@@ -75,5 +75,26 @@ describe('renderScan', () => {
     const md = renderScan(scan({ alerts }));
     expect(md.length).toBeLessThanOrEqual(MAX_BODY);
     expect(md).toContain('more |');
+  });
+});
+
+describe('verdict', () => {
+  it('never calls a repo clean while a scanner is off (C-009-001)', () => {
+    // ry-ops/AEO on 2026-10-10: no Dependabot alerts, code scanning off.
+    expect(verdict(scan())).toBe('**Verdict:** ❓ Not known to be clean: no open alerts where tools are on. Not known for code scanning (off or unreadable).');
+  });
+
+  it('says clean only when every scanner is on and nothing is open', () => {
+    const s = scan();
+    s.status.findings.codeScanning = { critical: 0, high: 0, medium: 0, low: 0 };
+    expect(verdict(s)).toBe('**Verdict:** ✅ Clean: no open alerts, and every scanner is on.');
+  });
+
+  it('counts open alerts across scanners', () => {
+    const s = scan();
+    s.status.findings.dependabot = { critical: 1, high: 2, medium: 0, low: 0 };
+    s.status.findings.secretScanning = 1;
+    expect(verdict(s)).toBe('**Verdict:** ⚠️ 4 open alerts. Not known for code scanning (off or unreadable).');
+    expect(renderScan(s)).toContain('**Verdict:** ⚠️ 4 open alerts.');
   });
 });

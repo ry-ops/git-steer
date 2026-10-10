@@ -26,6 +26,28 @@ function counts(c: SeverityCounts | null): string {
   return c ? sev(c) : 'unknown (not on)';
 }
 
+function total(c: SeverityCounts | null): number {
+  return c ? c.critical + c.high + c.medium + c.low : 0;
+}
+
+/**
+ * One line a reader (or Copilot) can quote. Never says clean while a tool is
+ * off or unread (C-009-001).
+ */
+export function verdict(scan: RepoScan): string {
+  const f = scan.status.findings;
+  const open = total(f.dependabot) + total(f.codeScanning) + (f.secretScanning ?? 0);
+  const unknown = [
+    f.dependabot === null ? 'Dependabot alerts' : '',
+    f.codeScanning === null ? 'code scanning' : '',
+    f.secretScanning === null ? 'secret scanning' : '',
+  ].filter(Boolean);
+  const gap = unknown.length ? ` Not known for ${unknown.join(', ')} (off or unreadable).` : '';
+  if (open > 0) return `**Verdict:** ⚠️ ${open} open alert${open === 1 ? '' : 's'}.${gap}`;
+  if (unknown.length) return `**Verdict:** ❓ Not known to be clean: no open alerts where tools are on.${gap}`;
+  return '**Verdict:** ✅ Clean: no open alerts, and every scanner is on.';
+}
+
 function alertRow(a: CveAlert): string {
   const advisory = `[${a.ghsa || '#' + a.number}](${a.url})`;
   return `| ${a.severity} | ${a.package} (${a.ecosystem}) | ${advisory} | ${a.cve ?? '—'} | ${a.fixedIn ?? '**no fix yet**'} | ${a.manifest} |`;
@@ -44,6 +66,7 @@ function render(scan: RepoScan, maxRows: number): string {
 
   out.push(`## git-steer scan: [${r.repo}](${r.url})`, '');
   out.push(`Scanned ${scan.generatedAt.replace('T', ' ').slice(0, 16)} UTC by \`${scan.app}\`${scan.runUrl ? ` · [run](${scan.runUrl})` : ''} · ${r.private ? 'private' : 'public'} · \`${r.defaultBranch}\`${scan.archived ? ' · **archived**' : ''}`, '');
+  out.push(verdict(scan), '');
   out.push(`**Dependabot alerts:** ${counts(f.dependabot)}  `);
   out.push(`**Code scanning alerts:** ${counts(f.codeScanning)}  `);
   out.push(`**Secret scanning alerts:** ${f.secretScanning ?? 'unknown (not on)'}`, '');
