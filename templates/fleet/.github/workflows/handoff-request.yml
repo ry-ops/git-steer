@@ -1,0 +1,168 @@
+name: Hand-off request
+
+# Hand off to Copilot (ADR-011), asked for with an issue titled
+# "handoff owner/repo". git-steer works out what Dependabot can't fix
+# (read-only, git-steer-reporter), opens at most 5 issues in that one repo with
+# a git-steer-admin token scoped to it and to issues: write, and replies with
+# links. The owner assigns them to Copilot; git-steer never does
+# (C-011-004). Nothing else in the repo is changed (C-011-002).
+#
+# Only issues opened by this repo's owner are served (C-011-001).
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: handoff-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    # Never run if this repo is ever made public. Owner only, titles starting
+    # with "handoff" (startsWith ignores case).
+    if: >-
+      github.event.repository.private &&
+      github.event.issue.user.login == github.repository_owner &&
+      startsWith(github.event.issue.title, 'handoff')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      owner: ${{ steps.plan.outputs.owner }}
+      name: ${{ steps.plan.outputs.name }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - name: Check out git-steer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.GIT_STEER_REPO || 'ry-ops/git-steer' }}
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install and build
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      - name: Plan
+        id: plan
+        env:
+          REQUEST_TITLE: ${{ github.event.issue.title }}
+          REQUEST_BODY: ${{ github.event.issue.body }}
+          APP_ID: ${{ secrets.REPORTER_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.REPORTER_PRIVATE_KEY }}
+          # Only used by the script to confirm this repo is private.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/handoff-plan.mjs
+
+      - name: Upload plan
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: handoff-plan
+          path: |
+            handoff-plan.json
+            handoff-reply.md
+          retention-days: 7
+          if-no-files-found: ignore
+
+  open:
+    needs: plan
+    if: needs.plan.outputs.count != '0' && needs.plan.outputs.count != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: fleet-write
+    permissions:
+      contents: read
+    steps:
+      - name: Mint a git-steer-admin token for this one repo (issues only)
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ADMIN_APP_ID }}
+          private-key: ${{ secrets.ADMIN_PRIVATE_KEY }}
+          owner: ${{ needs.plan.outputs.owner }}
+          repositories: ${{ needs.plan.outputs.name }}
+          permission-issues: write
+
+      - name: Check out git-steer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.GIT_STEER_REPO || 'ry-ops/git-steer' }}
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install and build
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      - name: Download plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: handoff-plan
+
+      - name: Open the issues
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: node scripts/handoff-open.mjs
+
+      - name: Upload reply
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: handoff-reply
+          path: handoff-reply.md
+          retention-days: 7
+          if-no-files-found: ignore
+
+  reply:
+    needs: [plan, open]
+    if: always() && needs.plan.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Download the reply
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: handoff-*
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Reply on the request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          COUNT: ${{ needs.plan.outputs.count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create git-steer-handoff --repo "$REPO" --color 6f42c1 --description "git-steer hand-off request (ADR-011)" 2>/dev/null || true
+          gh issue edit "$ISSUE" --repo "$REPO" --add-label git-steer-handoff || true
+          if [ "$COUNT" = "0" ] && [ ! -s handoff-reply.md ]; then
+            printf '## git-steer hand-off\n\nNothing to hand off: every open alert either has a Dependabot PR or none could be read. Use 🩹 Fix a repo for the Dependabot PRs.\n' > handoff-reply.md
+          fi
+          if [ ! -s handoff-reply.md ]; then
+            printf '## git-steer hand-off: failed\n\nThe hand-off stopped before it could write a result. See the [run](%s).\n' "$RUN_URL" > handoff-reply.md
+          fi
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file handoff-reply.md
+          gh issue close "$ISSUE" --repo "$REPO" --reason completed

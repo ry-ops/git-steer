@@ -1,5 +1,6 @@
 export { collectFleet, isRunningInPrivateRepo, repoOctokit, scanRepo } from './collect.js';
 export { buildFixPlan, renderFixPlan, rolloutTargets } from './fix.js';
+export { buildHandoffs, markerKey, renderHandoffReply, MAX_HANDOFFS } from './handoff.js';
 export { renderDashboard, decisionCounts, MAX_BODY } from './render.js';
 export { renderScan, parseScanTarget, verdict } from './scan.js';
 export { SCHEMA } from './types.js';
