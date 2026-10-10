@@ -1,11 +1,15 @@
 name: Hand-off request
 
 # Hand off to Copilot (ADR-011), asked for with an issue titled
-# "handoff owner/repo". git-steer works out what Dependabot can't fix
-# (read-only, git-steer-reporter), opens at most 5 issues in that one repo with
-# a git-steer-admin token scoped to it and to issues: write, and replies with
-# links. The owner assigns them to Copilot; git-steer never does
-# (C-011-004). Nothing else in the repo is changed (C-011-002).
+#   "handoff owner/repo"  - at most 5 issues in that repo: its CI if missing
+#                           or broken, upgrades Dependabot hasn't proposed,
+#                           packages with no fix;
+#   "handoff ci <owner>"  - one CI issue in each repo with open Dependabot PRs
+#   "handoff ci fleet"      whose CI is missing or broken (at most 30 repos).
+# git-steer plans read-only (git-steer-reporter), then opens each repo's
+# issues with a git-steer-admin token scoped to that one repo and to issues:
+# write, and replies with links. The owner assigns them to Copilot; git-steer
+# never does (C-011-004). Nothing else in any repo is changed (C-011-002).
 #
 # Only issues opened by this repo's owner are served (C-011-001).
 
@@ -29,10 +33,9 @@ jobs:
       github.event.issue.user.login == github.repository_owner &&
       startsWith(github.event.issue.title, 'handoff')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     outputs:
-      owner: ${{ steps.plan.outputs.owner }}
-      name: ${{ steps.plan.outputs.name }}
+      targets: ${{ steps.plan.outputs.targets }}
       count: ${{ steps.plan.outputs.count }}
     steps:
       - name: Check out git-steer
@@ -65,16 +68,18 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           node scripts/handoff-plan.mjs
-          # The repo comes from the request title: check it before it becomes
-          # a step output that names the token's repo.
-          owner=$(jq -r .owner handoff-plan.json)
-          name=$(jq -r .name handoff-plan.json)
-          count=$(jq '.handoffs | length' handoff-plan.json)
-          if ! [[ "$owner" =~ ^[A-Za-z0-9-]+$ && "$name" =~ ^[A-Za-z0-9._-]+$ && "$count" =~ ^[0-9]+$ ]]; then
-            echo "Refusing: unexpected repo or count in the plan." >&2
-            exit 1
-          fi
-          { echo "owner=$owner"; echo "name=$name"; echo "count=$count"; } >> "$GITHUB_OUTPUT"
+          # The repos come from the request and the fleet: check each one
+          # before it becomes the matrix that names a token's repo.
+          targets='[]'
+          while IFS=$'\t' read -r owner name; do
+            if ! [[ "$owner" =~ ^[A-Za-z0-9-]+$ && "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "Refusing: unexpected repo in the plan." >&2
+              exit 1
+            fi
+            targets=$(jq -c --arg o "$owner" --arg n "$name" '. + [{owner: $o, name: $n}]' <<<"$targets")
+          done < <(jq -r '.targets[] | [.owner, .name] | @tsv' handoff-plan.json)
+          count=$(jq 'length' <<<"$targets")
+          { echo "targets=$targets"; echo "count=$count"; } >> "$GITHUB_OUTPUT"
 
       - name: Upload plan
         if: always()
@@ -95,6 +100,11 @@ jobs:
     environment: fleet-write
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
     steps:
       - name: Mint a git-steer-admin token for this one repo (issues only)
         id: token
@@ -102,8 +112,8 @@ jobs:
         with:
           app-id: ${{ secrets.ADMIN_APP_ID }}
           private-key: ${{ secrets.ADMIN_PRIVATE_KEY }}
-          owner: ${{ needs.plan.outputs.owner }}
-          repositories: ${{ needs.plan.outputs.name }}
+          owner: ${{ matrix.target.owner }}
+          repositories: ${{ matrix.target.name }}
           permission-issues: write
 
       - name: Check out git-steer
@@ -133,14 +143,16 @@ jobs:
       - name: Open the issues
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
+          TARGET_OWNER: ${{ matrix.target.owner }}
+          TARGET_NAME: ${{ matrix.target.name }}
         run: node scripts/handoff-open.mjs
 
-      - name: Upload reply
+      - name: Upload result
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: handoff-reply
-          path: handoff-reply.md
+          name: handoff-result-${{ matrix.target.owner }}-${{ matrix.target.name }}
+          path: handoff-result-*.json
           retention-days: 7
           if-no-files-found: ignore
 
@@ -148,30 +160,53 @@ jobs:
     needs: [plan, open]
     if: always() && needs.plan.result != 'skipped'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
+      contents: read
       issues: write
     steps:
-      - name: Download the reply
+      - name: Check out git-steer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.GIT_STEER_REPO || 'ry-ops/git-steer' }}
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install and build
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      - name: Download the plan and results
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: handoff-*
           merge-multiple: true
         continue-on-error: true
 
+      - name: Write the reply
+        run: |
+          # The plan step leaves its own reply when it stops early.
+          if [ -s handoff-plan.json ] && [ ! -s handoff-reply.md ]; then
+            node scripts/handoff-reply.mjs
+          fi
+
       - name: Reply on the request
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number }}
-          COUNT: ${{ needs.plan.outputs.count }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh label create git-steer-handoff --repo "$REPO" --color 6f42c1 --description "git-steer hand-off request (ADR-011)" 2>/dev/null || true
           gh issue edit "$ISSUE" --repo "$REPO" --add-label git-steer-handoff || true
-          if [ "$COUNT" = "0" ] && [ ! -s handoff-reply.md ]; then
-            printf '## git-steer hand-off\n\nNothing to hand off: every open alert either has a Dependabot PR or none could be read. Use 🩹 Fix a repo for the Dependabot PRs.\n' > handoff-reply.md
-          fi
           if [ ! -s handoff-reply.md ]; then
             printf '## git-steer hand-off: failed\n\nThe hand-off stopped before it could write a result. See the [run](%s).\n' "$RUN_URL" > handoff-reply.md
           fi

@@ -77,6 +77,23 @@ decision: |
         target versions only, with no advisory IDs, severities or alert
         links (C-009-003); a private repo's issues carry the advisories.
 
+        CI first (added 2026-10-10). The first fleet Fix plan showed the
+        real blocker: of 198 Dependabot PRs, 72 had nothing that built or
+        tested them and 65 failed, mostly because the repo's own CI was
+        broken. So a hand-off also files a CI issue, ahead of the others:
+          - "Add CI that builds and tests this repo" when nothing does
+            (no checks, or only scanners and linters);
+          - "Fix the failing CI on <branch>" when the default branch fails,
+            or "Fix the CI that fails on every Dependabot pull request"
+            when every PR fails and none passes.
+        Any passing test, on the branch or on a PR, means CI works: a
+        failing PR is then a real breaking upgrade, not a CI issue. Checks
+        still running or unreadable mean no issue. "handoff ci <owner>" and
+        "handoff ci fleet" file only the CI issue, in each repo with open
+        Dependabot PRs that needs one (at most 30 per request), each with
+        its own one-repo issues: write token. Once a repo's CI is in, the
+        next "fix fleet" finds its PRs tested and rolls them out.
+
       ✋ Accept risk (writes; a rollout)
         Dismisses alerts with no fix, with the owner's reason as the
         dismissal comment, so no dismissal is undocumented (the dashboard
@@ -149,8 +166,8 @@ constraints:
     scope: writes-are-rollouts
     rule: >
       Fix and Accept risk change nothing until the owner adds `approved` to
-      the rollout issue. Scan never writes. Hand off writes one issue in the
-      target repo and nothing else.
+      the rollout issue. Scan never writes. Hand off writes issues in the
+      target repo(s) and nothing else.
     check: |
       for write in request_writes: write.kind == "handoff-issue" || write.rollout.approved
     violation: NO-GO
