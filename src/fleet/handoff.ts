@@ -56,11 +56,11 @@ function howTo(ecosystem: string): string[] {
       '- Find what pulls each package in: `npm ls <package>`.',
       '- Prefer upgrading the direct dependency that brings it in. If that isn\'t possible, pin it with `overrides` in `package.json`.',
       '- Regenerate `package-lock.json` with `npm install`; don\'t edit the lockfile by hand.',
-      '- Confirm with `npm audit` that the packages below no longer report.',
+      '- Confirm with `npm audit` that the packages above no longer report.',
     ];
   }
   return [
-    `- Upgrade each package below in its manifest (${ecosystem}), directly or through the dependency that brings it in.`,
+    `- Upgrade each package in the table above in its manifest (${ecosystem}), directly or through the dependency that brings it in.`,
     '- Regenerate the lockfile with the package manager; don\'t edit it by hand.',
   ];
 }
@@ -68,7 +68,7 @@ function howTo(ecosystem: string): string[] {
 const DONE = [
   '### Done when',
   '',
-  '- Every package below is at or above its target version (or removed).',
+  '- Every package in the table above is at or above its target version (or removed).',
   '- The project still builds, and its tests pass if it has any.',
   '- The change is limited to dependency manifests and lockfiles, plus code changes the upgrades strictly require.',
   '- One pull request, with a short list of what moved from which version to which.',
