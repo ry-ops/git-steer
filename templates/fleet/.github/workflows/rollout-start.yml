@@ -14,6 +14,7 @@ on:
         required: true
         options:
           - default-branch-ruleset
+          - security-settings
       targets:
         description: 'Targets: owner/repo, comma-separated, or a selector over the latest fleet report, e.g. coverage:branchProtection=off'
         required: true

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Octokit } from 'octokit';
 import { desiredRuleset, evaluateRuleset } from '../rollout/changes/default-branch-ruleset.js';
+import { analysisState, evaluateSettings, securitySettings } from '../rollout/changes/security-settings.js';
 import { parseRolloutIssue, recordResult, remaining, renderRolloutIssue } from '../rollout/issue.js';
 import { planStep, recentWrites } from '../rollout/plan.js';
 import type { RolloutIssue } from '../rollout/plan.js';
@@ -132,5 +133,51 @@ describe('applyToTarget', () => {
   it('records an apply error as failed', async () => {
     const r = await applyToTarget(fake([no], () => { throw Object.assign(new Error('Validation Failed'), { status: 422 }); }), octokit, 1, 'a/b');
     expect(r).toMatchObject({ outcome: 'failed', after: 'apply error 422 Validation Failed' });
+  });
+});
+
+describe('security settings', () => {
+  const all = { dependabotAlerts: 'on', securityUpdates: 'on', secretScanning: 'on', pushProtection: 'on' } as const;
+
+  it('reads security_and_analysis, treating absent on a private repo as a plan limit', () => {
+    expect(analysisState('enabled', false)).toBe('on');
+    expect(analysisState('disabled', true)).toBe('off');
+    expect(analysisState(undefined, true)).toBe('unavailable');
+    expect(analysisState(undefined, false)).toBe('unknown');
+  });
+
+  it('is compliant when everything the plan allows is on', () => {
+    expect(evaluateSettings(all)).toEqual({ state: 'compliant', detail: 'on' });
+    expect(evaluateSettings({ ...all, secretScanning: 'unavailable', pushProtection: 'unavailable' }))
+      .toEqual({ state: 'compliant', detail: 'on; not on this plan: secret scanning, push protection' });
+  });
+
+  it('names what is off, and never calls an unreadable repo compliant', () => {
+    expect(evaluateSettings({ ...all, secretScanning: 'off', pushProtection: 'off' }))
+      .toEqual({ state: 'noncompliant', detail: 'off: secret scanning, push protection' });
+    expect(evaluateSettings({ ...all, securityUpdates: 'unknown' }).state).toBe('unknown');
+  });
+
+  it('turns on only what is off, alerts before fix PRs, scanning and push protection together', async () => {
+    const calls: string[] = [];
+    const answers: Record<string, unknown> = {
+      'GET /repos/{owner}/{repo}': { private: false, security_and_analysis: { secret_scanning: { status: 'disabled' }, secret_scanning_push_protection: { status: 'disabled' } } },
+      'GET /repos/{owner}/{repo}/automated-security-fixes': { enabled: false, paused: false },
+    };
+    const octokit = {
+      request: async (route: string, params: Record<string, unknown>) => {
+        calls.push(route.startsWith('PATCH') ? `${route} ${JSON.stringify(params.security_and_analysis)}` : route);
+        if (route === 'GET /repos/{owner}/{repo}/vulnerability-alerts') throw Object.assign(new Error('Not Found'), { status: 404 });
+        return { data: answers[route] ?? {} };
+      },
+    } as unknown as Octokit;
+    expect((await securitySettings.check(octokit, 'a/b')).detail).toBe('off: Dependabot alerts, Dependabot fix PRs, secret scanning, push protection');
+    calls.length = 0;
+    await securitySettings.apply(octokit, 'a/b');
+    expect(calls.filter((c) => !c.startsWith('GET'))).toEqual([
+      'PUT /repos/{owner}/{repo}/vulnerability-alerts',
+      'PUT /repos/{owner}/{repo}/automated-security-fixes',
+      'PATCH /repos/{owner}/{repo} {"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}',
+    ]);
   });
 });
