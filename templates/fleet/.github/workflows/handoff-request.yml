@@ -63,7 +63,18 @@ jobs:
           APP_PRIVATE_KEY: ${{ secrets.REPORTER_PRIVATE_KEY }}
           # Only used by the script to confirm this repo is private.
           GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/handoff-plan.mjs
+        run: |
+          node scripts/handoff-plan.mjs
+          # The repo comes from the request title: check it before it becomes
+          # a step output that names the token's repo.
+          owner=$(jq -r .owner handoff-plan.json)
+          name=$(jq -r .name handoff-plan.json)
+          count=$(jq '.handoffs | length' handoff-plan.json)
+          if ! [[ "$owner" =~ ^[A-Za-z0-9-]+$ && "$name" =~ ^[A-Za-z0-9._-]+$ && "$count" =~ ^[0-9]+$ ]]; then
+            echo "Refusing: unexpected repo or count in the plan." >&2
+            exit 1
+          fi
+          { echo "owner=$owner"; echo "name=$name"; echo "count=$count"; } >> "$GITHUB_OUTPUT"
 
       - name: Upload plan
         if: always()

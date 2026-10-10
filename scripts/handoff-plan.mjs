@@ -12,14 +12,17 @@
  *   REQUEST_TITLE, REQUEST_BODY - the request issue
  *   APP_ID, APP_PRIVATE_KEY     - the git-steer-reporter App
  *   GITHUB_TOKEN                - the running repo's token, used only to check it is private
- *   GITHUB_REPOSITORY, GITHUB_OUTPUT - set by Actions
+ *   GITHUB_REPOSITORY - set by Actions
+ *
+ * The workflow reads owner, name and the count back from handoff-plan.json and
+ * checks them before using them as step outputs.
  */
 
 import { App } from 'octokit';
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { buildFixPlan, buildHandoffs, isRunningInPrivateRepo, parseScanTarget } from '../dist/fleet/index.js';
 
-const { REQUEST_TITLE = '', REQUEST_BODY = '', APP_ID, APP_PRIVATE_KEY, GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT } = process.env;
+const { REQUEST_TITLE = '', REQUEST_BODY = '', APP_ID, APP_PRIVATE_KEY, GITHUB_TOKEN, GITHUB_REPOSITORY } = process.env;
 
 function fail(message) {
   console.error(message);
@@ -48,5 +51,4 @@ const handoffs = buildHandoffs(plan); // at most MAX_HANDOFFS
 const wanted = new Set(plan.noFix.map((a) => a.package)).size + (plan.uncovered.length ? 1 : 0);
 const dropped = Math.max(0, wanted - handoffs.length);
 writeFileSync('handoff-plan.json', JSON.stringify({ repo: target, owner, name, plan, handoffs, dropped }, null, 2));
-if (GITHUB_OUTPUT) appendFileSync(GITHUB_OUTPUT, `owner=${owner}\nname=${name}\ncount=${handoffs.length}\n`);
 console.log(`${target}: ${handoffs.length} hand-off issue(s)${dropped ? `, ${dropped} held back` : ''}.`);
