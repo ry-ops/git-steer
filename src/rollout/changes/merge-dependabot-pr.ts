@@ -78,8 +78,8 @@ export function judgePull(pr: PullLike, defaultBranch: string, checks: ChecksVer
 }
 
 export async function readChecks(octokit: Octokit, owner: string, repo: string, sha: string): Promise<ChecksVerdict> {
-  const runs = (await octokit.paginate('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', { owner, repo, ref: sha, per_page: 100 },
-    (res) => (res.data as unknown as { check_runs: CheckRunLike[] }).check_runs)) as CheckRunLike[];
+  // paginate already unwraps check_runs from this endpoint's { total_count, check_runs } pages.
+  const runs = (await octokit.paginate('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', { owner, repo, ref: sha, per_page: 100 })) as unknown as CheckRunLike[];
   const { data: combined } = await octokit.request('GET /repos/{owner}/{repo}/commits/{ref}/status', { owner, repo, ref: sha });
   return judgeChecks(runs, (combined.statuses ?? []) as StatusLike[]);
 }
