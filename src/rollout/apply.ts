@@ -21,6 +21,8 @@ export async function applyToTarget(
     await change.apply(octokit, target);
   } catch (err) {
     const e = err as { status?: number; message?: string };
+    const refused = change.refused?.(e);
+    if (refused) return { ...base, outcome: 'unavailable', before: before.detail, after: refused, at: at() };
     return { ...base, outcome: 'failed', before: before.detail, after: `apply error ${e.status ?? ''} ${e.message ?? ''}`.trim(), at: at() };
   }
 
