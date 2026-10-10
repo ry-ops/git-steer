@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { alertsClosedBy, compareVersions, parseUpdates, planState, renderFixPlan, rolloutTargets } from '../fleet/fix.js';
 import type { FixPlan } from '../fleet/fix.js';
-import { judgeChecks, judgePull, parsePullTarget } from '../rollout/changes/merge-dependabot-pr.js';
+import { judgeChecks, judgePull, parsePullTarget, readChecks } from '../rollout/changes/merge-dependabot-pr.js';
 import type { PullLike } from '../rollout/changes/merge-dependabot-pr.js';
 import { parseRolloutIssue, recordResult, renderRolloutIssue } from '../rollout/issue.js';
 import { applyToTarget } from '../rollout/apply.js';
@@ -45,6 +45,14 @@ describe('merge-dependabot-pr', () => {
   });
   const ready = judgeChecks([{ name: 'test', status: 'completed', conclusion: 'success' }], []);
   const untested = judgeChecks([{ name: 'CodeQL', status: 'completed', conclusion: 'neutral' }], []);
+
+  it('reads check runs as paginate returns them, already unwrapped (git-fabric/gateway#9, 2026-10-10)', async () => {
+    const octokit = {
+      paginate: async () => [{ name: 'CodeQL', status: 'completed', conclusion: 'neutral' }],
+      request: async () => ({ data: { state: 'pending', total_count: 0, statuses: [] } }),
+    } as unknown as Octokit;
+    expect(await readChecks(octokit, 'git-fabric', 'gateway', 'abc')).toEqual({ state: 'untested', detail: 'no checks ran' });
+  });
 
   it('parses PR targets', () => {
     expect(parsePullTarget('git-fabric/gateway#9')).toEqual({ owner: 'git-fabric', repo: 'gateway', number: 9 });
