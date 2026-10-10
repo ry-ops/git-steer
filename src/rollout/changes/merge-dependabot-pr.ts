@@ -84,13 +84,28 @@ export async function readChecks(octokit: Octokit, owner: string, repo: string, 
   return judgeChecks(runs, (combined.statuses ?? []) as StatusLike[]);
 }
 
+/**
+ * GitHub works out mergeability in the background and answers null until it
+ * has (e.g. right after another PR merged into the base). Asking again a few
+ * seconds later usually gets the answer, instead of losing a whole step.
+ */
+export async function getPull(
+  octokit: Octokit, owner: string, repo: string, number: number, tries = 4, waitMs = 3000,
+): Promise<PullLike & { body?: string | null; title?: string; html_url?: string; number?: number }> {
+  for (let i = 1; ; i++) {
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', { owner, repo, pull_number: number });
+    const pr = data as unknown as PullLike;
+    if (pr.mergeable !== null || pr.state !== 'open' || i >= tries) return data as unknown as PullLike;
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+}
+
 async function read(octokit: Octokit, target: string): Promise<{ pr: PullLike; verdict: CheckResult }> {
   const { owner, repo, number } = parsePullTarget(target);
-  const [{ data: pr }, { data: info }] = await Promise.all([
-    octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', { owner, repo, pull_number: number }),
+  const [p, { data: info }] = await Promise.all([
+    getPull(octokit, owner, repo, number),
     octokit.request('GET /repos/{owner}/{repo}', { owner, repo }),
   ]);
-  const p = pr as unknown as PullLike;
   const checks = p.state === 'open' && !p.merged ? await readChecks(octokit, owner, repo, p.head.sha) : { state: 'untested' as const, detail: '' };
   return { pr: p, verdict: judgePull(p, info.default_branch, checks) };
 }
