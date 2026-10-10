@@ -35,6 +35,8 @@ describe('parseScanTarget', () => {
     expect(parseScanTarget('Scan: git-fabric/fabric-ctrl')).toBe('git-fabric/fabric-ctrl');
     expect(parseScanTarget('scan https://github.com/TAEM-DEV/adrs/pulls')).toBe('TAEM-DEV/adrs');
     expect(parseScanTarget('scan ry-ops/blog.old.git')).toBe('ry-ops/blog.old');
+    // The "Scan a repo" issue form: title "scan ", repo in the body.
+    expect(parseScanTarget('scan \n### Repo to scan\n\ngit-fabric/gateway')).toBe('git-fabric/gateway');
   });
 
   it('returns null when no repo is named', () => {

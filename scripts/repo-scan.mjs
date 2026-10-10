@@ -10,7 +10,8 @@
  * (C-009-003). Needs `npm run build` first.
  *
  * Env vars:
- *   REQUEST                   - text naming the repo: "scan owner/repo", or a github.com URL
+ *   REQUEST_TITLE, REQUEST_BODY - the request issue's title and body, read in that order:
+ *                               "scan owner/repo", the "Scan a repo" form, or a github.com URL
  *   APP_ID, APP_PRIVATE_KEY   - the git-steer-reporter App
  *   GITHUB_TOKEN              - the running repo's token, used only to check it is private
  *   GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_RUN_ID - set by Actions
@@ -20,7 +21,7 @@ import { App } from 'octokit';
 import { writeFileSync } from 'node:fs';
 import { isRunningInPrivateRepo, parseScanTarget, renderScan, scanRepo } from '../dist/fleet/index.js';
 
-const { REQUEST = '', APP_ID, APP_PRIVATE_KEY, GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_RUN_ID } = process.env;
+const { REQUEST_TITLE = '', REQUEST_BODY = '', APP_ID, APP_PRIVATE_KEY, GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_RUN_ID } = process.env;
 const runUrl = GITHUB_SERVER_URL && GITHUB_REPOSITORY && GITHUB_RUN_ID
   ? `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}` : undefined;
 
@@ -36,7 +37,7 @@ if (!(await isRunningInPrivateRepo(GITHUB_TOKEN, GITHUB_REPOSITORY))) {
 }
 if (!APP_ID || !APP_PRIVATE_KEY) fail('APP_ID and APP_PRIVATE_KEY are required.');
 
-const target = parseScanTarget(REQUEST);
+const target = parseScanTarget(`${REQUEST_TITLE}\n${REQUEST_BODY}`);
 if (!target) fail('No repo found in the request. Name one as `scan owner/repo`.');
 
 let scan;

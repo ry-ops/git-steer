@@ -1,8 +1,8 @@
 name: Scan request
 
 # A read-only scan of one repo (ADR-009 Layer 2), asked for with an issue.
-# Open an issue in this repo titled "scan owner/repo" (by hand, from the
-# GitHub mobile app, or by asking Copilot to open it). This workflow reads the
+# Open an issue in this repo with the "Scan a repo" form, or titled
+# "scan owner/repo", from github.com or the GitHub mobile app. This workflow reads the
 # repo through the read-only git-steer-reporter App, posts the results as a
 # comment, and closes the issue. Nothing in the scanned repo is changed.
 #
@@ -60,8 +60,10 @@ jobs:
 
       - name: Scan
         env:
-          # The issue title or the dispatch input; parsed and checked by the script.
-          REQUEST: ${{ github.event.issue.title || inputs.repo }}
+          # The issue title and body (the form puts the repo in the body), or
+          # the dispatch input; parsed and checked by the script.
+          REQUEST_TITLE: ${{ github.event.issue.title || inputs.repo }}
+          REQUEST_BODY: ${{ github.event.issue.body }}
           APP_ID: ${{ secrets.REPORTER_APP_ID }}
           APP_PRIVATE_KEY: ${{ secrets.REPORTER_PRIVATE_KEY }}
           # Only used by the script to confirm this repo is private.
