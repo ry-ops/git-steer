@@ -1,9 +1,13 @@
 /**
  * Hand off to Copilot, step 1 (ADR-011): read-only, through the reporter App.
  *
- * Works out what Dependabot can't fix in one repo and writes, to the working
- * directory:
- *   handoff-plan.json - { repo, owner, name, plan, handoffs, dropped }
+ * "handoff owner/repo": works out what stands in the way in one repo (its CI,
+ * upgrades Dependabot hasn't proposed, packages with no fix).
+ * "handoff ci <owner>" / "handoff ci fleet": one CI issue per repo with open
+ * Dependabot PRs whose CI is missing or broken.
+ *
+ * Writes, to the working directory:
+ *   handoff-plan.json - HandoffPlanFile: { scope, ci, targets: [{ repo, owner, name, handoffs }], ... }
  *   handoff-reply.md  - only when it stops early, explaining why (exit 1)
  *
  * Refuses to run unless GitHub confirms the running repo is private (C-009-003).
@@ -14,13 +18,13 @@
  *   GITHUB_TOKEN                - the running repo's token, used only to check it is private
  *   GITHUB_REPOSITORY - set by Actions
  *
- * The workflow reads owner, name and the count back from handoff-plan.json and
- * checks them before using them as step outputs.
+ * The workflow reads each target's owner and name back from handoff-plan.json
+ * and checks them before using them as the open job's matrix.
  */
 
 import { App } from 'octokit';
 import { writeFileSync } from 'node:fs';
-import { buildFixPlan, buildHandoffs, isRunningInPrivateRepo, parseScanTarget } from '../dist/fleet/index.js';
+import { buildFixPlan, buildFleetFixPlan, isRunningInPrivateRepo, parseHandoffRequest, planCiHandoffs, planRepoHandoffs } from '../dist/fleet/index.js';
 
 const { REQUEST_TITLE = '', REQUEST_BODY = '', APP_ID, APP_PRIVATE_KEY, GITHUB_TOKEN, GITHUB_REPOSITORY } = process.env;
 
@@ -36,19 +40,22 @@ if (!(await isRunningInPrivateRepo(GITHUB_TOKEN, GITHUB_REPOSITORY))) {
 }
 if (!APP_ID || !APP_PRIVATE_KEY) fail('APP_ID and APP_PRIVATE_KEY are required.');
 
-const target = parseScanTarget(`${REQUEST_TITLE}\n${REQUEST_BODY}`);
-if (!target) fail('No repo found in the request. Name one as `handoff owner/repo`.');
+const request = parseHandoffRequest(REQUEST_TITLE, REQUEST_BODY);
+if (!request) fail('No repo found in the request. Name one as `handoff owner/repo`, or ask for `handoff ci <owner>` or `handoff ci fleet`.');
 
-let plan;
+const app = new App({ appId: APP_ID, privateKey: APP_PRIVATE_KEY });
+let file;
 try {
-  plan = await buildFixPlan(new App({ appId: APP_ID, privateKey: APP_PRIVATE_KEY }), target);
+  if ('repo' in request) {
+    file = planRepoHandoffs(await buildFixPlan(app, request.repo));
+  } else {
+    const fleet = await buildFleetFixPlan(app, request.owner);
+    file = planCiHandoffs(fleet.scope, fleet.plans, fleet.errors);
+  }
 } catch (err) {
   fail(err instanceof Error ? err.message : String(err));
 }
 
-const [owner, name] = target.split('/');
-const handoffs = buildHandoffs(plan); // at most MAX_HANDOFFS
-const wanted = new Set(plan.noFix.map((a) => a.package)).size + (plan.uncovered.length ? 1 : 0);
-const dropped = Math.max(0, wanted - handoffs.length);
-writeFileSync('handoff-plan.json', JSON.stringify({ repo: target, owner, name, plan, handoffs, dropped }, null, 2));
-console.log(`${target}: ${handoffs.length} hand-off issue(s)${dropped ? `, ${dropped} held back` : ''}.`);
+writeFileSync('handoff-plan.json', JSON.stringify(file, null, 2));
+const issues = file.targets.reduce((n, t) => n + t.handoffs.length, 0);
+console.log(`${file.scope}: ${issues} hand-off issue(s) in ${file.targets.length} repo(s)${file.dropped ? `, ${file.dropped} held back` : ''}.`);

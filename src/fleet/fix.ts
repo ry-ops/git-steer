@@ -7,8 +7,9 @@
  * approves; failing ones are listed and never merged (C-011-003).
  */
 
-import type { App } from 'octokit';
+import type { App, Octokit } from 'octokit';
 import { getPull, judgePull, readChecks } from '../rollout/changes/merge-dependabot-pr.js';
+import type { ChecksVerdict } from '../rollout/changes/merge-dependabot-pr.js';
 import { repoOctokit, scanRepo } from './collect.js';
 import { parseScanTarget, verdict } from './scan.js';
 import type { CveAlert, RepoScan } from './types.js';
@@ -72,6 +73,31 @@ export interface FixPlan {
   uncovered: CveAlert[];
   /** Open alerts with no fixed version at all. */
   noFix: CveAlert[];
+  /** The default branch's own CI, for the Hand-off CI issues. Absent in older plans. */
+  ci?: CiHealth;
+}
+
+export interface CiHealth {
+  /** The checks on the default branch's latest commit; null if they couldn't be read. */
+  main: (ChecksVerdict & { sha: string }) | null;
+  /** File names under .github/workflows; null if the folder couldn't be read. */
+  workflows: string[] | null;
+}
+
+async function readCi(octokit: Octokit, owner: string, repo: string, branch: string): Promise<CiHealth> {
+  let main: CiHealth['main'] = null;
+  let workflows: CiHealth['workflows'] = null;
+  try {
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner, repo, ref: branch });
+    main = { ...(await readChecks(octokit, owner, repo, data.sha, true)), sha: data.sha };
+  } catch { /* stays null: unknown */ }
+  try {
+    const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', { owner, repo, path: '.github/workflows', ref: branch });
+    workflows = Array.isArray(data) ? data.filter((f) => f.type === 'file').map((f) => f.name) : [];
+  } catch (err) {
+    if ((err as { status?: number }).status === 404) workflows = [];
+  }
+  return { main, workflows };
 }
 
 /** Package updates from a Dependabot PR body ("Bumps [x](…) from a to b." / "Updates `x` from a to b"). */
@@ -158,6 +184,7 @@ export async function buildFixPlan(app: App, fullName: string): Promise<FixPlan>
     repo: fullName, scan, prs,
     uncovered: alerts.filter((a) => a.fixedIn && !covered.has(a.number)),
     noFix: alerts.filter((a) => !a.fixedIn),
+    ci: await readCi(octokit, owner, repo, scan.status.defaultBranch),
   };
 }
 
