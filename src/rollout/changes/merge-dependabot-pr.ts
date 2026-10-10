@@ -163,6 +163,18 @@ function mergeChange(id: string, requireChecks: boolean, summary: string): Chang
         owner, repo, pull_number: number, merge_method: 'squash', sha: pr.head.sha,
       });
     },
+
+    // An App without the workflows permission can merge a PR that changes
+    // .github/workflows only while the PR is level with its base: once a
+    // sibling Dependabot PR has merged, the squash would write workflow
+    // content the PR doesn't have, and GitHub refuses (2026-10-10,
+    // ry-ops/proxmox-mcp-server#55 after #53).
+    refused(err) {
+      if (err.status === 403 && /without `?workflows`? permission/.test(err.message ?? '')) {
+        return 'changes workflow files and is behind its base, which git-steer-admin can\'t merge without the workflows permission. Comment `@dependabot rebase` on it; a later Fix can then merge it.';
+      }
+      return null;
+    },
   };
 }
 

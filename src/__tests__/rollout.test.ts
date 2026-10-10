@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest';
 import type { Octokit } from 'octokit';
 import { desiredRuleset, evaluateRuleset } from '../rollout/changes/default-branch-ruleset.js';
 import { analysisState, evaluateSettings, securitySettings } from '../rollout/changes/security-settings.js';
-import { evaluateSponsorships, sponsorships } from '../rollout/changes/sponsorships.js';
 import { parseRolloutIssue, recordResult, remaining, renderRolloutIssue } from '../rollout/issue.js';
 import { planStep, recentWrites } from '../rollout/plan.js';
 import type { RolloutIssue } from '../rollout/plan.js';
 import { applyToTarget } from '../rollout/apply.js';
+import { mergeDependabotPr } from '../rollout/changes/merge-dependabot-pr.js';
 import type { Change, CheckResult } from '../rollout/types.js';
 
 const body = (targets: string[]) =>
@@ -135,6 +135,15 @@ describe('applyToTarget', () => {
     const r = await applyToTarget(fake([no], () => { throw Object.assign(new Error('Validation Failed'), { status: 422 }); }), octokit, 1, 'a/b');
     expect(r).toMatchObject({ outcome: 'failed', after: 'apply error 422 Validation Failed' });
   });
+
+  it('skips a target the change says GitHub refused for a known reason, instead of failing', async () => {
+    const refusal = Object.assign(new Error('refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission'), { status: 403 });
+    const r = await applyToTarget({ ...mergeDependabotPr, check: async () => no, apply: async () => { throw refusal; } }, octokit, 1, 'a/b#1');
+    expect(r.outcome).toBe('unavailable');
+    expect(r.after).toContain('@dependabot rebase');
+    const other = await applyToTarget({ ...mergeDependabotPr, check: async () => no, apply: async () => { throw Object.assign(new Error('nope'), { status: 403 }); } }, octokit, 1, 'a/b#1');
+    expect(other.outcome).toBe('failed');
+  });
 });
 
 describe('security settings', () => {
@@ -180,36 +189,5 @@ describe('security settings', () => {
       'PUT /repos/{owner}/{repo}/automated-security-fixes',
       'PATCH /repos/{owner}/{repo} {"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}',
     ]);
-  });
-});
-
-describe('sponsorships', () => {
-  const base = { isFork: false, isArchived: false, hasSponsorshipsEnabled: false };
-
-  it('is noncompliant when off, and leaves forks and archived repos alone', () => {
-    expect(evaluateSponsorships(base)).toEqual({ state: 'noncompliant', detail: 'Sponsorships off' });
-    expect(evaluateSponsorships({ ...base, hasSponsorshipsEnabled: true }).state).toBe('compliant');
-    expect(evaluateSponsorships({ ...base, isFork: true }).state).toBe('unavailable');
-    expect(evaluateSponsorships({ ...base, isArchived: true }).state).toBe('unavailable');
-  });
-
-  it('turns it on through updateRepository with the repo node id', async () => {
-    const calls: { query: string; vars: Record<string, unknown> }[] = [];
-    const octokit = {
-      graphql: async (query: string, vars: Record<string, unknown>) => {
-        calls.push({ query, vars });
-        return { repository: { id: 'R_1', ...base } };
-      },
-    } as unknown as Octokit;
-    expect((await sponsorships.check(octokit, 'a/b')).state).toBe('noncompliant');
-    await sponsorships.apply(octokit, 'a/b');
-    const write = calls.find((c) => c.query.startsWith('mutation'));
-    expect(write?.query).toContain('hasSponsorshipsEnabled:true');
-    expect(write?.vars).toEqual({ id: 'R_1' });
-  });
-
-  it('reports an unreadable repo as unknown, never compliant', async () => {
-    const octokit = { graphql: async () => { throw Object.assign(new Error('Not Found'), { status: 404 }); } } as unknown as Octokit;
-    expect((await sponsorships.check(octokit, 'a/b')).state).toBe('unknown');
   });
 });

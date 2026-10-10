@@ -30,6 +30,12 @@ export interface Change {
   check(octokit: Octokit, target: string): Promise<CheckResult>;
   /** Only called after check() said noncompliant (C-010-006). */
   apply(octokit: Octokit, target: string): Promise<void>;
+  /**
+   * An apply error GitHub raises for a known reason that's no fault of the
+   * target, as a detail; the target is then skipped instead of pausing the
+   * rollout. Null for any other error.
+   */
+  refused?(err: { status?: number; message?: string }): string | null;
 }
 
 export type Outcome = 'already-compliant' | 'applied' | 'unavailable' | 'failed' | 'waiting';
