@@ -41,8 +41,12 @@ export type ChecksVerdict = { state: 'ready' | 'untested' | 'failing' | 'running
  * works (on 2026-10-10 git-fabric/chat's only passing check was Codacy, and
  * ry-ops/commit-relay's a workflow named "security").
  */
-/** GitHub's own runs that show up as check runs: Dependabot's update jobs (on the default branch). */
-const NOT_A_TEST = /^dependabot$/i;
+/**
+ * GitHub's own runs that show up as check runs: Dependabot's update jobs and
+ * automatic dependency submission ("update-pip-graph"), on the default branch
+ * (ry-ops/starlink-enterprise-mcp-server, which has no workflows at all).
+ */
+const NOT_A_TEST = /^dependabot$|^update-[a-z0-9]+-graph$|dependency[- ]submission/i;
 
 export const SCANNER = /codeql|codacy|sonar|snyk|semgrep|gitguardian|gitleaks|trivy|socket|mend|whitesource|dependency[- ]review|security|secret|\baudit\b|\bscan|analy[sz]e|lint/i;
 
