@@ -8,7 +8,7 @@
  */
 
 import type { App, Octokit } from 'octokit';
-import { getPull, judgePull, readChecks } from '../rollout/changes/merge-dependabot-pr.js';
+import { getPull, judgePull, readBaseFailing, readChecks } from '../rollout/changes/merge-dependabot-pr.js';
 import type { ChecksVerdict } from '../rollout/changes/merge-dependabot-pr.js';
 import { repoOctokit, scanRepo } from './collect.js';
 import { parseScanTarget, verdict } from './scan.js';
@@ -89,7 +89,11 @@ async function readCi(octokit: Octokit, owner: string, repo: string, branch: str
   let workflows: CiHealth['workflows'] = null;
   try {
     const { data } = await octokit.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner, repo, ref: branch });
-    main = { ...(await readChecks(octokit, owner, repo, data.sha, true)), sha: data.sha };
+    // Judged against its own failures: a scanner failing on main is a
+    // vulnerability gate doing its job (the alerts are Fix's business), not
+    // broken CI; a failing build or test still counts.
+    const own = await readBaseFailing(octokit, owner, repo, data.sha, true);
+    main = { ...(await readChecks(octokit, owner, repo, data.sha, true, own)), sha: data.sha };
   } catch { /* stays null: unknown */ }
   try {
     const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', { owner, repo, path: '.github/workflows', ref: branch });
@@ -167,9 +171,11 @@ export async function buildFixPlan(app: App, fullName: string): Promise<FixPlan>
   const open = await octokit.paginate('GET /repos/{owner}/{repo}/pulls', { owner, repo, state: 'open', per_page: 100 });
   const alerts = scan.alerts ?? [];
   const prs: PlannedPr[] = [];
+  let baseFailing = new Set<string>();
+  try { baseFailing = await readBaseFailing(octokit, owner, repo, scan.status.defaultBranch, true); } catch { /* judge PRs on their own */ }
   for (const listed of open.filter((p) => p.user?.login === 'dependabot[bot]')) {
     const pr = await getPull(octokit, owner, repo, listed.number);
-    const checks = await readChecks(octokit, owner, repo, pr.head.sha, true);
+    const checks = await readChecks(octokit, owner, repo, pr.head.sha, true, baseFailing);
     const v = judgePull(pr, scan.status.defaultBranch, checks);
     const updates = parseUpdates(pr.body ?? '');
     prs.push({
