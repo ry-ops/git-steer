@@ -121,7 +121,11 @@ export function ciNeed(plan: FixPlan): CiNeed | null {
   if (main?.state === 'failing') return { kind: 'broken', where: 'default', sha: main.sha, checks: failedNames(main.detail) };
   if (main?.state === 'ready' || plan.prs.some((p) => p.state === 'ready')) return null;
   const failing = plan.prs.filter((p) => p.state === 'failing');
-  if (failing.length) {
+  const untested = plan.prs.filter((p) => p.state === 'untested');
+  // Most PRs failing points at CI; a few failing among many untested ones
+  // means there's no real CI, and those few are their own problem
+  // (ry-ops/commit-relay, 2026-10-11: 2 failing Snyk, 28 untested).
+  if (failing.length && failing.length >= untested.length) {
     const tally = new Map<string, number>();
     for (const p of failing) for (const n of new Set(failedNames(p.detail))) tally.set(n, (tally.get(n) ?? 0) + 1);
     const checks = [...tally].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
@@ -129,7 +133,7 @@ export function ciNeed(plan: FixPlan): CiNeed | null {
     return { kind: 'broken', where: 'prs', failing: failing.length, of, checks };
   }
   if (!main || main.state === 'running') return null;
-  const scanners = [...new Set((main.detail.match(/^only scanners passed \((.*)\);/)?.[1] ?? '').split(', ').filter(Boolean))];
+  const scanners = [...new Set([main, ...untested].flatMap((c) => (c.detail.match(/^only scanners passed \((.*)\);/)?.[1] ?? '').split(', ')).filter(Boolean))];
   return { kind: 'missing', scanners };
 }
 
@@ -174,7 +178,7 @@ export function buildCiHandoff(plan: FixPlan): Handoff | null {
   const what = need.where === 'default'
     ? [`The latest commit on \`${branch}\` (${need.sha.slice(0, 7)}) fails: ${need.checks.map((c) => `\`${c}\``).join(', ') || 'see its checks'}.`]
     : [
-      `${need.failing} of ${need.of} open Dependabot pull requests fail their checks, and none pass. That points at CI, not at the upgrades:`,
+      `${need.failing} of ${need.of} open Dependabot pull requests fail their checks, and none pass a build or test. That points at CI, not at the upgrades:`,
       '',
       '| Check | Failing PRs |',
       '|---|---|',
@@ -200,7 +204,7 @@ export function buildCiHandoff(plan: FixPlan): Handoff | null {
     '- Anything that can\'t be fixed inside the repo (a secret, an outside service) is named in the pull request, with what it needs.',
     ...SIGN_OFF,
   ];
-  const title = need.where === 'default' ? `Fix the failing CI on \`${branch}\`` : 'Fix the CI that fails on every Dependabot pull request';
+  const title = need.where === 'default' ? `Fix the failing CI on \`${branch}\`` : 'Fix the CI that fails on Dependabot pull requests';
   return { key, title, body: lines.join('\n') + '\n' };
 }
 
