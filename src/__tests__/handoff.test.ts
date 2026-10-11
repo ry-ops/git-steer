@@ -127,8 +127,15 @@ describe('CI hand-offs', () => {
     ], main('untested', 'no checks ran'));
     expect(ciNeed(p)).toEqual({ kind: 'broken', where: 'prs', failing: 2, of: 3, checks: [['test', 2], ['deploy', 1]] });
     const [h] = buildHandoffs(p);
-    expect(h.title).toBe('Fix the CI that fails on every Dependabot pull request');
+    expect(h.title).toBe('Fix the CI that fails on Dependabot pull requests');
     expect(h.body).toContain('| `test` | 2 |');
+  });
+
+  it('asks for CI, not a CI fix, when a few PRs fail among many untested ones', () => {
+    const p = plan(false, [], [], [
+      pr(1, 'failing', 'failed: security/snyk'), pr(2, 'untested', 'only scanners passed (security); nothing built or tested it'), pr(3, 'untested', 'no checks ran'),
+    ], main('untested', 'no checks ran'));
+    expect(ciNeed(p)).toEqual({ kind: 'missing', scanners: ['security'] });
   });
 
   it('leaves CI alone when any test passes, or when it can\'t tell', () => {
