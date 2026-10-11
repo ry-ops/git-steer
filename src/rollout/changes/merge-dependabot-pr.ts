@@ -55,6 +55,9 @@ export const SCANNER = /codeql|codacy|sonar|snyk|semgrep|gitguardian|gitleaks|tr
  * passing scanners: "ready" needs a passing check that builds or tests.
  */
 export function judgeChecks(runs: CheckRunLike[], statuses: StatusLike[]): ChecksVerdict {
+  // GitHub's own jobs say nothing about this code, whether they pass or fail
+  // (ry-ops/commit-relay's main "failed" only because a Dependabot update job errored).
+  runs = runs.filter((r) => !NOT_A_TEST.test(r.name));
   // Matrix jobs share a name (fabric-forge/fabric-prospect: nine "ingest"), so name each once.
   const failed = [...new Set([
     ...runs.filter((r) => r.status === 'completed' && FAILED.has(r.conclusion ?? '')).map((r) => r.name),
@@ -70,7 +73,7 @@ export function judgeChecks(runs: CheckRunLike[], statuses: StatusLike[]): Check
     ...runs.filter((r) => r.conclusion === 'success').map((r) => r.name),
     ...statuses.filter((s) => s.state === 'success').map((s) => s.context),
   ])];
-  const tests = passed.filter((n) => !SCANNER.test(n) && !NOT_A_TEST.test(n));
+  const tests = passed.filter((n) => !SCANNER.test(n));
   if (tests.length) return { state: 'ready', detail: `passed: ${tests.join(', ')}` };
   if (passed.length) return { state: 'untested', detail: `only scanners passed (${passed.join(', ')}); nothing built or tested it` };
   return { state: 'untested', detail: 'no checks ran' };
