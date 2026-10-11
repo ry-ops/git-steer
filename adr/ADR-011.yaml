@@ -179,6 +179,13 @@ constraints:
     rule: >
       A pull request whose checks failed is never merged. An untested pull
       request is merged only if the owner left it on an approved rollout.
+      One exception (2026-10-11): a scanner (vulnerability gate, audit,
+      SBOM scan) that fails on the default branch too isn't counted. It
+      fails while any alert is open, so with one Dependabot PR per package
+      every PR fails it and none could merge (fabric-forge/blog,
+      ry-ops/DriveIQ). A failing build or test always blocks, and a
+      scanner that passes on the default branch but fails on the PR
+      blocks.
     check: |
       for merge in fix_merges: merge.pr.checks != "failing" && (merge.pr.checks == "ready" || merge.target ∈ approved_rollout.lines)
     violation: NO-GO

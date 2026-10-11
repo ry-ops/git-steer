@@ -50,24 +50,42 @@ const NOT_A_TEST = /^dependabot$|^update-[a-z0-9]+-graph$|dependency[- ]submissi
 
 export const SCANNER = /codeql|codacy|sonar|snyk|semgrep|gitguardian|gitleaks|trivy|socket|mend|whitesource|dependency[- ]review|security|secret|\baudit\b|\bscan|analy[sz]e|lint/i;
 
+/** The names of the checks that failed, each once (matrix jobs share a name: fabric-forge/fabric-prospect's nine "ingest"). */
+export function failedChecks(runs: CheckRunLike[], statuses: StatusLike[]): string[] {
+  return [...new Set([
+    ...runs.filter((r) => !NOT_A_TEST.test(r.name) && r.status === 'completed' && FAILED.has(r.conclusion ?? '')).map((r) => r.name),
+    ...statuses.filter((s) => s.state === 'failure' || s.state === 'error').map((s) => s.context),
+  ])];
+}
+
 /**
  * What a PR's checks say. Neutral and skipped runs don't count, and neither do
  * passing scanners: "ready" needs a passing check that builds or tests.
+ *
+ * @param baseFailing checks that also fail on the base branch. A scanner
+ *   among them doesn't block: a vulnerability gate fails while any alert is
+ *   open, so with one Dependabot PR per package every PR fails it and none
+ *   could ever merge (fabric-forge/blog, ry-ops/DriveIQ, 2026-10-11). A
+ *   failing build or test still blocks, whatever the base says.
  */
-export function judgeChecks(runs: CheckRunLike[], statuses: StatusLike[]): ChecksVerdict {
+export function judgeChecks(runs: CheckRunLike[], statuses: StatusLike[], baseFailing: ReadonlySet<string> = new Set()): ChecksVerdict {
   // GitHub's own jobs say nothing about this code, whether they pass or fail
   // (ry-ops/commit-relay's main "failed" only because a Dependabot update job errored).
   runs = runs.filter((r) => !NOT_A_TEST.test(r.name));
-  // Matrix jobs share a name (fabric-forge/fabric-prospect: nine "ingest"), so name each once.
-  const failed = [...new Set([
-    ...runs.filter((r) => r.status === 'completed' && FAILED.has(r.conclusion ?? '')).map((r) => r.name),
-    ...statuses.filter((s) => s.state === 'failure' || s.state === 'error').map((s) => s.context),
-  ])];
-  if (failed.length) return { state: 'failing', detail: `failed: ${failed.join(', ')}` };
+  const allFailed = failedChecks(runs, statuses);
+  const preexisting = allFailed.filter((n) => SCANNER.test(n) && baseFailing.has(n));
+  const failed = allFailed.filter((n) => !preexisting.includes(n));
+  const note = preexisting.length ? `; also failing on the base, not counted: ${preexisting.join(', ')}` : '';
+  if (failed.length) return { state: 'failing', detail: `failed: ${failed.join(', ')}${note}` };
+  const v = judgePassing(runs, statuses, new Set(preexisting));
+  return note ? { ...v, detail: v.detail + note } : v;
+}
+
+function judgePassing(runs: CheckRunLike[], statuses: StatusLike[], ignore: ReadonlySet<string>): ChecksVerdict {
   const running = [...new Set([
     ...runs.filter((r) => r.status !== 'completed').map((r) => r.name),
     ...statuses.filter((s) => s.state === 'pending').map((s) => s.context),
-  ])];
+  ])].filter((n) => !ignore.has(n));
   if (running.length) return { state: 'running', detail: `running: ${running.join(', ')}` };
   const passed = [...new Set([
     ...runs.filter((r) => r.conclusion === 'success').map((r) => r.name),
@@ -109,20 +127,33 @@ export function judgePull(pr: PullLike, defaultBranch: string, checks: ChecksVer
  *   check runs alone and say so. The merge step never tolerates it: its
  *   token can read statuses, and an error there stops the merge.
  */
-export async function readChecks(octokit: Octokit, owner: string, repo: string, sha: string, tolerateStatuses = false): Promise<ChecksVerdict> {
+export async function readChecks(
+  octokit: Octokit, owner: string, repo: string, sha: string, tolerateStatuses = false, baseFailing: ReadonlySet<string> = new Set(),
+): Promise<ChecksVerdict> {
+  const { runs, statuses, note } = await fetchChecks(octokit, owner, repo, sha, tolerateStatuses);
+  const v = judgeChecks(runs, statuses, baseFailing);
+  return note ? { ...v, detail: v.detail + note } : v;
+}
+
+async function fetchChecks(octokit: Octokit, owner: string, repo: string, ref: string, tolerateStatuses: boolean) {
   // paginate already unwraps check_runs from this endpoint's { total_count, check_runs } pages.
-  const runs = (await octokit.paginate('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', { owner, repo, ref: sha, per_page: 100 })) as unknown as CheckRunLike[];
+  const runs = (await octokit.paginate('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', { owner, repo, ref, per_page: 100 })) as unknown as CheckRunLike[];
   let statuses: StatusLike[] = [];
   let note = '';
   try {
-    const { data: combined } = await octokit.request('GET /repos/{owner}/{repo}/commits/{ref}/status', { owner, repo, ref: sha });
+    const { data: combined } = await octokit.request('GET /repos/{owner}/{repo}/commits/{ref}/status', { owner, repo, ref });
     statuses = (combined.statuses ?? []) as StatusLike[];
   } catch (err) {
     if (!tolerateStatuses) throw err;
     note = ' (commit statuses not readable; check runs only)';
   }
-  const v = judgeChecks(runs, statuses);
-  return note ? { ...v, detail: v.detail + note } : v;
+  return { runs, statuses, note };
+}
+
+/** The checks failing on a branch's latest commit (see judgeChecks' baseFailing). */
+export async function readBaseFailing(octokit: Octokit, owner: string, repo: string, branch: string, tolerateStatuses = false): Promise<Set<string>> {
+  const { runs, statuses } = await fetchChecks(octokit, owner, repo, branch, tolerateStatuses);
+  return new Set(failedChecks(runs, statuses));
 }
 
 /**
@@ -147,7 +178,9 @@ async function read(octokit: Octokit, target: string, requireChecks = false): Pr
     getPull(octokit, owner, repo, number),
     octokit.request('GET /repos/{owner}/{repo}', { owner, repo }),
   ]);
-  const checks = p.state === 'open' && !p.merged ? await readChecks(octokit, owner, repo, p.head.sha) : { state: 'untested' as const, detail: '' };
+  const open = p.state === 'open' && !p.merged;
+  const baseFailing = open ? await readBaseFailing(octokit, owner, repo, info.default_branch) : new Set<string>();
+  const checks = open ? await readChecks(octokit, owner, repo, p.head.sha, false, baseFailing) : { state: 'untested' as const, detail: '' };
   return { pr: p, verdict: judgePull(p, info.default_branch, checks, requireChecks) };
 }
 

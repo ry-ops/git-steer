@@ -93,6 +93,15 @@ describe('merge-dependabot-pr', () => {
     expect(judgeChecks([{ name: 'Dependabot', status: 'completed', conclusion: 'success' }], []).state).toBe('untested');
     expect(judgeChecks([{ name: 'Dependabot', status: 'completed', conclusion: 'failure' }, { name: 'build', status: 'completed', conclusion: 'success' }], []).state).toBe('ready');
     expect(judgeChecks([{ name: 'update-pip-graph', status: 'completed', conclusion: 'success' }, { name: 'Analyze (python)', status: 'completed', conclusion: 'success' }], []).state).toBe('untested');
+    // A vulnerability gate failing on the base too doesn't block (fabric-forge/blog, 2026-10-11); a failing build still does.
+    const trivy = { name: 'Trivy Security Scan', status: 'completed', conclusion: 'failure' };
+    const build = { name: 'build', status: 'completed', conclusion: 'success' };
+    const gated = judgeChecks([trivy, build], [], new Set(['Trivy Security Scan']));
+    expect(gated).toEqual({ state: 'ready', detail: 'passed: build; also failing on the base, not counted: Trivy Security Scan' });
+    expect(judgeChecks([trivy, build], []).state).toBe('failing');
+    expect(judgeChecks([{ ...build, conclusion: 'failure' }], [], new Set(['build'])).state).toBe('failing');
+    expect(judgeChecks([trivy], [], new Set(['Trivy Security Scan'])).state).toBe('untested');
+    expect(judgeChecks([trivy, { name: 'NPM Audit', status: 'completed', conclusion: 'failure' }, build], [], new Set(['Trivy Security Scan'])).detail).toBe('failed: NPM Audit; also failing on the base, not counted: Trivy Security Scan');
     const ingest = { name: 'ingest', status: 'completed', conclusion: 'failure' };
     expect(judgeChecks([ingest, ingest, { name: 'build', status: 'completed', conclusion: 'failure' }], []).detail).toBe('failed: ingest, build');
     expect(judgeChecks([{ name: 'test', status: 'completed', conclusion: 'success' }, { name: 'Snyk', status: 'completed', conclusion: 'failure' }], []).state).toBe('failing');
