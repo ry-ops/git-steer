@@ -48,7 +48,7 @@ export type ChecksVerdict = { state: 'ready' | 'untested' | 'failing' | 'running
  */
 const NOT_A_TEST = /^dependabot$|^update-[a-z0-9]+-graph$|dependency[- ]submission/i;
 
-export const SCANNER = /codeql|codacy|sonar|snyk|semgrep|gitguardian|gitleaks|trivy|socket|mend|whitesource|dependency[- ]review|security|secret|\baudit\b|\bscan|analy[sz]e|lint/i;
+export const SCANNER = /codeql|codacy|sonar|snyk|semgrep|gitguardian|gitleaks|trivy|socket|mend|whitesource|dependency[- ]review|security|secret|\baudit\b|\bscan|analy[sz]e|lint|sbom|grype|osv/i;
 
 /** The names of the checks that failed, each once (matrix jobs share a name: fabric-forge/fabric-prospect's nine "ingest"). */
 export function failedChecks(runs: CheckRunLike[], statuses: StatusLike[]): string[] {
@@ -150,10 +150,24 @@ async function fetchChecks(octokit: Octokit, owner: string, repo: string, ref: s
   return { runs, statuses, note };
 }
 
-/** The checks failing on a branch's latest commit (see judgeChecks' baseFailing). */
+/**
+ * A branch's latest commit that ran any checks: a "[skip ci]" docs commit on
+ * top has none (ry-ops/DriveIQ, 2026-10-11). Looks back at most `depth`
+ * commits; null if none of them ran any.
+ */
+export async function latestCheckedCommit(octokit: Octokit, owner: string, repo: string, branch: string, tolerateStatuses = false, depth = 10) {
+  const { data: commits } = await octokit.request('GET /repos/{owner}/{repo}/commits', { owner, repo, sha: branch, per_page: depth });
+  for (const c of commits as { sha: string }[]) {
+    const { runs, statuses, note } = await fetchChecks(octokit, owner, repo, c.sha, tolerateStatuses);
+    if (runs.some((r) => !NOT_A_TEST.test(r.name)) || statuses.length) return { sha: c.sha, runs, statuses, note };
+  }
+  return null;
+}
+
+/** The checks failing on a branch, from its latest commit that ran any (see judgeChecks' baseFailing). */
 export async function readBaseFailing(octokit: Octokit, owner: string, repo: string, branch: string, tolerateStatuses = false): Promise<Set<string>> {
-  const { runs, statuses } = await fetchChecks(octokit, owner, repo, branch, tolerateStatuses);
-  return new Set(failedChecks(runs, statuses));
+  const c = await latestCheckedCommit(octokit, owner, repo, branch, tolerateStatuses);
+  return new Set(c ? failedChecks(c.runs, c.statuses) : []);
 }
 
 /**

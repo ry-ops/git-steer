@@ -93,6 +93,7 @@ describe('merge-dependabot-pr', () => {
     expect(judgeChecks([{ name: 'Dependabot', status: 'completed', conclusion: 'success' }], []).state).toBe('untested');
     expect(judgeChecks([{ name: 'Dependabot', status: 'completed', conclusion: 'failure' }, { name: 'build', status: 'completed', conclusion: 'success' }], []).state).toBe('ready');
     expect(judgeChecks([{ name: 'update-pip-graph', status: 'completed', conclusion: 'success' }, { name: 'Analyze (python)', status: 'completed', conclusion: 'success' }], []).state).toBe('untested');
+    expect(judgeChecks([{ name: 'Generate SBOM', status: 'completed', conclusion: 'success' }], []).state).toBe('untested');
     // A vulnerability gate failing on the base too doesn't block (fabric-forge/blog, 2026-10-11); a failing build still does.
     const trivy = { name: 'Trivy Security Scan', status: 'completed', conclusion: 'failure' };
     const build = { name: 'build', status: 'completed', conclusion: 'success' };
