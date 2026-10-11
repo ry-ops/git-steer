@@ -8,7 +8,7 @@
  */
 
 import type { App, Octokit } from 'octokit';
-import { getPull, judgePull, readBaseFailing, readChecks } from '../rollout/changes/merge-dependabot-pr.js';
+import { failedChecks, getPull, judgeChecks, judgePull, latestCheckedCommit, readBaseFailing, readChecks } from '../rollout/changes/merge-dependabot-pr.js';
 import type { ChecksVerdict } from '../rollout/changes/merge-dependabot-pr.js';
 import { repoOctokit, scanRepo } from './collect.js';
 import { parseScanTarget, verdict } from './scan.js';
@@ -88,12 +88,18 @@ async function readCi(octokit: Octokit, owner: string, repo: string, branch: str
   let main: CiHealth['main'] = null;
   let workflows: CiHealth['workflows'] = null;
   try {
-    const { data } = await octokit.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner, repo, ref: branch });
-    // Judged against its own failures: a scanner failing on main is a
-    // vulnerability gate doing its job (the alerts are Fix's business), not
-    // broken CI; a failing build or test still counts.
-    const own = await readBaseFailing(octokit, owner, repo, data.sha, true);
-    main = { ...(await readChecks(octokit, owner, repo, data.sha, true, own)), sha: data.sha };
+    // The latest commit that ran checks, judged against its own failures: a
+    // scanner failing on main is a vulnerability gate doing its job (the
+    // alerts are Fix's business), not broken CI; a failing build or test
+    // still counts.
+    const c = await latestCheckedCommit(octokit, owner, repo, branch, true);
+    if (c) {
+      const v = judgeChecks(c.runs, c.statuses, new Set(failedChecks(c.runs, c.statuses)));
+      main = { ...v, detail: v.detail + c.note, sha: c.sha };
+    } else {
+      const { data } = await octokit.request('GET /repos/{owner}/{repo}/commits/{ref}', { owner, repo, ref: branch });
+      main = { state: 'untested', detail: 'no checks ran', sha: data.sha };
+    }
   } catch { /* stays null: unknown */ }
   try {
     const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', { owner, repo, path: '.github/workflows', ref: branch });
