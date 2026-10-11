@@ -3,7 +3,7 @@
  * issues, with a git-steer-admin token minted for that repo with issues:
  * write only (C-010-001). The workflow runs this once per target repo. An
  * issue that's already open for the same task (same marker key) is linked,
- * not filed again.
+ * not filed again, and one closed as "not planned" isn't filed again.
  *
  * Env vars:
  *   GH_TOKEN                   - git-steer-admin token for the target repo (issues: write)
@@ -23,15 +23,24 @@ const octokit = new Octokit({ auth: GH_TOKEN });
 // plan's own. A repo not in the plan opens nothing.
 const results = [];
 for (const { owner, name, repo, handoffs } of plan.targets.filter((t) => t.owner === TARGET_OWNER && t.name === TARGET_NAME)) {
-  const open = await octokit.paginate('GET /repos/{owner}/{repo}/issues', { owner, repo: name, state: 'open', per_page: 100 });
+  // Open issues for the same task are linked, not filed again; one the owner
+  // closed as "not planned" is a decision, so it isn't filed again either.
+  const issues = await octokit.paginate('GET /repos/{owner}/{repo}/issues', { owner, repo: name, state: 'all', per_page: 100 });
   const existing = new Map();
-  for (const i of open) {
+  const declined = new Map();
+  for (const i of issues) {
     const key = i.pull_request ? null : markerKey(i.body ?? '');
-    if (key) existing.set(key, i.html_url);
+    if (!key) continue;
+    if (i.state === 'open') existing.set(key, i.html_url);
+    else if (i.state_reason === 'not_planned' && !declined.has(key)) declined.set(key, i.html_url);
   }
   for (const h of handoffs) {
     if (existing.has(h.key)) {
       results.push({ repo, key: h.key, title: h.title, url: existing.get(h.key), state: 'already-open' });
+      continue;
+    }
+    if (declined.has(h.key)) {
+      results.push({ repo, key: h.key, title: h.title, url: declined.get(h.key), state: 'declined' });
       continue;
     }
     try {

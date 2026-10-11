@@ -75,6 +75,12 @@ describe('hand-off issues', () => {
     expect(md).toContain('is public');
   });
 
+  it('says when the owner declined an earlier one', () => {
+    const file = planRepoHandoffs(plan(false, tar, []));
+    const [h] = file.targets[0].handoffs;
+    expect(renderHandoffReply(file, [{ repo: 'git-fabric/gateway', key: h.key, title: h.title, url: 'https://x/3', state: 'declined' }])).toContain('🚫 declined earlier');
+  });
+
   it('shows a planned issue with no result as not opened', () => {
     const file = planRepoHandoffs(plan(false, tar, []));
     expect(renderHandoffReply(file, [])).toContain('❌ failed: not opened (see the run)');

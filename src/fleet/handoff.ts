@@ -324,11 +324,12 @@ export interface HandoffResult {
   key: string;
   title: string;
   url: string;
-  state: 'opened' | 'already-open' | 'failed';
+  /** declined: the owner closed an earlier one as "not planned"; not filed again. */
+  state: 'opened' | 'already-open' | 'declined' | 'failed';
   detail?: string;
 }
 
-const STATUS = (r: HandoffResult) => ({ opened: '🆕 opened', 'already-open': '↩️ already open', failed: `❌ failed: ${r.detail ?? ''}` }[r.state]);
+const STATUS = (r: HandoffResult) => ({ opened: '🆕 opened', 'already-open': '↩️ already open', declined: '🚫 declined earlier (closed as not planned)', failed: `❌ failed: ${r.detail ?? ''}` }[r.state]);
 const LINK = (r: HandoffResult) => (r.url ? `[${r.title}](${r.url})` : r.title);
 const ASSIGN = 'Open each issue and **Assign to Copilot** (Assignees → Copilot), from github.com or the mobile app. Copilot opens a pull request; review it like any other. git-steer never assigns these itself.';
 
